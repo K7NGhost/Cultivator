@@ -152,6 +152,20 @@
   --wx-table-select-background: var(--accent);
   --wx-table-select-border: inset 3px 0 var(--primary);
   --wx-table-select-color: var(--accent-foreground);
+  min-width: 0;
+}
+
+.cultivator-grid {
+  contain: layout;
+}
+
+.cultivator-grid > .wx-willow-theme,
+.cultivator-grid > .wx-willow-dark-theme {
+  display: block;
+  height: 100%;
+  min-width: 100%;
+  max-width: none;
+  width: max-content;
 }
 
 .cultivator-grid .wx-grid {

@@ -1,16 +1,44 @@
+import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
+  AutoSizer,
+  List,
+  type ListRowProps,
+} from "react-virtualized";
+import "react-virtualized/styles.css";
+import {
+  AlertCircle,
   CaseSensitive,
+  ChevronLeft,
+  ChevronRight,
   FileCode2,
   FolderOpen,
   Hexagon,
   Play,
   Regex,
   Search,
+  SlidersHorizontal,
+  Square,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -22,74 +50,260 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useEvidence } from "@/features/evidence/evidence-provider";
 import { cn } from "@/lib/utils";
 
-const searchMatches = [
-  {
-    file: "History",
-    path: "Users/Inter/AppData/Local/Browser/Profile/History",
-    line: 3812,
-    column: 44,
-    type: "SQLite",
-    match: "https://accounts.example.test/login",
-    context: "last_visit_time, url, title, typed_count",
-  },
-  {
-    file: "notes.txt",
-    path: "Users/Inter/Documents/notes.txt",
-    line: 18,
-    column: 7,
-    type: "Text",
-    match: "recovery phrase stored in old browser profile",
-    context: "Follow up on recovery phrase stored in old browser profile",
-  },
-  {
-    file: "Preferences",
-    path: "Users/Inter/AppData/Roaming/App/Preferences",
-    line: 94,
-    column: 19,
-    type: "JSON",
-    match: "\"sync_account\": \"inter@example.test\"",
-    context: "profile settings and sync metadata",
-  },
-  {
-    file: "Login Data",
-    path: "Users/Inter/AppData/Local/Browser/Profile/Login Data",
-    line: 0,
-    column: 0,
-    type: "SQLite",
-    match: "binary match in database page",
-    context: "rg reported binary content match",
-  },
-];
+type SearchMatch = {
+  id: string;
+  file: string;
+  path: string;
+  line: number;
+  column: number;
+  kind: string;
+  matchedText: string;
+  context: string;
+};
 
-const textPreview = [
-  "12  Open browser profile export",
-  "13  Validate user script output against source file",
-  "14  Queue credential parser for Login Data",
-  "15",
-  "16  Browser artifacts:",
-  "17  - History database",
-  "18  - recovery phrase stored in old browser profile",
-  "19  - Extension settings",
-  "20",
-  "21  Add findings to review report",
-];
+type SearchResult = {
+  matches: SearchMatch[];
+  elapsedMs: number;
+  cancelled: boolean;
+};
 
-const hexPreview = [
-  "00000000  53 51 4c 69 74 65 20 66  6f 72 6d 61 74 20 33 00  SQLite format 3.",
-  "00000010  10 00 01 01 00 40 20 20  00 00 02 6b 00 00 08 f4  .....@  ...k....",
-  "00000020  00 00 00 00 00 00 00 00  00 00 00 18 00 00 00 04  ................",
-  "00000030  00 00 00 00 00 00 00 00  00 00 00 01 00 00 00 00  ................",
-  "00000040  72 65 63 6f 76 65 72 79  20 70 68 72 61 73 65 20  recovery phrase ",
-  "00000050  73 74 6f 72 65 64 20 69  6e 20 6f 6c 64 20 62 72  stored in old br",
-];
+function formatElapsedTime(milliseconds: number | null) {
+  if (milliseconds === null) {
+    return "-";
+  }
+
+  if (milliseconds < 1000) {
+    return `${milliseconds} ms`;
+  }
+
+  return `${(milliseconds / 1000).toFixed(2)} s`;
+}
 
 export function SearchPage() {
-  const selectedMatch = searchMatches[1];
+  const { listing } = useEvidence();
+  const [query, setQuery] = useState("");
+  const [regex, setRegex] = useState(false);
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [binaryFiles, setBinaryFiles] = useState(false);
+  const [matches, setMatches] = useState<SearchMatch[]>([]);
+  const [selectedMatch, setSelectedMatch] = useState<SearchMatch | null>(null);
+  const [activePreviewMatch, setActivePreviewMatch] =
+    useState<SearchMatch | null>(null);
+  const [textPreview, setTextPreview] = useState<string[]>([]);
+  const [hexPreview, setHexPreview] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  const [liveElapsedMs, setLiveElapsedMs] = useState(0);
+  const [wasCancelled, setWasCancelled] = useState(false);
+  const [activeSearchId, setActiveSearchId] = useState<string | null>(null);
+  const textPreviewList = useRef<List | null>(null);
+  const textPreviewLineHeight = 20;
+  const selectedTextLineIndex = activePreviewMatch
+    ? Math.max(activePreviewMatch.line - 1, 0)
+    : 0;
+  const currentPreviewLineMatches = selectedMatch
+    ? Array.from(
+        matches
+          .filter((match) => match.path === selectedMatch.path)
+          .sort((first, second) => first.line - second.line || first.column - second.column)
+          .reduce((lineMatches, match) => {
+            if (!lineMatches.has(match.line)) {
+              lineMatches.set(match.line, match);
+            }
+
+            return lineMatches;
+          }, new Map<number, SearchMatch>())
+          .values(),
+      )
+    : [];
+  const currentPreviewMatchLines = new Set(
+    currentPreviewLineMatches.map((match) => match.line),
+  );
+  const selectedPreviewLineIndex = activePreviewMatch
+    ? currentPreviewLineMatches.findIndex(
+        (match) => match.line === activePreviewMatch.line,
+      )
+    : -1;
+
+  const canSearch = Boolean(listing && query.trim() && !isSearching);
+  const commandPreview = listing
+    ? `rg --json --line-number --column ${
+        regex ? "" : "--fixed-strings "
+      }${caseSensitive ? "" : "--ignore-case "}${
+        binaryFiles ? "--binary " : ""
+      }"${query || "<query>"}" ${
+        listing.rootPath
+      }`
+    : "Open an evidence directory before searching";
+
+  async function runSearch() {
+    if (!listing || !query.trim()) {
+      return;
+    }
+
+    const searchId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random()}`;
+
+    setIsSearching(true);
+    setActiveSearchId(searchId);
+    setError(null);
+    setElapsedMs(null);
+    setLiveElapsedMs(0);
+    setWasCancelled(false);
+    const searchStartedAt = performance.now();
+
+    try {
+      const result = await invoke<SearchResult>("search_files", {
+        searchId,
+        rootPath: listing.rootPath,
+        query,
+        regex,
+        caseSensitive,
+        binaryFiles,
+      });
+
+      setMatches(result.matches);
+      setSelectedMatch(result.matches[0] ?? null);
+      setActivePreviewMatch(result.matches[0] ?? null);
+      setElapsedMs(result.elapsedMs);
+      setWasCancelled(result.cancelled);
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : String(caughtError),
+      );
+      setMatches([]);
+      setSelectedMatch(null);
+      setActivePreviewMatch(null);
+      setElapsedMs(Math.round(performance.now() - searchStartedAt));
+    } finally {
+      setIsSearching(false);
+      setIsCancelling(false);
+      setActiveSearchId(null);
+    }
+  }
+
+  async function cancelActiveSearch() {
+    if (!activeSearchId || isCancelling) {
+      return;
+    }
+
+    setIsCancelling(true);
+    setError(null);
+
+    try {
+      await invoke<boolean>("cancel_search", { searchId: activeSearchId });
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : String(caughtError),
+      );
+      setIsCancelling(false);
+    }
+  }
+
+  function selectMatch(match: SearchMatch) {
+    setSelectedMatch(match);
+    setActivePreviewMatch(match);
+  }
+
+  function selectRelativePreviewLine(direction: -1 | 1) {
+    if (currentPreviewLineMatches.length === 0) {
+      return;
+    }
+
+    const currentIndex =
+      selectedPreviewLineIndex === -1 ? 0 : selectedPreviewLineIndex;
+    const nextIndex =
+      (currentIndex + direction + currentPreviewLineMatches.length) %
+      currentPreviewLineMatches.length;
+
+    setActivePreviewMatch(currentPreviewLineMatches[nextIndex]);
+  }
+
+  useEffect(() => {
+    if (!isSearching) {
+      return;
+    }
+
+    const searchStartedAt = performance.now();
+    const timer = window.setInterval(() => {
+      setLiveElapsedMs(Math.round(performance.now() - searchStartedAt));
+    }, 100);
+
+    return () => window.clearInterval(timer);
+  }, [isSearching]);
+
+  useEffect(() => {
+    if (!selectedMatch) {
+      setTextPreview([]);
+      setHexPreview([]);
+      setActivePreviewMatch(null);
+      return;
+    }
+
+    let isCurrent = true;
+    setIsPreviewLoading(true);
+
+    Promise.all([
+      invoke<string[]>("read_text_preview", {
+        path: selectedMatch.path,
+        line: selectedMatch.line,
+      }),
+      invoke<string[]>("read_hex_preview", { path: selectedMatch.path }),
+    ])
+      .then(([nextTextPreview, nextHexPreview]) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setTextPreview(nextTextPreview);
+        setHexPreview(nextHexPreview);
+      })
+      .catch((caughtError) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : String(caughtError),
+        );
+        setTextPreview([]);
+        setHexPreview([]);
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsPreviewLoading(false);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [selectedMatch?.path]);
+
+  useEffect(() => {
+    if (!activePreviewMatch || textPreview.length === 0) {
+      return;
+    }
+
+    textPreviewList.current?.scrollToRow(selectedTextLineIndex);
+  }, [activePreviewMatch, selectedTextLineIndex, textPreview.length]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <section className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
         <div className="relative w-80">
           <Search
@@ -98,181 +312,398 @@ export function SearchPage() {
           />
           <Input
             className="h-7 rounded-none pl-7 text-xs"
-            defaultValue="recovery phrase"
+            value={query}
+            placeholder="Search logical files..."
             aria-label="Search query"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                void runSearch();
+              }
+            }}
           />
         </div>
-        <Button size="xs" className="h-7 rounded-none px-2 text-xs">
-          <Play className="size-3.5" aria-hidden="true" />
-          Run rg
+        <Button
+          size="xs"
+          className="h-7 rounded-none px-2 text-xs"
+          disabled={isSearching ? isCancelling : !canSearch}
+          onClick={() => {
+            if (isSearching) {
+              void cancelActiveSearch();
+            } else {
+              void runSearch();
+            }
+          }}
+        >
+          {isSearching ? (
+            <Square className="size-3.5" aria-hidden="true" />
+          ) : (
+            <Play className="size-3.5" aria-hidden="true" />
+          )}
+          {isSearching ? (isCancelling ? "Cancelling" : "Cancel") : "Run rg"}
         </Button>
         <Separator orientation="vertical" className="h-5" />
-        <Button variant="ghost" size="xs" className="h-7 rounded-none px-2 text-xs">
+        <Button
+          variant={regex ? "secondary" : "ghost"}
+          size="xs"
+          className="h-7 rounded-none px-2 text-xs"
+          onClick={() => setRegex((value) => !value)}
+        >
           <Regex className="size-3.5" aria-hidden="true" />
           Regex
         </Button>
-        <Button variant="ghost" size="xs" className="h-7 rounded-none px-2 text-xs">
+        <Button
+          variant={caseSensitive ? "secondary" : "ghost"}
+          size="xs"
+          className="h-7 rounded-none px-2 text-xs"
+          onClick={() => setCaseSensitive((value) => !value)}
+        >
           <CaseSensitive className="size-3.5" aria-hidden="true" />
           Case
         </Button>
+        <Dialog>
+          <DialogTrigger asChild>
+            <Button
+              variant={binaryFiles ? "secondary" : "ghost"}
+              size="xs"
+              className="h-7 rounded-none px-2 text-xs"
+            >
+              <SlidersHorizontal className="size-3.5" aria-hidden="true" />
+              Options
+              {binaryFiles && (
+                <Badge
+                  variant="outline"
+                  className="ml-0.5 h-4 rounded-none px-1 text-[10px]"
+                >
+                  Binary
+                </Badge>
+              )}
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-md rounded-none p-0">
+            <DialogHeader className="border-b px-3 py-2">
+              <DialogTitle className="text-sm">Ripgrep Options</DialogTitle>
+              <DialogDescription className="text-xs">
+                Configure search flags for the next run.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 px-3 py-3">
+              <label className="flex cursor-pointer items-start gap-2 text-xs">
+                <Checkbox
+                  className="mt-0.5 rounded-none"
+                  checked={binaryFiles}
+                  onCheckedChange={(checked) =>
+                    setBinaryFiles(checked === true)
+                  }
+                />
+                <span className="grid gap-0.5">
+                  <span className="font-medium">Search binary files</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    Adds <span className="font-mono">--binary</span> so
+                    ripgrep does not skip files detected as binary.
+                  </span>
+                </span>
+              </label>
+            </div>
+            <DialogFooter showCloseButton className="border-t px-3 py-2" />
+          </DialogContent>
+        </Dialog>
         <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
-          <span>ripgrep preview UI</span>
+          <span>{listing ? listing.rootName : "No evidence mounted"}</span>
+          <span>
+            Time:{" "}
+            {isSearching
+              ? formatElapsedTime(liveElapsedMs)
+              : formatElapsedTime(elapsedMs)}
+          </span>
           <Badge variant="outline" className="h-5 rounded-none text-[11px]">
-            {searchMatches.length} matches
+            {matches.length} matches
           </Badge>
         </div>
       </section>
 
+      {error && (
+        <section className="flex h-8 shrink-0 items-center gap-2 border-b px-2 text-xs text-destructive">
+          <AlertCircle className="size-3.5" aria-hidden="true" />
+          <span className="truncate">{error}</span>
+        </section>
+      )}
+
       <section className="flex h-8 shrink-0 items-center gap-2 border-b px-2">
-        <FolderOpen className="size-3.5 text-muted-foreground" aria-hidden="true" />
-        <span className="truncate text-xs">
-          rg --line-number --column --context 1 "recovery phrase" Users/Inter
-        </span>
+        <FolderOpen
+          className="size-3.5 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <span className="truncate text-xs">{commandPreview}</span>
       </section>
 
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(260px,1fr)_260px]">
-        <section className="min-h-0 border-b" aria-label="Search matches">
-          <ScrollArea className="h-full">
-            <Table>
-              <TableHeader>
-                <TableRow className="h-7">
-                  <TableHead className="h-7 w-[90px] px-2 text-[11px]">
-                    File
-                  </TableHead>
-                  <TableHead className="h-7 px-2 text-[11px]">Path</TableHead>
-                  <TableHead className="h-7 w-[70px] px-2 text-[11px]">
-                    Line
-                  </TableHead>
-                  <TableHead className="h-7 w-[80px] px-2 text-[11px]">
-                    Type
-                  </TableHead>
-                  <TableHead className="h-7 px-2 text-[11px]">Match</TableHead>
-                  <TableHead className="h-7 w-[92px] px-2 text-[11px]">
-                    Action
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {searchMatches.map((match, index) => (
-                  <TableRow
-                    key={`${match.path}-${match.line}-${match.column}`}
-                    data-state={index === 1 ? "selected" : undefined}
-                    className="h-8"
-                  >
-                    <TableCell className="max-w-[120px] px-2 py-1 text-xs">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <FileCode2
-                          className="size-3.5 shrink-0 text-muted-foreground"
-                          aria-hidden="true"
-                        />
-                        <span className="truncate">{match.file}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-[360px] px-2 py-1 text-xs">
-                      <span className="block truncate">{match.path}</span>
-                    </TableCell>
-                    <TableCell className="px-2 py-1 text-xs">
-                      {match.line}:{match.column}
-                    </TableCell>
-                    <TableCell className="px-2 py-1 text-xs">
-                      <Badge variant="outline" className="h-5 rounded-none px-1 text-[10px]">
-                        {match.type}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="max-w-[360px] px-2 py-1 text-xs">
-                      <span className="block truncate">{match.match}</span>
-                      <span className="block truncate text-[11px] text-muted-foreground">
-                        {match.context}
-                      </span>
-                    </TableCell>
-                    <TableCell className="px-2 py-1">
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        className="h-6 rounded-none px-1.5 text-[11px]"
-                      >
-                        Open
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </ScrollArea>
-        </section>
-
-        <section className="min-h-0" aria-label="File preview">
-          <Tabs defaultValue="text" className="h-full gap-0">
-            <div className="flex h-8 items-center justify-between border-b px-2">
-              <div className="min-w-0 text-xs">
-                <span className="font-medium">Preview: </span>
-                <span className="text-muted-foreground">{selectedMatch.path}</span>
-              </div>
-              <TabsList
-                variant="line"
-                className="h-7 rounded-none p-0"
-                aria-label="Preview mode"
+      <ResizablePanelGroup
+        orientation="vertical"
+        className="min-h-0 min-w-0 flex-1"
+      >
+        <ResizablePanel defaultSize="58%" minSize="28%">
+          <section
+            className="h-full min-h-0 min-w-0 overflow-hidden border-b"
+            aria-label="Search matches"
+          >
+            <div className="h-full min-w-0 overflow-auto text-xs" tabIndex={0}>
+              <Table
+                containerClassName="contents"
+                className="w-max min-w-full table-auto caption-bottom text-xs"
               >
-                <TabsTrigger
-                  value="text"
+                <TableHeader className="sticky top-0 z-10 bg-muted">
+                  <TableRow className="h-7">
+                    <TableHead className="h-7 min-w-40 px-2 text-[11px]">
+                      File
+                    </TableHead>
+                    <TableHead className="h-7 min-w-80 px-2 text-[11px]">
+                      Path
+                    </TableHead>
+                    <TableHead className="h-7 min-w-24 px-2 text-[11px]">
+                      Line
+                    </TableHead>
+                    <TableHead className="h-7 min-w-24 px-2 text-[11px]">
+                      Type
+                    </TableHead>
+                    <TableHead className="h-7 min-w-96 px-2 text-[11px]">
+                      Match
+                    </TableHead>
+                    <TableHead className="h-7 min-w-20 px-2 text-[11px]">
+                      Action
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {matches.map((match) => (
+                    <TableRow
+                      key={match.id}
+                      data-state={
+                        selectedMatch?.id === match.id ? "selected" : undefined
+                      }
+                      className="h-8 cursor-default"
+                      onClick={() => selectMatch(match)}
+                      onDoubleClick={() => selectMatch(match)}
+                    >
+                      <TableCell className="px-2 py-1">
+                        <div className="flex items-center gap-1.5">
+                          <FileCode2
+                            className="size-3.5 shrink-0 text-muted-foreground"
+                            aria-hidden="true"
+                          />
+                          <span>{match.file}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="px-2 py-1 font-mono text-[11px]">
+                        {match.path}
+                      </TableCell>
+                      <TableCell className="px-2 py-1">
+                        {match.line}:{match.column}
+                      </TableCell>
+                      <TableCell className="px-2 py-1">
+                        <Badge
+                          variant="outline"
+                          className="h-5 rounded-none px-1 text-[10px]"
+                        >
+                          {match.kind}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="px-2 py-1">
+                        <div className="flex flex-col">
+                          <span>{match.matchedText}</span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {match.context}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="px-2 py-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          className="h-6 rounded-none px-1.5 text-[11px]"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            selectMatch(match);
+                          }}
+                        >
+                          Open
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {matches.length === 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={6}
+                        className="h-24 px-2 text-center text-xs text-muted-foreground"
+                      >
+                        {isSearching
+                          ? "Searching..."
+                          : "Run ripgrep to show matches."}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </section>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle />
+
+        <ResizablePanel defaultSize="42%" minSize="18%">
+          <section
+            className="h-full min-h-0 min-w-0 overflow-hidden"
+            aria-label="File preview"
+          >
+            <Tabs
+              defaultValue="text"
+              className="flex h-full min-h-0 min-w-0 flex-col gap-0"
+            >
+            <div className="flex h-8 items-center justify-between border-b px-2">
+              <div className="flex min-w-0 items-center gap-2 text-xs">
+                <span className="font-medium">Preview: </span>
+                <span className="truncate text-muted-foreground">
+                  {selectedMatch?.path ?? "No match selected"}
+                </span>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
                   className="h-7 rounded-none px-2 text-xs"
+                  disabled={currentPreviewLineMatches.length <= 1}
+                  onClick={() => selectRelativePreviewLine(-1)}
                 >
-                  <FileCode2 className="size-3.5" aria-hidden="true" />
-                  Text
-                </TabsTrigger>
-                <TabsTrigger
-                  value="hex"
+                  <ChevronLeft className="size-3.5" aria-hidden="true" />
+                  Back
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
                   className="h-7 rounded-none px-2 text-xs"
+                  disabled={currentPreviewLineMatches.length <= 1}
+                  onClick={() => selectRelativePreviewLine(1)}
                 >
-                  <Hexagon className="size-3.5" aria-hidden="true" />
-                  Hex
-                </TabsTrigger>
-              </TabsList>
+                  Next
+                  <ChevronRight className="size-3.5" aria-hidden="true" />
+                </Button>
+                <Separator orientation="vertical" className="h-5" />
+                <TabsList
+                  variant="line"
+                  className="h-7 rounded-none p-0"
+                  aria-label="Preview mode"
+                >
+                  <TabsTrigger
+                    value="text"
+                    className="h-7 rounded-none px-2 text-xs"
+                  >
+                    <FileCode2 className="size-3.5" aria-hidden="true" />
+                    Text
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="hex"
+                    className="h-7 rounded-none px-2 text-xs"
+                  >
+                    <Hexagon className="size-3.5" aria-hidden="true" />
+                    Hex
+                  </TabsTrigger>
+                </TabsList>
+              </div>
             </div>
 
-            <TabsContent value="text" className="m-0 h-[calc(100%-2rem)]">
-              <ScrollArea className="h-full">
-                <pre className="p-2 font-mono text-xs leading-5">
-                  {textPreview.map((line) => (
-                    <div
-                      key={line}
-                      className={cn(
-                        "whitespace-pre-wrap",
-                        line.includes("recovery phrase") && "bg-amber-500/20",
-                      )}
-                    >
-                      {line}
-                    </div>
-                  ))}
-                </pre>
-              </ScrollArea>
+            <TabsContent
+              value="text"
+              className="m-0 min-h-0 min-w-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
+            >
+              <div className="h-full min-h-0 min-w-0 overflow-hidden p-2">
+                {textPreview.length > 0 ? (
+                  <AutoSizer>
+                    {({ height, width }) => (
+                      <List
+                        ref={(list) => {
+                          textPreviewList.current = list;
+                        }}
+                        className="font-mono text-xs"
+                        width={width}
+                        height={height}
+                        rowCount={textPreview.length}
+                        rowHeight={textPreviewLineHeight}
+                        overscanRowCount={12}
+                        scrollToAlignment="center"
+                        scrollToIndex={selectedTextLineIndex}
+                        rowRenderer={({ index, key, style }: ListRowProps) => {
+                          const line = textPreview[index];
+                          const previewLineNumber = Number.parseInt(
+                            line.trimStart(),
+                            10,
+                          );
+                          const isSelectedLine =
+                            activePreviewMatch?.line === previewLineNumber;
+                          const isMatchedLine =
+                            currentPreviewMatchLines.has(previewLineNumber);
+
+                          return (
+                            <div
+                              key={key}
+                              style={style}
+                              className={cn(
+                                "whitespace-pre px-1 leading-5",
+                                isMatchedLine && "bg-amber-500/10",
+                                isSelectedLine && "bg-amber-500/25",
+                              )}
+                            >
+                              {line}
+                            </div>
+                          );
+                        }}
+                      />
+                    )}
+                  </AutoSizer>
+                ) : (
+                  <div className="font-mono text-xs text-muted-foreground">
+                    {isPreviewLoading
+                      ? "Loading preview..."
+                      : "Select a match to preview text."}
+                  </div>
+                )}
+              </div>
             </TabsContent>
 
-            <TabsContent value="hex" className="m-0 h-[calc(100%-2rem)]">
-              <ScrollArea className="h-full">
+            <TabsContent
+              value="hex"
+              className="m-0 min-h-0 min-w-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
+            >
+              <ScrollArea className="h-full min-h-0">
                 <pre className="p-2 font-mono text-xs leading-5">
                   {hexPreview.map((line) => (
-                    <div
-                      key={line}
-                      className={cn(
-                        "whitespace-pre-wrap",
-                        line.includes("72 65 63 6f") && "bg-amber-500/20",
-                      )}
-                    >
+                    <div key={line} className="whitespace-pre-wrap">
                       {line}
                     </div>
                   ))}
+                  {hexPreview.length === 0 && (
+                    <div className="text-muted-foreground">
+                      {isPreviewLoading
+                        ? "Loading preview..."
+                        : "Select a match to preview hex."}
+                    </div>
+                  )}
                 </pre>
               </ScrollArea>
             </TabsContent>
           </Tabs>
         </section>
-      </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
       <footer className="flex h-6 shrink-0 items-center gap-3 border-t px-2 text-[11px] text-muted-foreground">
-        <span>Search idle</span>
+        <span>{isSearching ? "Searching" : "Search idle"}</span>
         <span>Engine: ripgrep</span>
-        <span>Scope: logical files</span>
+        <span>Scope: {listing?.rootName ?? "none"}</span>
+        <span>Time: {formatElapsedTime(isSearching ? liveElapsedMs : elapsedMs)}</span>
+        {wasCancelled && <span>Cancelled</span>}
         <span>Preview: text/hex</span>
       </footer>
     </div>

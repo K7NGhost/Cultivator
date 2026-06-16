@@ -340,6 +340,14 @@ function createFileGridColumns(width: number): IColumnConfig[] {
   }));
 }
 
+function getViewportWidth() {
+  if (typeof document === "undefined") {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  return document.documentElement.clientWidth;
+}
+
 function createFileGridRows(
   entries: EvidenceDirectoryEntry[],
   openFolder: (entry: EvidenceDirectoryEntry) => void,
@@ -524,13 +532,14 @@ export function FilesPage() {
   const SelectedIcon = selectedEntry ? getEntryIcon(selectedEntry) : FolderOpen;
   const treePanel = useElementSize<HTMLDivElement>();
   const fileGridPanel = useElementSize<HTMLDivElement>();
-  const fileGridWidth = Math.max(
+  const fileGridAvailableWidth = Math.min(
     fileGridPanel.size.width,
-    fileGridMinimumWidth,
+    getViewportWidth(),
   );
+  const fileGridWidth = Math.max(fileGridAvailableWidth, fileGridMinimumWidth);
   const stretchedFileGridColumns = useMemo(
-    () => createFileGridColumns(fileGridPanel.size.width),
-    [fileGridPanel.size.width],
+    () => createFileGridColumns(fileGridAvailableWidth),
+    [fileGridAvailableWidth],
   );
   const GridTheme = theme === "dark" ? WillowDark : Willow;
 
@@ -681,7 +690,7 @@ export function FilesPage() {
         <ResizableHandle withHandle />
 
         <ResizablePanel defaultSize="58%" minSize="35%">
-          <section className="h-full min-h-0" aria-label="Logical file table">
+          <section className="h-full min-h-0 min-w-0" aria-label="Logical file table">
           <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
             <div className="flex min-w-0 items-center gap-2">
               <h1 className="text-xs font-medium uppercase text-muted-foreground">
@@ -705,11 +714,11 @@ export function FilesPage() {
           </div>
           <div
             ref={fileGridPanel.ref}
-            className="cultivator-grid h-[calc(100%-2rem)] overflow-auto text-xs"
+            className="cultivator-grid h-[calc(100%-2rem)] min-w-0 max-w-full overflow-auto text-xs"
           >
             <GridTheme fonts={false}>
               <div
-                className="h-full"
+                className="h-full min-w-0 max-w-full"
                 style={{
                   minWidth: `${fileGridMinimumWidth}px`,
                   width: `${fileGridWidth}px`,
