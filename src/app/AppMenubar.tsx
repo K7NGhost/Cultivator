@@ -16,12 +16,19 @@ import {
   MenubarShortcut,
   MenubarTrigger,
 } from "@/components/ui/menubar";
+import { useEvidence } from "@/features/evidence/evidence-provider";
 
 const triggerClassName = "px-1.5 py-0.5 text-xs";
 const itemClassName = "py-1 text-xs";
 
 export function AppMenubar() {
   const navigate = useNavigate();
+  const { isLoading, openDirectory, refreshDirectory, listing } = useEvidence();
+
+  async function handleOpenDirectory() {
+    navigate("/files");
+    await openDirectory();
+  }
 
   return (
     <Menubar className="h-7 gap-0.5 rounded-none border-0 bg-transparent p-0 shadow-none">
@@ -46,14 +53,24 @@ export function AppMenubar() {
       <MenubarMenu>
         <MenubarTrigger className={triggerClassName}>Evidence</MenubarTrigger>
         <MenubarContent>
-          <MenubarItem className={itemClassName} onSelect={() => navigate("/files")}>
+          <MenubarItem
+            className={itemClassName}
+            disabled={isLoading}
+            onSelect={handleOpenDirectory}
+          >
             <FolderOpen className="size-3.5" aria-hidden="true" />
-            Open directory
+            {isLoading ? "Opening directory..." : "Open directory"}
           </MenubarItem>
           <MenubarItem className={itemClassName} disabled>
             Add logical source
           </MenubarItem>
-          <MenubarItem className={itemClassName} disabled>
+          <MenubarItem
+            className={itemClassName}
+            disabled={!listing || isLoading}
+            onSelect={() => {
+              void refreshDirectory();
+            }}
+          >
             Refresh index
           </MenubarItem>
         </MenubarContent>

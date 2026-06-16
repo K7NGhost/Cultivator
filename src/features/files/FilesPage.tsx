@@ -1,6 +1,16 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Tree, type NodeApi, type NodeRendererProps } from "react-arborist";
 import {
+  Grid,
+  Willow,
+  WillowDark,
+  type ICellProps,
+  type IColumnConfig,
+} from "@svar-ui/react-grid";
+import {
+  AlertCircle,
+  ArrowLeft,
   ChevronRight,
   CheckCircle2,
   Clock3,
@@ -13,108 +23,21 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useTheme } from "@/components/theme-provider";
 import { Input } from "@/components/ui/input";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  type EvidenceDirectoryEntry,
+  type EvidenceTreeNode,
+  useEvidence,
+} from "@/features/evidence/evidence-provider";
 import { cn } from "@/lib/utils";
-
-type EvidenceTreeNode = {
-  id: string;
-  name: string;
-  files: number;
-  children?: EvidenceTreeNode[];
-};
-
-const evidenceTreeData: EvidenceTreeNode[] = [
-  {
-    id: "users",
-    name: "Users",
-    files: 1842,
-    children: [
-      {
-        id: "users/inter",
-        name: "Inter",
-        files: 713,
-        children: [
-          { id: "users/inter/downloads", name: "Downloads", files: 228 },
-          {
-            id: "users/inter/browser-profiles",
-            name: "Browser Profiles",
-            files: 96,
-          },
-          {
-            id: "users/inter/application-data",
-            name: "Application Data",
-            files: 389,
-          },
-        ],
-      },
-    ],
-  },
-  { id: "program-data", name: "ProgramData", files: 545 },
-  { id: "temp", name: "Temp", files: 74 },
-];
-
-const fileRows = [
-  {
-    name: "Login Data",
-    path: "Users/Inter/AppData/Local/Browser/Profile/Login Data",
-    type: "SQLite",
-    size: "2.4 MB",
-    modified: "2026-06-14 22:18",
-    plugin: "Credential Store Parser",
-    status: "Queued",
-    icon: FileCode2,
-  },
-  {
-    name: "History",
-    path: "Users/Inter/AppData/Local/Browser/Profile/History",
-    type: "SQLite",
-    size: "18.7 MB",
-    modified: "2026-06-15 09:42",
-    plugin: "Browser History Extractor",
-    status: "Parsed",
-    icon: FileCode2,
-  },
-  {
-    name: "IMG_2044.jpg",
-    path: "Users/Inter/Pictures/Camera Roll/IMG_2044.jpg",
-    type: "JPEG",
-    size: "4.8 MB",
-    modified: "2026-06-10 16:03",
-    plugin: "EXIF Metadata Reader",
-    status: "Parsed",
-    icon: FileImage,
-  },
-  {
-    name: "notes.txt",
-    path: "Users/Inter/Documents/notes.txt",
-    type: "Text",
-    size: "18 KB",
-    modified: "2026-06-12 13:27",
-    plugin: "Keyword Scanner",
-    status: "New",
-    icon: File,
-  },
-  {
-    name: "Preferences",
-    path: "Users/Inter/AppData/Roaming/App/Preferences",
-    type: "JSON",
-    size: "42 KB",
-    modified: "2026-06-11 08:12",
-    plugin: "Config Extractor",
-    status: "Ready",
-    icon: FileCode2,
-  },
-];
 
 const pluginQueue = [
   { name: "Browser History Extractor", target: "History", state: "Complete" },
@@ -122,6 +45,330 @@ const pluginQueue = [
   { name: "EXIF Metadata Reader", target: "IMG_2044.jpg", state: "Complete" },
   { name: "Keyword Scanner", target: "notes.txt", state: "Ready" },
 ];
+
+function formatFileSize(size?: number) {
+  if (size === undefined) {
+    return "-";
+  }
+
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = size / 1024;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function formatModifiedTime(modifiedMs?: number) {
+  if (modifiedMs === undefined) {
+    return "-";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(new Date(modifiedMs));
+}
+
+function getEntryType(entry: EvidenceDirectoryEntry) {
+  if (entry.kind === "directory") {
+    return "Folder";
+  }
+
+  const extension = entry.name.split(".").pop();
+
+  return extension && extension !== entry.name ? extension.toUpperCase() : "File";
+}
+
+function getEntryPlugin(entry: EvidenceDirectoryEntry) {
+  if (entry.kind === "directory") {
+    return "Directory traversal";
+  }
+
+  const extension = entry.name.split(".").pop()?.toLowerCase();
+
+  switch (extension) {
+    case "jpg":
+    case "jpeg":
+    case "png":
+      return "Image Metadata Reader";
+    case "json":
+      return "JSON Extractor";
+    case "sqlite":
+    case "db":
+      return "SQLite Parser";
+    case "txt":
+    case "log":
+      return "Keyword Scanner";
+    default:
+      return "File Classifier";
+  }
+}
+
+function getEntryIcon(entry: EvidenceDirectoryEntry) {
+  if (entry.kind === "directory") {
+    return FolderOpen;
+  }
+
+  const extension = entry.name.split(".").pop()?.toLowerCase();
+
+  if (extension === "jpg" || extension === "jpeg" || extension === "png") {
+    return FileImage;
+  }
+
+  if (extension === "json" || extension === "db" || extension === "sqlite") {
+    return FileCode2;
+  }
+
+  return File;
+}
+
+function getEntryIconClassName(entry: EvidenceDirectoryEntry) {
+  if (entry.kind === "directory") {
+    return "text-amber-600 dark:text-amber-400";
+  }
+
+  const extension = entry.name.split(".").pop()?.toLowerCase();
+
+  if (extension === "jpg" || extension === "jpeg" || extension === "png") {
+    return "text-violet-600 dark:text-violet-400";
+  }
+
+  if (extension === "json") {
+    return "text-emerald-600 dark:text-emerald-400";
+  }
+
+  if (extension === "db" || extension === "sqlite") {
+    return "text-blue-600 dark:text-blue-400";
+  }
+
+  if (extension === "txt" || extension === "log") {
+    return "text-slate-600 dark:text-slate-300";
+  }
+
+  return "text-muted-foreground";
+}
+
+function getEntryBadgeClassName(entry: EvidenceDirectoryEntry) {
+  if (entry.kind === "directory") {
+    return "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+  }
+
+  const extension = entry.name.split(".").pop()?.toLowerCase();
+
+  if (extension === "jpg" || extension === "jpeg" || extension === "png") {
+    return "bg-violet-500/10 text-violet-700 dark:text-violet-300";
+  }
+
+  if (extension === "json") {
+    return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+  }
+
+  if (extension === "db" || extension === "sqlite") {
+    return "bg-blue-500/10 text-blue-700 dark:text-blue-300";
+  }
+
+  return "";
+}
+
+type FileGridRow = {
+  id: string;
+  name: string;
+  path: string;
+  kind: EvidenceDirectoryEntry["kind"];
+  type: string;
+  sizeLabel: string;
+  sizeValue: number;
+  modifiedLabel: string;
+  modifiedValue: number;
+  plugin: string;
+  status: string;
+  extension: string;
+  childCount?: number;
+  openFolder?: () => void;
+};
+
+function NameCell({ row }: ICellProps) {
+  const entry = row as FileGridRow;
+  const Icon = getEntryIcon(entry);
+
+  return (
+    <div
+      className={cn(
+        "flex h-full min-w-0 items-center gap-1.5 px-1 text-xs",
+        entry.kind === "directory" && "cursor-default",
+      )}
+      onDoubleClick={() => {
+        entry.openFolder?.();
+      }}
+    >
+      <Icon
+        className={cn("size-3.5 shrink-0", getEntryIconClassName(entry))}
+        aria-hidden="true"
+      />
+      <div className="min-w-0 truncate font-medium">{entry.name}</div>
+    </div>
+  );
+}
+
+function StatusCell({ row }: ICellProps) {
+  const entry = row as FileGridRow;
+
+  return (
+    <Badge
+      variant={entry.kind === "directory" ? "outline" : "secondary"}
+      className={cn(
+        "h-5 rounded-sm px-1.5 text-[11px]",
+        getEntryBadgeClassName(entry),
+      )}
+    >
+      {entry.status}
+    </Badge>
+  );
+}
+
+const fileGridColumns: IColumnConfig[] = [
+  {
+    id: "name",
+    header: [
+      { text: "Name" },
+      { filter: { type: "text", config: { clear: true } } },
+    ],
+    width: 280,
+    sort: true,
+    resize: true,
+    cell: NameCell,
+    tooltip: true,
+  },
+  {
+    id: "path",
+    header: [
+      { text: "Path" },
+      { filter: { type: "text", config: { clear: true } } },
+    ],
+    width: 320,
+    sort: true,
+    resize: true,
+    tooltip: true,
+  },
+  {
+    id: "type",
+    header: [
+      { text: "Type" },
+      { filter: { type: "text", config: { clear: true } } },
+    ],
+    width: 90,
+    sort: true,
+    resize: true,
+  },
+  {
+    id: "sizeLabel",
+    header: [
+      { text: "Size" },
+      { filter: { type: "text", config: { clear: true } } },
+    ],
+    width: 96,
+    sort: (a, b) => {
+      const left = Number(a.sizeValue ?? 0);
+      const right = Number(b.sizeValue ?? 0);
+
+      return left === right ? 0 : left > right ? 1 : -1;
+    },
+    resize: true,
+  },
+  {
+    id: "modifiedLabel",
+    header: [
+      { text: "Modified" },
+      { filter: { type: "text", config: { clear: true } } },
+    ],
+    width: 150,
+    sort: (a, b) => {
+      const left = Number(a.modifiedValue ?? 0);
+      const right = Number(b.modifiedValue ?? 0);
+
+      return left === right ? 0 : left > right ? 1 : -1;
+    },
+    resize: true,
+  },
+  {
+    id: "plugin",
+    header: [
+      { text: "Plugin" },
+      { filter: { type: "text", config: { clear: true } } },
+    ],
+    width: 170,
+    sort: true,
+    resize: true,
+    tooltip: true,
+  },
+  {
+    id: "status",
+    header: [
+      { text: "Status" },
+      { filter: { type: "text", config: { clear: true } } },
+    ],
+    width: 92,
+    sort: true,
+    resize: true,
+    cell: StatusCell,
+  },
+];
+
+const fileGridMinimumWidth = fileGridColumns.reduce((total, column) => {
+  return total + Number(column.width ?? 120);
+}, 0);
+
+function createFileGridColumns(width: number): IColumnConfig[] {
+  const usableWidth = Math.max(width, fileGridMinimumWidth);
+  const widthRatio = usableWidth / fileGridMinimumWidth;
+
+  return fileGridColumns.map((column) => ({
+    ...column,
+    width: Math.max(
+      Number(column.width ?? 120),
+      Math.floor(Number(column.width ?? 120) * widthRatio),
+    ),
+  }));
+}
+
+function createFileGridRows(
+  entries: EvidenceDirectoryEntry[],
+  openFolder: (entry: EvidenceDirectoryEntry) => void,
+): FileGridRow[] {
+  return entries.map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+    path: entry.path,
+    kind: entry.kind,
+    type: getEntryType(entry),
+    sizeLabel:
+      entry.kind === "directory"
+        ? `${entry.childCount ?? 0} items`
+        : formatFileSize(entry.size),
+    sizeValue: entry.kind === "directory" ? 0 : entry.size ?? 0,
+    modifiedLabel: formatModifiedTime(entry.modifiedMs),
+    modifiedValue: entry.modifiedMs ?? 0,
+    plugin: getEntryPlugin(entry),
+    status: entry.kind === "directory" ? "Folder" : "Indexed",
+    extension: entry.name.split(".").pop()?.toLowerCase() ?? "",
+    childCount: entry.childCount,
+    openFolder:
+      entry.kind === "directory"
+        ? () => {
+            openFolder(entry);
+          }
+        : undefined,
+  }));
+}
 
 function useElementSize<TElement extends HTMLElement>() {
   const ref = useRef<TElement | null>(null);
@@ -152,7 +399,10 @@ function useElementSize<TElement extends HTMLElement>() {
 function EvidenceTreeNodeRow({
   node,
   style,
-}: NodeRendererProps<EvidenceTreeNode>) {
+  onSelectDirectory,
+}: NodeRendererProps<EvidenceTreeNode> & {
+  onSelectDirectory: (node: EvidenceTreeNode) => void;
+}) {
   const ancestorColumns: NodeApi<EvidenceTreeNode>[] = [];
   let parent = node.parent;
 
@@ -203,48 +453,167 @@ function EvidenceTreeNodeRow({
           </>
         )}
       </div>
-      <Button
-        type="button"
-        variant="ghost"
+      <div
         className={cn(
-          "h-7 w-full justify-start gap-1 rounded-sm px-1.5 text-xs font-normal",
+          "flex h-7 items-center rounded-sm",
           node.isSelected && "bg-accent",
         )}
         style={{ paddingLeft: `${connectorWidth + 6}px` }}
-        onClick={() => node.isInternal && node.toggle()}
       >
-        <ChevronRight
-          className={cn(
-            "size-3 shrink-0 text-muted-foreground transition-transform",
-            node.isOpen && "rotate-90",
-            node.isLeaf && "invisible",
-          )}
-          aria-hidden="true"
-        />
-        <FolderOpen
-          className="size-3.5 shrink-0 text-muted-foreground"
-          aria-hidden="true"
-        />
-        <span className="min-w-0 flex-1 truncate">{node.data.name}</span>
-        <Badge variant="outline" className="h-4 rounded-sm px-1 text-[10px]">
-          {node.data.files}
-        </Badge>
-      </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-5 shrink-0 rounded-sm"
+          disabled={node.isLeaf}
+          aria-label={node.isOpen ? "Collapse folder" : "Expand folder"}
+          onClick={() => {
+            if (node.isInternal) {
+              node.toggle();
+            }
+          }}
+        >
+          <ChevronRight
+            className={cn(
+              "size-3 text-muted-foreground transition-transform",
+              node.isOpen && "rotate-90",
+              node.isLeaf && "invisible",
+            )}
+            aria-hidden="true"
+          />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-7 min-w-0 flex-1 justify-start gap-1 rounded-sm px-1.5 text-xs font-normal"
+          onClick={() => {
+            node.select();
+            onSelectDirectory(node.data);
+          }}
+        >
+          <FolderOpen
+            className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+            aria-hidden="true"
+          />
+          <span className="min-w-0 flex-1 truncate text-left">
+            {node.data.name}
+          </span>
+          <Badge variant="outline" className="h-4 rounded-sm px-1 text-[10px]">
+            {node.data.files}
+          </Badge>
+        </Button>
+      </div>
     </div>
   );
 }
 
 export function FilesPage() {
-  const selectedFile = fileRows[0];
-  const SelectedIcon = selectedFile.icon;
+  const { error, isLoading, listing, openDirectory } = useEvidence();
+  const { theme } = useTheme();
+  const [selectedDirectory, setSelectedDirectory] =
+    useState<EvidenceTreeNode | null>(null);
+  const [directoryHistory, setDirectoryHistory] = useState<EvidenceTreeNode[]>(
+    [],
+  );
+  const [visibleEntries, setVisibleEntries] = useState<EvidenceDirectoryEntry[]>(
+    [],
+  );
+  const [entriesError, setEntriesError] = useState<string | null>(null);
+  const [isEntriesLoading, setIsEntriesLoading] = useState(false);
+  const selectedEntry = visibleEntries[0] ?? null;
+  const SelectedIcon = selectedEntry ? getEntryIcon(selectedEntry) : FolderOpen;
   const treePanel = useElementSize<HTMLDivElement>();
+  const fileGridPanel = useElementSize<HTMLDivElement>();
+  const fileGridWidth = Math.max(
+    fileGridPanel.size.width,
+    fileGridMinimumWidth,
+  );
+  const stretchedFileGridColumns = useMemo(
+    () => createFileGridColumns(fileGridPanel.size.width),
+    [fileGridPanel.size.width],
+  );
+  const GridTheme = theme === "dark" ? WillowDark : Willow;
+
+  useLayoutEffect(() => {
+    setSelectedDirectory(listing?.tree ?? null);
+    setVisibleEntries(listing?.entries ?? []);
+    setDirectoryHistory([]);
+    setEntriesError(null);
+  }, [listing]);
+
+  async function loadDirectoryEntries(
+    node: EvidenceTreeNode,
+    options: { pushHistory?: boolean } = {},
+  ) {
+    if (selectedDirectory?.path === node.path && options.pushHistory) {
+      return;
+    }
+
+    if (options.pushHistory && selectedDirectory) {
+      setDirectoryHistory((history) => [...history, selectedDirectory]);
+    }
+
+    setSelectedDirectory(node);
+    setEntriesError(null);
+    setIsEntriesLoading(true);
+
+    try {
+      const entries = await invoke<EvidenceDirectoryEntry[]>(
+        "list_directory_entries",
+        { path: node.path },
+      );
+      setVisibleEntries(entries);
+    } catch (caughtError) {
+      setEntriesError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : String(caughtError),
+      );
+      setVisibleEntries([]);
+    } finally {
+      setIsEntriesLoading(false);
+    }
+  }
+
+  function openFolderEntry(entry: EvidenceDirectoryEntry) {
+    void loadDirectoryEntries(
+      {
+        id: entry.id,
+        name: entry.name,
+        path: entry.path,
+        kind: entry.kind,
+        files: entry.childCount ?? 0,
+      },
+      { pushHistory: true },
+    );
+  }
+
+  function goBackDirectory() {
+    const previousDirectory = directoryHistory[directoryHistory.length - 1];
+
+    if (!previousDirectory) {
+      return;
+    }
+
+    setDirectoryHistory((history) => history.slice(0, -1));
+    void loadDirectoryEntries(previousDirectory);
+  }
+
+  const fileGridRows = createFileGridRows(visibleEntries, openFolderEntry);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <section className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
-        <Button size="xs" className="h-7 px-2 text-xs">
+        <Button
+          size="xs"
+          className="h-7 px-2 text-xs"
+          disabled={isLoading}
+          onClick={() => {
+            void openDirectory();
+          }}
+        >
           <FolderOpen className="size-3.5" aria-hidden="true" />
-          Open Directory
+          {isLoading ? "Opening..." : "Open Directory"}
         </Button>
         <Separator orientation="vertical" className="h-5" />
         <div className="relative w-72">
@@ -258,21 +627,32 @@ export function FilesPage() {
           />
         </div>
         <div className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground">
-          <span>0 directories mounted</span>
+          <span>{listing ? "1 directory mounted" : "0 directories mounted"}</span>
           <Separator orientation="vertical" className="h-4" />
-          <span>4 plugins available</span>
+          <span>{visibleEntries.length} visible entries</span>
         </div>
       </section>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(520px,1fr)_280px]">
-        <section className="min-h-0 border-r" aria-label="Directory tree">
+      {(error || entriesError) && (
+        <section className="flex h-8 shrink-0 items-center gap-2 border-b px-2 text-xs text-destructive">
+          <AlertCircle className="size-3.5" aria-hidden="true" />
+          <span className="truncate">{error ?? entriesError}</span>
+        </section>
+      )}
+
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 flex-1"
+      >
+        <ResizablePanel defaultSize="18%" minSize="12%" maxSize="35%">
+          <section className="h-full min-h-0" aria-label="Directory tree">
           <div className="flex h-8 items-center border-b px-2 text-xs font-medium uppercase text-muted-foreground">
             Evidence Tree
           </div>
           <div ref={treePanel.ref} className="h-[calc(100%-2rem)]">
             {treePanel.size.height > 0 && (
               <Tree
-                data={evidenceTreeData}
+                data={listing ? [listing.tree] : []}
                 width="100%"
                 height={treePanel.size.height}
                 rowHeight={28}
@@ -280,109 +660,119 @@ export function FilesPage() {
                 openByDefault
                 disableDrag
                 disableDrop
-                selection="users/inter/downloads"
+                selection={selectedDirectory?.id ?? listing?.tree.id}
                 className="py-1"
                 aria-label="Evidence directory tree"
               >
-                {EvidenceTreeNodeRow}
+                {(props) => (
+                  <EvidenceTreeNodeRow
+                    {...props}
+                    onSelectDirectory={(node) => {
+                      void loadDirectoryEntries(node, { pushHistory: true });
+                    }}
+                  />
+                )}
               </Tree>
             )}
           </div>
-        </section>
+          </section>
+        </ResizablePanel>
 
-        <section className="min-h-0 border-r" aria-label="Logical file table">
-          <div className="flex h-8 items-center justify-between border-b px-2">
-            <h1 className="text-xs font-medium uppercase text-muted-foreground">
-              Logical Files
-            </h1>
+        <ResizableHandle withHandle />
+
+        <ResizablePanel defaultSize="58%" minSize="35%">
+          <section className="h-full min-h-0" aria-label="Logical file table">
+          <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="text-xs font-medium uppercase text-muted-foreground">
+                Logical Files
+              </h1>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                className="h-6 rounded-sm px-1.5 text-[11px]"
+                disabled={directoryHistory.length === 0 || isEntriesLoading}
+                onClick={goBackDirectory}
+              >
+                <ArrowLeft className="size-3" aria-hidden="true" />
+                Back
+              </Button>
+            </div>
             <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
-              Directory-only acquisition
+              {isEntriesLoading ? "Loading folder" : "Directory-only acquisition"}
             </Badge>
           </div>
-          <ScrollArea className="h-[calc(100%-2rem)]">
-            <Table>
-              <TableHeader>
-                <TableRow className="h-7">
-                  <TableHead className="h-7 px-2 text-[11px]">Name</TableHead>
-                  <TableHead className="h-7 px-2 text-[11px]">Type</TableHead>
-                  <TableHead className="h-7 px-2 text-[11px]">Size</TableHead>
-                  <TableHead className="h-7 px-2 text-[11px]">
-                    Modified
-                  </TableHead>
-                  <TableHead className="h-7 px-2 text-[11px]">Plugin</TableHead>
-                  <TableHead className="h-7 px-2 text-[11px]">Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {fileRows.map((file, index) => {
-                  const Icon = file.icon;
+          <div
+            ref={fileGridPanel.ref}
+            className="cultivator-grid h-[calc(100%-2rem)] overflow-auto text-xs"
+          >
+            <GridTheme fonts={false}>
+              <div
+                className="h-full"
+                style={{
+                  minWidth: `${fileGridMinimumWidth}px`,
+                  width: `${fileGridWidth}px`,
+                }}
+              >
+                <Grid
+                  data={fileGridRows}
+                  columns={stretchedFileGridColumns}
+                  sizes={{
+                    rowHeight: 32,
+                    headerHeight: 28,
+                    columnWidth: 120,
+                  }}
+                  selectedRows={fileGridRows[0] ? [fileGridRows[0].id] : []}
+                  multiselect
+                  select
+                  reorder
+                  autoRowHeight={false}
+                  rowStyle={(row) =>
+                    row.kind === "directory"
+                      ? "bg-amber-500/5"
+                      : "bg-background"
+                  }
+                />
+              </div>
+            </GridTheme>
+          </div>
+          </section>
+        </ResizablePanel>
 
-                  return (
-                    <TableRow
-                      key={file.path}
-                      data-state={index === 0 ? "selected" : undefined}
-                      className="h-8"
-                    >
-                      <TableCell className="max-w-[240px] px-2 py-1 text-xs">
-                        <div className="flex min-w-0 items-center gap-1.5">
-                          <Icon
-                            className="size-3.5 shrink-0 text-muted-foreground"
-                            aria-hidden="true"
-                          />
-                          <div className="min-w-0">
-                            <div className="truncate font-medium">
-                              {file.name}
-                            </div>
-                            <div className="truncate text-[11px] text-muted-foreground">
-                              {file.path}
-                            </div>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="px-2 py-1 text-xs">
-                        {file.type}
-                      </TableCell>
-                      <TableCell className="px-2 py-1 text-xs">
-                        {file.size}
-                      </TableCell>
-                      <TableCell className="px-2 py-1 text-xs">
-                        {file.modified}
-                      </TableCell>
-                      <TableCell className="max-w-[160px] px-2 py-1 text-xs">
-                        <span className="block truncate">{file.plugin}</span>
-                      </TableCell>
-                      <TableCell className="px-2 py-1 text-xs">
-                        <Badge
-                          variant={
-                            file.status === "Parsed" ? "secondary" : "outline"
-                          }
-                          className="h-5 rounded-sm px-1.5 text-[11px]"
-                        >
-                          {file.status}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </ScrollArea>
-        </section>
+        <ResizableHandle withHandle />
 
-        <aside className="min-h-0" aria-label="Inspector">
-          <ScrollArea className="h-full">
+        <ResizablePanel defaultSize="24%" minSize="16%" maxSize="40%">
+          <aside className="h-full min-h-0 overflow-hidden" aria-label="Inspector">
+          <ScrollArea className="h-full min-h-0">
             <div className="space-y-3 p-2">
               <section>
                 <div className="flex items-center gap-2">
                   <div className="flex size-7 items-center justify-center rounded-sm border bg-muted">
-                    <SelectedIcon className="size-3.5" aria-hidden="true" />
+                    <SelectedIcon
+                      className={cn(
+                        "size-3.5",
+                        selectedEntry
+                          ? getEntryIconClassName(selectedEntry)
+                          : "text-amber-600 dark:text-amber-400",
+                      )}
+                      aria-hidden="true"
+                    />
                   </div>
                   <div className="min-w-0">
                     <h2 className="truncate text-xs font-semibold">
-                      {selectedFile.name}
+                      {selectedEntry?.name ?? "No directory loaded"}
                     </h2>
                     <p className="text-[11px] text-muted-foreground">
-                      {selectedFile.type} · {selectedFile.size}
+                      {selectedEntry
+                        ? `${getEntryType(selectedEntry)} - ${
+                            selectedEntry.kind === "directory"
+                              ? `${selectedEntry.childCount ?? 0} items`
+                              : formatFileSize(selectedEntry.size)
+                          }`
+                        : selectedDirectory
+                          ? "Folder selected"
+                          : "Use Evidence > Open directory"}
                     </p>
                   </div>
                 </div>
@@ -396,11 +786,13 @@ export function FilesPage() {
                 </div>
                 <dl className="grid grid-cols-[78px_1fr] gap-x-2 gap-y-1 text-[11px]">
                   <dt className="text-muted-foreground">Path</dt>
-                  <dd className="break-all">{selectedFile.path}</dd>
+                  <dd className="break-all">
+                    {selectedEntry?.path ?? selectedDirectory?.path ?? "-"}
+                  </dd>
                   <dt className="text-muted-foreground">Modified</dt>
-                  <dd>{selectedFile.modified}</dd>
+                  <dd>{formatModifiedTime(selectedEntry?.modifiedMs)}</dd>
                   <dt className="text-muted-foreground">Extractor</dt>
-                  <dd>{selectedFile.plugin}</dd>
+                  <dd>{selectedEntry ? getEntryPlugin(selectedEntry) : "-"}</dd>
                 </dl>
               </section>
 
@@ -447,13 +839,15 @@ export function FilesPage() {
               </section>
             </div>
           </ScrollArea>
-        </aside>
-      </div>
+          </aside>
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
       <footer className="flex h-6 shrink-0 items-center gap-3 border-t px-2 text-[11px] text-muted-foreground">
-        <span>Ready</span>
-        <span>Evidence: directory</span>
-        <span>Files indexed: 0</span>
+        <span>{isLoading || isEntriesLoading ? "Loading" : "Ready"}</span>
+        <span>Evidence: {listing?.rootName ?? "none"}</span>
+        <span>Folder: {selectedDirectory?.name ?? "none"}</span>
+        <span>Files indexed: {visibleEntries.length}</span>
         <span>Plugin jobs: 0 running</span>
       </footer>
     </div>
