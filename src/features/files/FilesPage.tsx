@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { Tree, type NodeRendererProps } from "react-arborist";
+import { Tree, type NodeApi, type NodeRendererProps } from "react-arborist";
 import {
   ChevronRight,
   CheckCircle2,
@@ -153,15 +153,64 @@ function EvidenceTreeNodeRow({
   node,
   style,
 }: NodeRendererProps<EvidenceTreeNode>) {
+  const ancestorColumns: NodeApi<EvidenceTreeNode>[] = [];
+  let parent = node.parent;
+
+  while (parent && !parent.isRoot) {
+    ancestorColumns.unshift(parent);
+    parent = parent.parent;
+  }
+
+  const connectorWidth = node.level * 16;
+  const currentLineX = Math.max(connectorWidth - 8, 0);
+
   return (
-    <div style={style} className="px-1">
+    <div style={style} className="relative px-1">
+      <div
+        className="pointer-events-none absolute inset-y-0 left-1"
+        style={{ width: `${connectorWidth}px` }}
+        aria-hidden="true"
+      >
+        {ancestorColumns.map((ancestorNode, index) => {
+          if (!ancestorNode.nextSibling) {
+            return null;
+          }
+
+          return (
+            <span
+              key={ancestorNode.id}
+              className="absolute top-0 bottom-0 w-px bg-foreground"
+              style={{ left: `${index * 16 + 8}px` }}
+            />
+          );
+        })}
+        {node.level > 0 && (
+          <>
+            <span
+              className="absolute top-0 h-1/2 w-px bg-foreground"
+              style={{ left: `${currentLineX}px` }}
+            />
+            {node.nextSibling && (
+              <span
+                className="absolute bottom-0 h-1/2 w-px bg-foreground"
+                style={{ left: `${currentLineX}px` }}
+              />
+            )}
+            <span
+              className="absolute top-1/2 h-px w-2 bg-foreground"
+              style={{ left: `${currentLineX}px` }}
+            />
+          </>
+        )}
+      </div>
       <Button
         type="button"
         variant="ghost"
         className={cn(
-          "h-7 w-full justify-start gap-1.5 rounded-sm px-1.5 text-xs font-normal",
+          "h-7 w-full justify-start gap-1 rounded-sm px-1.5 text-xs font-normal",
           node.isSelected && "bg-accent",
         )}
+        style={{ paddingLeft: `${connectorWidth + 6}px` }}
         onClick={() => node.isInternal && node.toggle()}
       >
         <ChevronRight
@@ -227,7 +276,7 @@ export function FilesPage() {
                 width="100%"
                 height={treePanel.size.height}
                 rowHeight={28}
-                indent={14}
+                indent={0}
                 openByDefault
                 disableDrag
                 disableDrop
