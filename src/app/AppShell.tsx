@@ -1,8 +1,10 @@
 import type { CSSProperties } from "react";
+import { useState } from "react";
 import { Outlet } from "react-router-dom";
 
 import { AppMenubar } from "@/app/AppMenubar";
 import { AppSidebar } from "@/app/AppSidebar";
+import { loadSidebarOpenState, saveSidebarOpenState } from "@/app/sidebarState";
 import { ModeToggle } from "@/components/mode-toggle";
 import {
   SidebarInset,
@@ -12,10 +14,18 @@ import {
 import { EvidenceProvider } from "@/features/evidence/evidence-provider";
 
 export function AppShell() {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(loadSidebarOpenState);
+
+  function updateSidebarOpenState(isOpen: boolean) {
+    setIsSidebarOpen(isOpen);
+    saveSidebarOpenState(isOpen);
+  }
+
   return (
     <EvidenceProvider>
       <SidebarProvider
-        defaultOpen
+        open={isSidebarOpen}
+        onOpenChange={updateSidebarOpenState}
         className="h-svh overflow-hidden"
         style={
           {
