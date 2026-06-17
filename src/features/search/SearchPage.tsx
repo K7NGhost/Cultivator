@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   AutoSizer,
+  CellMeasurer,
+  CellMeasurerCache,
   List,
   type ListRowProps,
 } from "react-virtualized";
@@ -12,6 +15,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FileCode2,
+  FileText,
   FolderOpen,
   Hexagon,
   Play,
@@ -52,6 +56,14 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEvidence } from "@/features/evidence/evidence-provider";
 import { cn } from "@/lib/utils";
+import {
+  buildSearchReport,
+  type SearchReportStatus,
+} from "./searchReport";
+import {
+  loadSearchSettings,
+  saveSearchSettings,
+} from "./searchSettings";
 
 type SearchMatch = {
   id: string;
@@ -68,7 +80,132 @@ type SearchResult = {
   matches: SearchMatch[];
   elapsedMs: number;
   cancelled: boolean;
+  scannedFiles: number;
+  totalFiles: number;
+  totalComplete: boolean;
 };
+
+type SearchProgress = {
+  searchId: string;
+  scannedFiles: number;
+  totalFiles: number;
+  totalComplete: boolean;
+  elapsedMs: number;
+};
+
+type FileMatch = {
+  match: SearchMatch;
+  matchedLines: Set<number>;
+};
+
+type ParsedPreviewLine = {
+  content: string;
+  lineNumber: number | null;
+};
+
+type TextPreviewListProps = {
+  activePreviewMatch: SearchMatch | null;
+  currentPreviewMatchLines: Set<number>;
+  height: number;
+  lines: string[];
+  selectedTextLineIndex: number;
+  width: number;
+};
+
+function parsePreviewLine(line: string): ParsedPreviewLine {
+  const match = line.match(/^(\s*\d+)(?::|\s)(.*)$/s);
+
+  if (!match) {
+    return {
+      content: line,
+      lineNumber: null,
+    };
+  }
+
+  return {
+    content: match[2] ?? "",
+    lineNumber: Number.parseInt(match[1], 10),
+  };
+}
+
+function TextPreviewList({
+  activePreviewMatch,
+  currentPreviewMatchLines,
+  height,
+  lines,
+  selectedTextLineIndex,
+  width,
+}: TextPreviewListProps) {
+  const list = useRef<List | null>(null);
+  const measurementCache = useMemo(
+    () =>
+      new CellMeasurerCache({
+        defaultHeight: 20,
+        fixedWidth: true,
+        minHeight: 20,
+      }),
+    [lines, width],
+  );
+
+  useEffect(() => {
+    list.current?.scrollToRow(selectedTextLineIndex);
+  }, [selectedTextLineIndex, lines.length]);
+
+  return (
+    <List
+      ref={(nextList) => {
+        list.current = nextList;
+      }}
+      className="font-mono text-xs"
+      width={width}
+      height={height}
+      rowCount={lines.length}
+      rowHeight={measurementCache.rowHeight}
+      deferredMeasurementCache={measurementCache}
+      overscanRowCount={12}
+      scrollToAlignment="center"
+      scrollToIndex={selectedTextLineIndex}
+      rowRenderer={({ index, key, parent, style }: ListRowProps) => {
+        const line = lines[index];
+        const { content, lineNumber: previewLineNumber } =
+          parsePreviewLine(line);
+        const isSelectedLine = activePreviewMatch?.line === previewLineNumber;
+        const isMatchedLine =
+          previewLineNumber !== null &&
+          currentPreviewMatchLines.has(previewLineNumber);
+
+        return (
+          <CellMeasurer
+            cache={measurementCache}
+            columnIndex={0}
+            key={key}
+            parent={parent}
+            rowIndex={index}
+          >
+            {({ registerChild }) => (
+              <div
+                ref={registerChild}
+                style={style}
+                className={cn(
+                  "grid grid-cols-[4.5rem_minmax(0,1fr)] leading-5",
+                  isMatchedLine && "bg-amber-500/10",
+                  isSelectedLine && "bg-amber-500/25",
+                )}
+              >
+                <div className="select-none border-r px-1 text-right text-muted-foreground">
+                  {previewLineNumber ?? ""}
+                </div>
+                <div className="min-w-0 whitespace-pre-wrap break-words px-2">
+                  {content}
+                </div>
+              </div>
+            )}
+          </CellMeasurer>
+        );
+      }}
+    />
+  );
+}
 
 function formatElapsedTime(milliseconds: number | null) {
   if (milliseconds === null) {
@@ -82,12 +219,39 @@ function formatElapsedTime(milliseconds: number | null) {
   return `${(milliseconds / 1000).toFixed(2)} s`;
 }
 
+function formatFileScanCount(
+  scannedFiles: number | null,
+  totalFiles: number | null,
+  isSearching: boolean,
+  totalComplete: boolean,
+) {
+  if (scannedFiles === null || totalFiles === null) {
+    return isSearching ? "Starting..." : "-";
+  }
+
+  if (isSearching && !totalComplete) {
+    return `${totalFiles.toLocaleString()} counted`;
+  }
+
+  if (isSearching && scannedFiles === totalFiles) {
+    return `Scanning ${totalFiles.toLocaleString()}`;
+  }
+
+  return `${scannedFiles.toLocaleString()} / ${totalFiles.toLocaleString()}`;
+}
+
 export function SearchPage() {
   const { listing } = useEvidence();
+  const [searchSettingsLoaded, setSearchSettingsLoaded] = useState(false);
+  const [savedSearchSettings] = useState(loadSearchSettings);
   const [query, setQuery] = useState("");
-  const [regex, setRegex] = useState(false);
-  const [caseSensitive, setCaseSensitive] = useState(false);
-  const [binaryFiles, setBinaryFiles] = useState(false);
+  const [regex, setRegex] = useState(savedSearchSettings.regex);
+  const [caseSensitive, setCaseSensitive] = useState(
+    savedSearchSettings.caseSensitive,
+  );
+  const [binaryFiles, setBinaryFiles] = useState(
+    savedSearchSettings.binaryFiles,
+  );
   const [matches, setMatches] = useState<SearchMatch[]>([]);
   const [selectedMatch, setSelectedMatch] = useState<SearchMatch | null>(null);
   const [activePreviewMatch, setActivePreviewMatch] =
@@ -99,14 +263,51 @@ export function SearchPage() {
   const [isCancelling, setIsCancelling] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  const [scannedFiles, setScannedFiles] = useState<number | null>(null);
+  const [totalFiles, setTotalFiles] = useState<number | null>(null);
+  const [isTotalFileCountComplete, setIsTotalFileCountComplete] =
+    useState(false);
   const [liveElapsedMs, setLiveElapsedMs] = useState(0);
   const [wasCancelled, setWasCancelled] = useState(false);
+  const [completedAt, setCompletedAt] = useState<Date | null>(null);
   const [activeSearchId, setActiveSearchId] = useState<string | null>(null);
-  const textPreviewList = useRef<List | null>(null);
-  const textPreviewLineHeight = 20;
+  const latestSearchId = useRef<string | null>(null);
   const selectedTextLineIndex = activePreviewMatch
-    ? Math.max(activePreviewMatch.line - 1, 0)
+    ? Math.min(
+        Math.max(activePreviewMatch.line - 1, 0),
+        Math.max(textPreview.length - 1, 0),
+      )
     : 0;
+  const fileMatches = Array.from(
+    matches
+      .reduce((fileMatchMap, match) => {
+        const existingMatch = fileMatchMap.get(match.path);
+
+        if (existingMatch) {
+          existingMatch.matchedLines.add(match.line);
+
+          if (
+            match.line < existingMatch.match.line ||
+            (match.line === existingMatch.match.line &&
+              match.column < existingMatch.match.column)
+          ) {
+            existingMatch.match = match;
+          }
+        } else {
+          fileMatchMap.set(match.path, {
+            match,
+            matchedLines: new Set([match.line]),
+          });
+        }
+
+        return fileMatchMap;
+      }, new Map<string, FileMatch>())
+      .values(),
+  );
+  const matchedLineCount = fileMatches.reduce(
+    (total, fileMatch) => total + fileMatch.matchedLines.size,
+    0,
+  );
   const currentPreviewLineMatches = selectedMatch
     ? Array.from(
         matches
@@ -132,14 +333,29 @@ export function SearchPage() {
     : -1;
 
   const canSearch = Boolean(listing && query.trim() && !isSearching);
+  const reportStatus: SearchReportStatus = isSearching
+    ? "searching"
+    : wasCancelled
+      ? "cancelled"
+      : elapsedMs === null
+        ? "idle"
+        : "completed";
+  const reportText = buildSearchReport({
+    completedAt,
+    elapsedMs: isSearching ? liveElapsedMs : elapsedMs,
+    matches,
+    query,
+    rootPath: listing?.rootPath ?? null,
+    scannedFiles,
+    status: reportStatus,
+    totalFiles,
+  });
   const commandPreview = listing
-    ? `rg --json --line-number --column ${
-        regex ? "" : "--fixed-strings "
-      }${caseSensitive ? "" : "--ignore-case "}${
-        binaryFiles ? "--binary " : ""
-      }"${query || "<query>"}" ${
-        listing.rootPath
-      }`
+    ? `grep crate ${regex ? "regex" : "fixed"} ${
+        caseSensitive ? "case-sensitive" : "ignore-case"
+      } ${binaryFiles ? "binary-as-text" : "skip-binary"} "${
+        query || "<query>"
+      }" ${listing.rootPath}`
     : "Open an evidence directory before searching";
 
   async function runSearch() {
@@ -154,27 +370,38 @@ export function SearchPage() {
 
     setIsSearching(true);
     setActiveSearchId(searchId);
+    latestSearchId.current = searchId;
     setError(null);
     setElapsedMs(null);
+    setScannedFiles(null);
+    setTotalFiles(null);
+    setIsTotalFileCountComplete(false);
     setLiveElapsedMs(0);
     setWasCancelled(false);
+    setCompletedAt(null);
     const searchStartedAt = performance.now();
 
     try {
       const result = await invoke<SearchResult>("search_files", {
-        searchId,
-        rootPath: listing.rootPath,
-        query,
-        regex,
-        caseSensitive,
-        binaryFiles,
+        request: {
+          searchId,
+          rootPath: listing.rootPath,
+          query,
+          regex,
+          caseSensitive,
+          binaryFiles,
+        },
       });
 
       setMatches(result.matches);
       setSelectedMatch(result.matches[0] ?? null);
       setActivePreviewMatch(result.matches[0] ?? null);
       setElapsedMs(result.elapsedMs);
+      setScannedFiles(result.scannedFiles);
+      setTotalFiles(result.totalFiles);
+      setIsTotalFileCountComplete(result.totalComplete);
       setWasCancelled(result.cancelled);
+      setCompletedAt(new Date());
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -184,11 +411,16 @@ export function SearchPage() {
       setMatches([]);
       setSelectedMatch(null);
       setActivePreviewMatch(null);
+      setScannedFiles(null);
+      setTotalFiles(null);
+      setIsTotalFileCountComplete(false);
       setElapsedMs(Math.round(performance.now() - searchStartedAt));
+      setCompletedAt(new Date());
     } finally {
       setIsSearching(false);
       setIsCancelling(false);
       setActiveSearchId(null);
+      latestSearchId.current = null;
     }
   }
 
@@ -230,6 +462,46 @@ export function SearchPage() {
 
     setActivePreviewMatch(currentPreviewLineMatches[nextIndex]);
   }
+
+  useEffect(() => {
+    let isDisposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void listen<SearchProgress>("search-progress", (event) => {
+      if (event.payload.searchId !== latestSearchId.current) {
+        return;
+      }
+
+      setScannedFiles(event.payload.scannedFiles);
+      setTotalFiles(event.payload.totalFiles);
+      setIsTotalFileCountComplete(event.payload.totalComplete);
+    }).then((nextUnlisten) => {
+      if (isDisposed) {
+        nextUnlisten();
+        return;
+      }
+
+      unlisten = nextUnlisten;
+    });
+
+    return () => {
+      isDisposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!searchSettingsLoaded) {
+      setSearchSettingsLoaded(true);
+      return;
+    }
+
+    saveSearchSettings({
+      binaryFiles,
+      caseSensitive,
+      regex,
+    });
+  }, [binaryFiles, caseSensitive, regex, searchSettingsLoaded]);
 
   useEffect(() => {
     if (!isSearching) {
@@ -294,14 +566,6 @@ export function SearchPage() {
     };
   }, [selectedMatch?.path]);
 
-  useEffect(() => {
-    if (!activePreviewMatch || textPreview.length === 0) {
-      return;
-    }
-
-    textPreviewList.current?.scrollToRow(selectedTextLineIndex);
-  }, [activePreviewMatch, selectedTextLineIndex, textPreview.length]);
-
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <section className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
@@ -340,7 +604,7 @@ export function SearchPage() {
           ) : (
             <Play className="size-3.5" aria-hidden="true" />
           )}
-          {isSearching ? (isCancelling ? "Cancelling" : "Cancel") : "Run rg"}
+          {isSearching ? (isCancelling ? "Cancelling" : "Cancel") : "Run"}
         </Button>
         <Separator orientation="vertical" className="h-5" />
         <Button
@@ -382,7 +646,7 @@ export function SearchPage() {
           </DialogTrigger>
           <DialogContent className="max-w-md rounded-none p-0">
             <DialogHeader className="border-b px-3 py-2">
-              <DialogTitle className="text-sm">Ripgrep Options</DialogTitle>
+              <DialogTitle className="text-sm">Search Options</DialogTitle>
               <DialogDescription className="text-xs">
                 Configure search flags for the next run.
               </DialogDescription>
@@ -399,8 +663,8 @@ export function SearchPage() {
                 <span className="grid gap-0.5">
                   <span className="font-medium">Search binary files</span>
                   <span className="text-[11px] text-muted-foreground">
-                    Adds <span className="font-mono">--binary</span> so
-                    ripgrep does not skip files detected as binary.
+                    Searches binary files as text instead of stopping at NUL
+                    bytes.
                   </span>
                 </span>
               </label>
@@ -416,8 +680,17 @@ export function SearchPage() {
               ? formatElapsedTime(liveElapsedMs)
               : formatElapsedTime(elapsedMs)}
           </span>
+          <span>
+            Files:{" "}
+            {formatFileScanCount(
+              scannedFiles,
+              totalFiles,
+              isSearching,
+              isTotalFileCountComplete,
+            )}
+          </span>
           <Badge variant="outline" className="h-5 rounded-none text-[11px]">
-            {matches.length} matches
+            {fileMatches.length} files / {matchedLineCount} lines
           </Badge>
         </div>
       </section>
@@ -438,66 +711,63 @@ export function SearchPage() {
       </section>
 
       <ResizablePanelGroup
-        orientation="vertical"
+        orientation="horizontal"
         className="min-h-0 min-w-0 flex-1"
       >
-        <ResizablePanel defaultSize="58%" minSize="28%">
+        <ResizablePanel defaultSize="36%" minSize="22%">
           <section
-            className="h-full min-h-0 min-w-0 overflow-hidden border-b"
+            className="h-full min-h-0 min-w-0 overflow-hidden border-r"
             aria-label="Search matches"
           >
             <div className="h-full min-w-0 overflow-auto text-xs" tabIndex={0}>
               <Table
                 containerClassName="contents"
-                className="w-max min-w-full table-auto caption-bottom text-xs"
+                className="w-full min-w-[420px] table-fixed caption-bottom text-xs"
               >
                 <TableHeader className="sticky top-0 z-10 bg-muted">
                   <TableRow className="h-7">
-                    <TableHead className="h-7 min-w-40 px-2 text-[11px]">
+                    <TableHead className="h-7 w-[52%] px-2 text-[11px]">
                       File
                     </TableHead>
-                    <TableHead className="h-7 min-w-80 px-2 text-[11px]">
-                      Path
+                    <TableHead className="h-7 w-[18%] px-2 text-[11px]">
+                      Lines
                     </TableHead>
-                    <TableHead className="h-7 min-w-24 px-2 text-[11px]">
-                      Line
-                    </TableHead>
-                    <TableHead className="h-7 min-w-24 px-2 text-[11px]">
+                    <TableHead className="h-7 w-[15%] px-2 text-[11px]">
                       Type
                     </TableHead>
-                    <TableHead className="h-7 min-w-96 px-2 text-[11px]">
-                      Match
-                    </TableHead>
-                    <TableHead className="h-7 min-w-20 px-2 text-[11px]">
+                    <TableHead className="h-7 w-[15%] px-2 text-[11px]">
                       Action
                     </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {matches.map((match) => (
+                  {fileMatches.map(({ match, matchedLines }) => (
                     <TableRow
-                      key={match.id}
+                      key={match.path}
                       data-state={
-                        selectedMatch?.id === match.id ? "selected" : undefined
+                        selectedMatch?.path === match.path ? "selected" : undefined
                       }
                       className="h-8 cursor-default"
                       onClick={() => selectMatch(match)}
                       onDoubleClick={() => selectMatch(match)}
                     >
                       <TableCell className="px-2 py-1">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex min-w-0 items-start gap-1.5">
                           <FileCode2
-                            className="size-3.5 shrink-0 text-muted-foreground"
+                            className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
                             aria-hidden="true"
                           />
-                          <span>{match.file}</span>
+                          <div className="min-w-0">
+                            <div className="truncate">{match.file}</div>
+                            <div className="truncate font-mono text-[10px] text-muted-foreground">
+                              {match.path}
+                            </div>
+                          </div>
                         </div>
                       </TableCell>
-                      <TableCell className="px-2 py-1 font-mono text-[11px]">
-                        {match.path}
-                      </TableCell>
                       <TableCell className="px-2 py-1">
-                        {match.line}:{match.column}
+                        {matchedLines.size.toLocaleString()}{" "}
+                        {matchedLines.size === 1 ? "line" : "lines"}
                       </TableCell>
                       <TableCell className="px-2 py-1">
                         <Badge
@@ -506,14 +776,6 @@ export function SearchPage() {
                         >
                           {match.kind}
                         </Badge>
-                      </TableCell>
-                      <TableCell className="px-2 py-1">
-                        <div className="flex flex-col">
-                          <span>{match.matchedText}</span>
-                          <span className="text-[11px] text-muted-foreground">
-                            {match.context}
-                          </span>
-                        </div>
                       </TableCell>
                       <TableCell className="px-2 py-1">
                         <Button
@@ -531,15 +793,13 @@ export function SearchPage() {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {matches.length === 0 && (
+                  {fileMatches.length === 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={6}
+                        colSpan={4}
                         className="h-24 px-2 text-center text-xs text-muted-foreground"
                       >
-                        {isSearching
-                          ? "Searching..."
-                          : "Run ripgrep to show matches."}
+                      {isSearching ? "Searching..." : "Run search to show matches."}
                       </TableCell>
                     </TableRow>
                   )}
@@ -551,7 +811,7 @@ export function SearchPage() {
 
         <ResizableHandle withHandle />
 
-        <ResizablePanel defaultSize="42%" minSize="18%">
+        <ResizablePanel defaultSize="64%" minSize="34%">
           <section
             className="h-full min-h-0 min-w-0 overflow-hidden"
             aria-label="File preview"
@@ -610,6 +870,13 @@ export function SearchPage() {
                     <Hexagon className="size-3.5" aria-hidden="true" />
                     Hex
                   </TabsTrigger>
+                  <TabsTrigger
+                    value="report"
+                    className="h-7 rounded-none px-2 text-xs"
+                  >
+                    <FileText className="size-3.5" aria-hidden="true" />
+                    Report
+                  </TabsTrigger>
                 </TabsList>
               </div>
             </div>
@@ -622,43 +889,13 @@ export function SearchPage() {
                 {textPreview.length > 0 ? (
                   <AutoSizer>
                     {({ height, width }) => (
-                      <List
-                        ref={(list) => {
-                          textPreviewList.current = list;
-                        }}
-                        className="font-mono text-xs"
+                      <TextPreviewList
+                        activePreviewMatch={activePreviewMatch}
+                        currentPreviewMatchLines={currentPreviewMatchLines}
                         width={width}
                         height={height}
-                        rowCount={textPreview.length}
-                        rowHeight={textPreviewLineHeight}
-                        overscanRowCount={12}
-                        scrollToAlignment="center"
-                        scrollToIndex={selectedTextLineIndex}
-                        rowRenderer={({ index, key, style }: ListRowProps) => {
-                          const line = textPreview[index];
-                          const previewLineNumber = Number.parseInt(
-                            line.trimStart(),
-                            10,
-                          );
-                          const isSelectedLine =
-                            activePreviewMatch?.line === previewLineNumber;
-                          const isMatchedLine =
-                            currentPreviewMatchLines.has(previewLineNumber);
-
-                          return (
-                            <div
-                              key={key}
-                              style={style}
-                              className={cn(
-                                "whitespace-pre px-1 leading-5",
-                                isMatchedLine && "bg-amber-500/10",
-                                isSelectedLine && "bg-amber-500/25",
-                              )}
-                            >
-                              {line}
-                            </div>
-                          );
-                        }}
+                        lines={textPreview}
+                        selectedTextLineIndex={selectedTextLineIndex}
                       />
                     )}
                   </AutoSizer>
@@ -693,6 +930,17 @@ export function SearchPage() {
                 </pre>
               </ScrollArea>
             </TabsContent>
+
+            <TabsContent
+              value="report"
+              className="m-0 min-h-0 min-w-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
+            >
+              <ScrollArea className="h-full min-h-0">
+                <pre className="p-2 font-mono text-xs leading-5">
+                  {reportText}
+                </pre>
+              </ScrollArea>
+            </TabsContent>
           </Tabs>
         </section>
         </ResizablePanel>
@@ -700,9 +948,18 @@ export function SearchPage() {
 
       <footer className="flex h-6 shrink-0 items-center gap-3 border-t px-2 text-[11px] text-muted-foreground">
         <span>{isSearching ? "Searching" : "Search idle"}</span>
-        <span>Engine: ripgrep</span>
+        <span>Engine: grep crate</span>
         <span>Scope: {listing?.rootName ?? "none"}</span>
         <span>Time: {formatElapsedTime(isSearching ? liveElapsedMs : elapsedMs)}</span>
+        <span>
+          Files:{" "}
+          {formatFileScanCount(
+            scannedFiles,
+            totalFiles,
+            isSearching,
+            isTotalFileCountComplete,
+          )}
+        </span>
         {wasCancelled && <span>Cancelled</span>}
         <span>Preview: text/hex</span>
       </footer>

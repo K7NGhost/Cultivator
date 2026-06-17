@@ -1,22 +1,30 @@
-use serde::Serialize;
-use serde_json::Value;
+use grep::{
+    matcher::Matcher,
+    regex::{RegexMatcher, RegexMatcherBuilder},
+    searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkFinish, SinkMatch},
+};
+use ignore::{WalkBuilder, WalkState};
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{BufRead, BufReader, Read},
+    io::{self, Read},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
-    time::{Instant, UNIX_EPOCH},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
-use tauri::Manager;
+use tauri::Emitter;
 
 const MAX_TREE_DEPTH: usize = 4;
 const MAX_DIRECTORY_CHILDREN: usize = 500;
 const MAX_LIST_ENTRIES: usize = 1_000;
 const MAX_HEX_PREVIEW_BYTES: usize = 512;
+const SEARCH_BATCH_FILE_LIMIT: u64 = 64;
+const SEARCH_BATCH_MATCH_LIMIT: usize = 512;
+const SEARCH_BATCH_INTERVAL: Duration = Duration::from_millis(100);
+const SEARCH_PROGRESS_EVENT: &str = "search-progress";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +77,30 @@ struct SearchResult {
     matches: Vec<SearchMatch>,
     elapsed_ms: u128,
     cancelled: bool,
+    scanned_files: u64,
+    total_files: u64,
+    total_complete: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchProgress {
+    search_id: String,
+    scanned_files: u64,
+    total_files: u64,
+    total_complete: bool,
+    elapsed_ms: u128,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchRequest {
+    search_id: String,
+    root_path: String,
+    query: String,
+    regex: bool,
+    case_sensitive: bool,
+    binary_files: bool,
 }
 
 #[derive(Clone, Default)]
@@ -79,8 +111,66 @@ struct SearchRegistry {
 #[derive(Clone)]
 struct ActiveSearch {
     search_id: String,
-    child: Arc<Mutex<Option<Child>>>,
     cancelled: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct GrepSearchBatch {
+    matches: Vec<SearchMatch>,
+    scanned_files: u64,
+    total_files: u64,
+}
+
+enum GrepSearchMessage {
+    Batch(GrepSearchBatch),
+}
+
+struct BatchedGrepSender {
+    sender: mpsc::Sender<GrepSearchMessage>,
+    batch: GrepSearchBatch,
+    last_flush: Instant,
+}
+
+impl BatchedGrepSender {
+    fn new(sender: mpsc::Sender<GrepSearchMessage>) -> Self {
+        Self {
+            sender,
+            batch: GrepSearchBatch::default(),
+            last_flush: Instant::now(),
+        }
+    }
+
+    fn record_file(&mut self, matches: Vec<SearchMatch>) {
+        self.batch.total_files += 1;
+        self.batch.scanned_files += 1;
+        self.batch.matches.extend(matches);
+
+        if self.batch.scanned_files >= SEARCH_BATCH_FILE_LIMIT
+            || self.batch.matches.len() >= SEARCH_BATCH_MATCH_LIMIT
+            || self.last_flush.elapsed() >= SEARCH_BATCH_INTERVAL
+        {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.batch.scanned_files == 0
+            && self.batch.total_files == 0
+            && self.batch.matches.is_empty()
+        {
+            return;
+        }
+
+        let batch = std::mem::take(&mut self.batch);
+        let _ = self.sender.send(GrepSearchMessage::Batch(batch));
+        self.last_flush = Instant::now();
+    }
+}
+
+impl Drop for BatchedGrepSender {
+    fn drop(&mut self) {
+        self.flush();
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -125,27 +215,12 @@ fn list_directory_entries(path: String) -> Result<Vec<DirectoryEntry>, String> {
 async fn search_files(
     app_handle: tauri::AppHandle,
     search_registry: tauri::State<'_, SearchRegistry>,
-    search_id: String,
-    root_path: String,
-    query: String,
-    regex: bool,
-    case_sensitive: bool,
-    binary_files: bool,
+    request: SearchRequest,
 ) -> Result<SearchResult, String> {
-    let ripgrep_path = ripgrep_command_path(&app_handle);
     let active_search = search_registry.active.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        search_files_blocking(
-            active_search,
-            search_id,
-            ripgrep_path,
-            root_path,
-            query,
-            regex,
-            case_sensitive,
-            binary_files,
-        )
+        search_files_with_grep_library(app_handle, active_search, request)
     })
     .await
     .map_err(|error| format!("Search worker failed: {error}"))?
@@ -172,31 +247,23 @@ fn cancel_search(
 
     active_search.cancelled.store(true, Ordering::SeqCst);
 
-    if let Some(child) = active_search
-        .child
-        .lock()
-        .map_err(|_| "Search process lock is poisoned.".to_string())?
-        .as_mut()
-    {
-        child
-            .kill()
-            .map_err(|error| format!("Failed to cancel ripgrep: {error}"))?;
-    }
-
     Ok(true)
 }
 
-fn search_files_blocking(
+fn search_files_with_grep_library(
+    app_handle: tauri::AppHandle,
     active_search: Arc<Mutex<Option<ActiveSearch>>>,
-    search_id: String,
-    ripgrep_path: PathBuf,
-    root_path: String,
-    query: String,
-    regex: bool,
-    case_sensitive: bool,
-    binary_files: bool,
+    request: SearchRequest,
 ) -> Result<SearchResult, String> {
     let started_at = Instant::now();
+    let SearchRequest {
+        search_id,
+        root_path,
+        query,
+        regex,
+        case_sensitive,
+        binary_files,
+    } = request;
     let root = PathBuf::from(root_path);
     let trimmed_query = query.trim().to_string();
 
@@ -209,152 +276,132 @@ fn search_files_blocking(
             matches: Vec::new(),
             elapsed_ms: 0,
             cancelled: false,
+            scanned_files: 0,
+            total_files: 0,
+            total_complete: true,
         });
     }
 
-    let mut command = Command::new(ripgrep_path);
-    command
-        .arg("--json")
-        .arg("--line-number")
-        .arg("--column")
-        .arg("--with-filename")
-        .arg("--no-heading")
-        .arg("--no-messages")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    if !regex {
-        command.arg("--fixed-strings");
-    }
-
-    if !case_sensitive {
-        command.arg("--ignore-case");
-    }
-
-    if binary_files {
-        command.arg("--binary");
-    }
-
-    command.arg(trimmed_query).arg(&root);
-
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Failed to run ripgrep sidecar or PATH fallback: {error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to capture ripgrep stdout.".to_string())?;
-    let stderr = child.stderr.take();
-    let stderr_reader = stderr.map(|mut stderr| {
-        std::thread::spawn(move || {
-            let mut output = String::new();
-            let _ = stderr.read_to_string(&mut output);
-            output
-        })
-    });
     let cancelled = Arc::new(AtomicBool::new(false));
-    let child = Arc::new(Mutex::new(Some(child)));
+    build_grep_matcher(&trimmed_query, regex, case_sensitive)
+        .map_err(|error| format!("Failed to build grep matcher: {error}"))?;
+
     {
         let mut active_search = active_search
             .lock()
             .map_err(|_| "Search registry lock is poisoned.".to_string())?;
         *active_search = Some(ActiveSearch {
             search_id: search_id.clone(),
-            child: child.clone(),
             cancelled: cancelled.clone(),
         });
     }
+
+    let (message_sender, message_receiver) = mpsc::channel::<GrepSearchMessage>();
+    let worker_sender = message_sender.clone();
+    let worker_cancelled = cancelled.clone();
+    let worker_query = trimmed_query.clone();
+    let worker_handle = std::thread::spawn(move || {
+        let thread_count = std::thread::available_parallelism()
+            .map_or(1, |parallelism| parallelism.get())
+            .min(12);
+        let mut walker = WalkBuilder::new(root);
+
+        walker
+            .threads(thread_count)
+            .hidden(false)
+            .ignore(false)
+            .parents(false)
+            .git_global(false)
+            .git_ignore(false)
+            .git_exclude(false);
+
+        walker.build_parallel().run(|| {
+            let mut batch_sender = BatchedGrepSender::new(worker_sender.clone());
+            let matcher = build_grep_matcher(&worker_query, regex, case_sensitive)
+                .expect("grep matcher was validated before the parallel search started");
+            let mut searcher = build_grep_searcher(binary_files);
+            let cancelled = worker_cancelled.clone();
+
+            Box::new(move |entry| {
+                if cancelled.load(Ordering::Relaxed) {
+                    return WalkState::Quit;
+                }
+
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return WalkState::Continue;
+                    }
+                };
+
+                if !entry
+                    .file_type()
+                    .is_some_and(|file_type| file_type.is_file())
+                {
+                    return WalkState::Continue;
+                }
+
+                let path = entry.into_path();
+                let mut file_matches = Vec::new();
+                let mut sink = CultivatorGrepSink {
+                    path: &path,
+                    matcher: &matcher,
+                    matches: &mut file_matches,
+                };
+
+                if let Err(error) = searcher.search_path(&matcher, &path, &mut sink) {
+                    eprintln!("{}: {}", path.display(), error);
+                }
+
+                batch_sender.record_file(file_matches);
+
+                if cancelled.load(Ordering::Relaxed) {
+                    WalkState::Quit
+                } else {
+                    WalkState::Continue
+                }
+            })
+        });
+    });
+    drop(message_sender);
+
     let mut matches = Vec::new();
-    let mut match_index = 0usize;
+    let mut scanned_files = 0u64;
+    let mut total_files = 0u64;
 
-    for line in BufReader::new(stdout).lines() {
-        let line = line.map_err(|error| format!("Failed to read ripgrep output: {error}"))?;
+    emit_search_progress(
+        &app_handle,
+        &search_id,
+        0,
+        0,
+        false,
+        started_at.elapsed().as_millis(),
+    );
 
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-
-        if value.get("type").and_then(Value::as_str) != Some("match") {
-            continue;
-        }
-
-        let Some(data) = value.get("data") else {
-            continue;
-        };
-
-        let Some(path) = data
-            .get("path")
-            .and_then(|path| path.get("text"))
-            .and_then(Value::as_str)
-        else {
-            continue;
-        };
-
-        let line_number = data.get("line_number").and_then(Value::as_u64).unwrap_or(0);
-        let lines_text = data
-            .get("lines")
-            .and_then(|lines| lines.get("text"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim_end_matches(['\r', '\n']);
-        let path_buf = PathBuf::from(path);
-        let file_name = display_name(&path_buf);
-        let kind = file_kind_label(&path_buf);
-        let submatches = data.get("submatches").and_then(Value::as_array);
-
-        if let Some(submatches) = submatches.filter(|submatches| !submatches.is_empty()) {
-            for submatch in submatches {
-                let column = submatch
-                    .get("start")
-                    .and_then(Value::as_u64)
-                    .map(|start| start + 1)
-                    .unwrap_or(1);
-                let matched_text = submatch
-                    .get("match")
-                    .and_then(|matched| matched.get("text"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(lines_text);
-                let id = format!("{path}:{line_number}:{column}:{match_index}");
-                match_index += 1;
-
-                matches.push(SearchMatch {
-                    id,
-                    file: file_name.clone(),
-                    path: path.to_string(),
-                    line: line_number,
-                    column,
-                    kind: kind.clone(),
-                    matched_text: matched_text.to_string(),
-                    context: lines_text.to_string(),
-                });
+    for message in message_receiver {
+        match message {
+            GrepSearchMessage::Batch(batch) => {
+                scanned_files += batch.scanned_files;
+                total_files += batch.total_files;
+                matches.extend(batch.matches);
+                emit_search_progress(
+                    &app_handle,
+                    &search_id,
+                    scanned_files,
+                    total_files,
+                    false,
+                    started_at.elapsed().as_millis(),
+                );
             }
-        } else {
-            let id = format!("{path}:{line_number}:1:{match_index}");
-            match_index += 1;
-
-            matches.push(SearchMatch {
-                id,
-                file: file_name,
-                path: path.to_string(),
-                line: line_number,
-                column: 1,
-                kind,
-                matched_text: lines_text.to_string(),
-                context: lines_text.to_string(),
-            });
         }
     }
 
-    let status = {
-        let mut child = child
-            .lock()
-            .map_err(|_| "Search process lock is poisoned.".to_string())?;
-        child
-            .as_mut()
-            .ok_or_else(|| "Search process was not available.".to_string())?
-            .wait()
-            .map_err(|error| format!("Failed to wait for ripgrep: {error}"))?
-    };
+    worker_handle
+        .join()
+        .map_err(|_| "Parallel grep worker panicked.".to_string())?;
+
+    let was_cancelled = cancelled.load(Ordering::SeqCst);
     {
         let mut active_search = active_search
             .lock()
@@ -367,20 +414,116 @@ fn search_files_blocking(
             *active_search = None;
         }
     }
-    let stderr = stderr_reader
-        .and_then(|reader| reader.join().ok())
-        .unwrap_or_default();
-    let was_cancelled = cancelled.load(Ordering::SeqCst);
 
-    if !status.success() && status.code() != Some(1) && !was_cancelled {
-        return Err(format!("ripgrep failed: {}", stderr.trim()));
-    }
+    emit_search_progress(
+        &app_handle,
+        &search_id,
+        scanned_files,
+        total_files,
+        true,
+        started_at.elapsed().as_millis(),
+    );
 
     Ok(SearchResult {
         matches,
         elapsed_ms: started_at.elapsed().as_millis(),
         cancelled: was_cancelled,
+        scanned_files,
+        total_files,
+        total_complete: true,
     })
+}
+
+fn build_grep_matcher(
+    query: &str,
+    regex: bool,
+    case_sensitive: bool,
+) -> Result<RegexMatcher, grep::regex::Error> {
+    RegexMatcherBuilder::new()
+        .case_insensitive(!case_sensitive)
+        .fixed_strings(!regex)
+        .build(query)
+}
+
+fn build_grep_searcher(binary_files: bool) -> Searcher {
+    SearcherBuilder::new()
+        .line_number(true)
+        .binary_detection(if binary_files {
+            BinaryDetection::none()
+        } else {
+            BinaryDetection::quit(b'\x00')
+        })
+        .build()
+}
+
+struct CultivatorGrepSink<'a> {
+    path: &'a Path,
+    matcher: &'a RegexMatcher,
+    matches: &'a mut Vec<SearchMatch>,
+}
+
+impl Sink for CultivatorGrepSink<'_> {
+    type Error = io::Error;
+
+    fn matched(
+        &mut self,
+        _searcher: &Searcher,
+        matched: &SinkMatch<'_>,
+    ) -> Result<bool, Self::Error> {
+        let line_number = matched.line_number().unwrap_or(0);
+        let line_bytes = trim_line_ending_bytes(matched.bytes());
+        let context = String::from_utf8_lossy(line_bytes).to_string();
+        let path = self.path.to_string_lossy().to_string();
+        let file = display_name(self.path);
+        let kind = file_kind_label(self.path);
+        let mut match_index = 0usize;
+
+        self.matcher
+            .find_iter(line_bytes, |submatch| {
+                let column = submatch.start() as u64 + 1;
+                let matched_text = String::from_utf8_lossy(&line_bytes[submatch]).to_string();
+                let id = format!("{path}:{line_number}:{column}:{match_index}");
+                match_index += 1;
+
+                self.matches.push(SearchMatch {
+                    id,
+                    file: file.clone(),
+                    path: path.clone(),
+                    line: line_number,
+                    column,
+                    kind: kind.clone(),
+                    matched_text,
+                    context: context.clone(),
+                });
+
+                true
+            })
+            .map_err(|error| io::Error::other(error.to_string()))?;
+
+        Ok(true)
+    }
+
+    fn binary_data(
+        &mut self,
+        _searcher: &Searcher,
+        _binary_byte_offset: u64,
+    ) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    fn finish(&mut self, _searcher: &Searcher, _finish: &SinkFinish) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+fn trim_line_ending_bytes(bytes: &[u8]) -> &[u8] {
+    if bytes.ends_with(b"\r\n") {
+        &bytes[..bytes.len().saturating_sub(2)]
+    } else if bytes.ends_with(b"\n") {
+        &bytes[..bytes.len().saturating_sub(1)]
+    } else {
+        bytes
+    }
 }
 
 #[tauri::command]
@@ -401,8 +544,8 @@ fn read_text_preview(path: String, _line: u64) -> Result<Vec<String>, String> {
 
     let content = String::from_utf8_lossy(&bytes);
 
-    Ok(content
-        .lines()
+    Ok(split_preview_lines(&content)
+        .into_iter()
         .enumerate()
         .map(|(index, text)| format!("{:>6}  {}", index + 1, text))
         .collect())
@@ -532,6 +675,53 @@ fn count_immediate_children(path: &Path) -> Option<usize> {
     fs::read_dir(path).ok().map(|entries| entries.count())
 }
 
+fn emit_search_progress(
+    app_handle: &tauri::AppHandle,
+    search_id: &str,
+    scanned_files: u64,
+    total_files: u64,
+    total_complete: bool,
+    elapsed_ms: u128,
+) {
+    let _ = app_handle.emit(
+        SEARCH_PROGRESS_EVENT,
+        SearchProgress {
+            search_id: search_id.to_string(),
+            scanned_files,
+            total_files,
+            total_complete,
+            elapsed_ms,
+        },
+    );
+}
+
+fn split_preview_lines(content: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let bytes = content.as_bytes();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'\n' {
+            let end = if index > start && bytes[index - 1] == b'\r' {
+                index - 1
+            } else {
+                index
+            };
+            lines.push(&content[start..end]);
+            start = index + 1;
+        }
+
+        index += 1;
+    }
+
+    if start < content.len() {
+        lines.push(&content[start..]);
+    }
+
+    lines
+}
+
 fn display_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -544,80 +734,6 @@ fn file_kind_label(path: &Path) -> String {
         .map(|extension| extension.to_string_lossy().to_uppercase())
         .filter(|extension| !extension.is_empty())
         .unwrap_or_else(|| "File".to_string())
-}
-
-fn ripgrep_command_path(app_handle: &tauri::AppHandle) -> PathBuf {
-    sidecar_candidates(app_handle)
-        .into_iter()
-        .find(|path| path.is_file())
-        .unwrap_or_else(|| PathBuf::from("rg"))
-}
-
-fn sidecar_candidates(app_handle: &tauri::AppHandle) -> Vec<PathBuf> {
-    let sidecar_file_name = ripgrep_sidecar_file_name();
-    let mut candidates = Vec::new();
-
-    if let Ok(resource_dir) = app_handle.path().resource_dir() {
-        candidates.push(resource_dir.join("binaries").join(sidecar_file_name));
-        candidates.push(resource_dir.join(sidecar_file_name));
-    }
-
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(exe_dir) = current_exe.parent() {
-            candidates.push(exe_dir.join("binaries").join(sidecar_file_name));
-            candidates.push(exe_dir.join(sidecar_file_name));
-        }
-    }
-
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries")
-            .join(sidecar_file_name),
-    );
-
-    candidates
-}
-
-#[cfg(all(windows, target_arch = "x86_64", target_env = "msvc"))]
-fn ripgrep_sidecar_file_name() -> &'static str {
-    "rg-x86_64-pc-windows-msvc.exe"
-}
-
-#[cfg(all(windows, target_arch = "aarch64", target_env = "msvc"))]
-fn ripgrep_sidecar_file_name() -> &'static str {
-    "rg-aarch64-pc-windows-msvc.exe"
-}
-
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-fn ripgrep_sidecar_file_name() -> &'static str {
-    "rg-x86_64-apple-darwin"
-}
-
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-fn ripgrep_sidecar_file_name() -> &'static str {
-    "rg-aarch64-apple-darwin"
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn ripgrep_sidecar_file_name() -> &'static str {
-    "rg-x86_64-unknown-linux-gnu"
-}
-
-#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-fn ripgrep_sidecar_file_name() -> &'static str {
-    "rg-aarch64-unknown-linux-gnu"
-}
-
-#[cfg(not(any(
-    all(windows, target_arch = "x86_64", target_env = "msvc"),
-    all(windows, target_arch = "aarch64", target_env = "msvc"),
-    all(target_os = "macos", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "linux", target_arch = "aarch64")
-)))]
-fn ripgrep_sidecar_file_name() -> &'static str {
-    "rg"
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
