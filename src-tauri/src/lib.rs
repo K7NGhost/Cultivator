@@ -61,6 +61,13 @@ struct DirectoryListing {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct CaseWorkspacePaths {
+    folder_path: String,
+    database_path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SearchMatch {
     id: String,
     file: String,
@@ -210,6 +217,40 @@ fn list_directory_entries(path: String) -> Result<Vec<DirectoryEntry>, String> {
     }
 
     list_immediate_entries(&directory)
+}
+
+#[tauri::command]
+fn create_case_workspace(
+    parent_directory: String,
+    case_name: String,
+) -> Result<CaseWorkspacePaths, String> {
+    let parent_path = PathBuf::from(parent_directory);
+
+    if !parent_path.is_dir() {
+        return Err("Selected case location is not a directory.".to_string());
+    }
+
+    let folder_name = sanitize_case_folder_name(&case_name);
+
+    if folder_name.is_empty() {
+        return Err("Case name must contain at least one valid folder character.".to_string());
+    }
+
+    let case_path = next_available_case_path(&parent_path, &folder_name);
+
+    fs::create_dir(&case_path).map_err(|error| format!("Failed to create case folder: {error}"))?;
+
+    for folder in ["evidence", "artifacts", "reports", "exports"] {
+        fs::create_dir(case_path.join(folder))
+            .map_err(|error| format!("Failed to create case subfolder '{folder}': {error}"))?;
+    }
+
+    let database_path = case_path.join("case.sqlite");
+
+    Ok(CaseWorkspacePaths {
+        folder_path: case_path.to_string_lossy().to_string(),
+        database_path: database_path.to_string_lossy().to_string(),
+    })
 }
 
 #[tauri::command]
@@ -758,6 +799,39 @@ fn display_name(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
+fn sanitize_case_folder_name(case_name: &str) -> String {
+    let sanitized = case_name
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, ' ' | '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+
+    sanitized
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(['.', ' ', '-'])
+        .to_string()
+}
+
+fn next_available_case_path(parent_path: &Path, folder_name: &str) -> PathBuf {
+    let mut candidate = parent_path.join(folder_name);
+    let mut suffix = 2;
+
+    while candidate.exists() {
+        candidate = parent_path.join(format!("{folder_name}-{suffix}"));
+        suffix += 1;
+    }
+
+    candidate
+}
+
 fn file_kind_label(path: &Path) -> String {
     path.extension()
         .map(|extension| extension.to_string_lossy().to_uppercase())
@@ -770,10 +844,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_sql::Builder::default().build())
         .manage(SearchRegistry::default())
         .invoke_handler(tauri::generate_handler![
             list_directory,
             list_directory_entries,
+            create_case_workspace,
             search_files,
             cancel_search,
             read_text_preview,

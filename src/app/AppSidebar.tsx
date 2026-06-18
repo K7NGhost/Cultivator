@@ -24,6 +24,7 @@ import {
   SidebarRail,
   SidebarSeparator,
 } from "@/components/ui/sidebar";
+import { useCases } from "@/features/cases/case-provider";
 
 const navItems = [
   { label: "Case", path: "/case", icon: ShieldCheck },
@@ -37,6 +38,7 @@ const navItems = [
 
 export function AppSidebar() {
   const location = useLocation();
+  const { activeCase, isLoading } = useCases();
 
   return (
     <Sidebar collapsible="icon" className="border-r">
@@ -87,8 +89,10 @@ export function AppSidebar() {
       </SidebarContent>
       <SidebarFooter className="p-1.5">
         <div className="rounded-sm border bg-background px-2 py-1.5 text-[11px] group-data-[collapsible=icon]:hidden">
-          <div className="font-medium">Plugin runtime</div>
-          <div className="text-muted-foreground">Idle</div>
+          <div className="font-medium">Active case</div>
+          <div className="truncate text-muted-foreground">
+            {isLoading ? "Loading..." : activeCase?.name ?? "None"}
+          </div>
         </div>
       </SidebarFooter>
       <SidebarRail />

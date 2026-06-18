@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "@/app/AppShell";
+import { CasePage } from "@/features/cases/CasePage";
 import { FilesPage } from "@/features/files/FilesPage";
 import { SearchPage } from "@/features/search/SearchPage";
 import { PlaceholderPage } from "@/features/workspace/PlaceholderPage";
@@ -11,15 +12,7 @@ function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<Navigate to="/files" replace />} />
-        <Route
-          path="/case"
-          element={
-            <PlaceholderPage
-              title="Case"
-              description="Case metadata, examiner notes, evidence intake, and audit state."
-            />
-          }
-        />
+        <Route path="/case" element={<CasePage />} />
         <Route path="/files" element={<FilesPage />} />
         <Route path="/search" element={<SearchPage />} />
         <Route
