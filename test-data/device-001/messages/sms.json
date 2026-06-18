@@ -1,0 +1,14 @@
+[
+  {
+    "from": "+1-555-0101",
+    "to": "+1-555-0199",
+    "timestamp": "2026-06-18T14:22:10Z",
+    "body": "The lab door code changed. Do not share the password."
+  },
+  {
+    "from": "+1-555-0102",
+    "to": "+1-555-0199",
+    "timestamp": "2026-06-18T15:03:44Z",
+    "body": "Meeting moved to 4pm."
+  }
+]

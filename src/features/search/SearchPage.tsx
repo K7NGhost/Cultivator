@@ -54,6 +54,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useCases } from "@/features/cases/case-provider";
+import {
+  listDataSources,
+  subscribeToDataSourcesChanged,
+} from "@/features/datasources/dataSourceRepository";
+import type { DataSourceRecord } from "@/features/datasources/types";
 import { useEvidence } from "@/features/evidence/evidence-provider";
 import { cn } from "@/lib/utils";
 import {
@@ -91,6 +97,13 @@ type SearchProgress = {
   totalFiles: number;
   totalComplete: boolean;
   elapsedMs: number;
+};
+
+type SearchScope = {
+  id: string;
+  name: string;
+  description: string;
+  paths: string[];
 };
 
 type FileMatch = {
@@ -242,6 +255,7 @@ function formatFileScanCount(
 
 export function SearchPage() {
   const { listing } = useEvidence();
+  const { activeCase } = useCases();
   const [searchSettingsLoaded, setSearchSettingsLoaded] = useState(false);
   const [savedSearchSettings] = useState(loadSearchSettings);
   const [query, setQuery] = useState("");
@@ -271,7 +285,37 @@ export function SearchPage() {
   const [wasCancelled, setWasCancelled] = useState(false);
   const [completedAt, setCompletedAt] = useState<Date | null>(null);
   const [activeSearchId, setActiveSearchId] = useState<string | null>(null);
+  const [dataSources, setDataSources] = useState<DataSourceRecord[]>([]);
+  const [dataSourceError, setDataSourceError] = useState<string | null>(null);
+  const [selectedScopeId, setSelectedScopeId] = useState("");
+  const progressOffset = useRef({ scannedFiles: 0, totalFiles: 0 });
   const latestSearchId = useRef<string | null>(null);
+  const searchScopes = useMemo<SearchScope[]>(() => {
+    const scopes: SearchScope[] = dataSources.map((dataSource) => ({
+      id: `datasource:${dataSource.id}`,
+      name: dataSource.name,
+      description:
+        dataSource.paths.length === 1
+          ? dataSource.paths[0]
+          : `${dataSource.paths.length} paths`,
+      paths: dataSource.paths,
+    }));
+
+    if (listing) {
+      scopes.push({
+        id: `evidence:${listing.rootPath}`,
+        name: listing.rootName,
+        description: listing.rootPath,
+        paths: [listing.rootPath],
+      });
+    }
+
+    return scopes;
+  }, [dataSources, listing]);
+  const selectedScope =
+    searchScopes.find((scope) => scope.id === selectedScopeId) ??
+    searchScopes[0] ??
+    null;
   const selectedTextLineIndex = activePreviewMatch
     ? Math.min(
         Math.max(activePreviewMatch.line - 1, 0),
@@ -332,7 +376,7 @@ export function SearchPage() {
       )
     : -1;
 
-  const canSearch = Boolean(listing && query.trim() && !isSearching);
+  const canSearch = Boolean(selectedScope && query.trim() && !isSearching);
   const reportStatus: SearchReportStatus = isSearching
     ? "searching"
     : wasCancelled
@@ -345,21 +389,25 @@ export function SearchPage() {
     elapsedMs: isSearching ? liveElapsedMs : elapsedMs,
     matches,
     query,
-    rootPath: listing?.rootPath ?? null,
+    rootPath: selectedScope
+      ? selectedScope.paths.length === 1
+        ? selectedScope.paths[0]
+        : `${selectedScope.name} (${selectedScope.paths.length} paths)`
+      : null,
     scannedFiles,
     status: reportStatus,
     totalFiles,
   });
-  const commandPreview = listing
+  const commandPreview = selectedScope
     ? `grep crate ${regex ? "regex" : "fixed"} ${
         caseSensitive ? "case-sensitive" : "ignore-case"
       } ${binaryFiles ? "binary-as-text" : "skip-binary"} "${
         query || "<query>"
-      }" ${listing.rootPath}`
-    : "Open an evidence directory before searching";
+      }" ${selectedScope.paths.join(", ")}`
+    : "Add a datasource or open an evidence directory before searching";
 
   async function runSearch() {
-    if (!listing || !query.trim()) {
+    if (!selectedScope || !query.trim()) {
       return;
     }
 
@@ -379,28 +427,57 @@ export function SearchPage() {
     setLiveElapsedMs(0);
     setWasCancelled(false);
     setCompletedAt(null);
+    progressOffset.current = { scannedFiles: 0, totalFiles: 0 };
     const searchStartedAt = performance.now();
 
     try {
-      const result = await invoke<SearchResult>("search_files", {
-        request: {
-          searchId,
-          rootPath: listing.rootPath,
-          query,
-          regex,
-          caseSensitive,
-          binaryFiles,
-        },
-      });
+      const nextMatches: SearchMatch[] = [];
+      let nextScannedFiles = 0;
+      let nextTotalFiles = 0;
+      let nextTotalComplete = true;
+      let nextWasCancelled = false;
 
-      setMatches(result.matches);
-      setSelectedMatch(result.matches[0] ?? null);
-      setActivePreviewMatch(result.matches[0] ?? null);
-      setElapsedMs(result.elapsedMs);
-      setScannedFiles(result.scannedFiles);
-      setTotalFiles(result.totalFiles);
-      setIsTotalFileCountComplete(result.totalComplete);
-      setWasCancelled(result.cancelled);
+      for (const rootPath of selectedScope.paths) {
+        progressOffset.current = {
+          scannedFiles: nextScannedFiles,
+          totalFiles: nextTotalFiles,
+        };
+
+        const result = await invoke<SearchResult>("search_files", {
+          request: {
+            searchId,
+            rootPath,
+            query,
+            regex,
+            caseSensitive,
+            binaryFiles,
+          },
+        });
+
+        nextMatches.push(...result.matches);
+        nextScannedFiles += result.scannedFiles;
+        nextTotalFiles += result.totalFiles;
+        nextTotalComplete = nextTotalComplete && result.totalComplete;
+        nextWasCancelled = nextWasCancelled || result.cancelled;
+
+        setMatches([...nextMatches]);
+        setScannedFiles(nextScannedFiles);
+        setTotalFiles(nextTotalFiles);
+        setIsTotalFileCountComplete(nextTotalComplete);
+
+        if (result.cancelled) {
+          break;
+        }
+      }
+
+      setMatches(nextMatches);
+      setSelectedMatch(nextMatches[0] ?? null);
+      setActivePreviewMatch(nextMatches[0] ?? null);
+      setElapsedMs(Math.round(performance.now() - searchStartedAt));
+      setScannedFiles(nextScannedFiles);
+      setTotalFiles(nextTotalFiles);
+      setIsTotalFileCountComplete(nextTotalComplete);
+      setWasCancelled(nextWasCancelled);
       setCompletedAt(new Date());
     } catch (caughtError) {
       setError(
@@ -472,8 +549,12 @@ export function SearchPage() {
         return;
       }
 
-      setScannedFiles(event.payload.scannedFiles);
-      setTotalFiles(event.payload.totalFiles);
+      setScannedFiles(
+        progressOffset.current.scannedFiles + event.payload.scannedFiles,
+      );
+      setTotalFiles(
+        progressOffset.current.totalFiles + event.payload.totalFiles,
+      );
       setIsTotalFileCountComplete(event.payload.totalComplete);
     }).then((nextUnlisten) => {
       if (isDisposed) {
@@ -489,6 +570,76 @@ export function SearchPage() {
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeCase) {
+      setDataSources([]);
+      setDataSourceError(null);
+      return;
+    }
+
+    let isCurrent = true;
+
+    listDataSources(activeCase.databasePath, activeCase.id)
+      .then((nextDataSources) => {
+        if (isCurrent) {
+          setDataSources(nextDataSources);
+          setDataSourceError(null);
+        }
+      })
+      .catch((caughtError) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setDataSourceError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : String(caughtError),
+        );
+        setDataSources([]);
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeCase]);
+
+  useEffect(() => {
+    if (!activeCase) {
+      return;
+    }
+
+    return subscribeToDataSourcesChanged((caseId) => {
+      if (caseId !== activeCase.id) {
+        return;
+      }
+
+      listDataSources(activeCase.databasePath, activeCase.id)
+        .then((nextDataSources) => {
+          setDataSources(nextDataSources);
+          setDataSourceError(null);
+        })
+        .catch((caughtError) => {
+          setDataSourceError(
+            caughtError instanceof Error
+              ? caughtError.message
+              : String(caughtError),
+          );
+        });
+    });
+  }, [activeCase]);
+
+  useEffect(() => {
+    if (searchScopes.length === 0) {
+      setSelectedScopeId("");
+      return;
+    }
+
+    if (!searchScopes.some((scope) => scope.id === selectedScopeId)) {
+      setSelectedScopeId(searchScopes[0].id);
+    }
+  }, [searchScopes, selectedScopeId]);
 
   useEffect(() => {
     if (!searchSettingsLoaded) {
@@ -673,7 +824,7 @@ export function SearchPage() {
           </DialogContent>
         </Dialog>
         <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
-          <span>{listing ? listing.rootName : "No evidence mounted"}</span>
+          <span>{selectedScope ? selectedScope.name : "No search scope"}</span>
           <span>
             Time:{" "}
             {isSearching
@@ -695,10 +846,10 @@ export function SearchPage() {
         </div>
       </section>
 
-      {error && (
+      {(error || dataSourceError) && (
         <section className="flex h-8 shrink-0 items-center gap-2 border-b px-2 text-xs text-destructive">
           <AlertCircle className="size-3.5" aria-hidden="true" />
-          <span className="truncate">{error}</span>
+          <span className="truncate">{error ?? dataSourceError}</span>
         </section>
       )}
 
@@ -707,6 +858,21 @@ export function SearchPage() {
           className="size-3.5 text-muted-foreground"
           aria-hidden="true"
         />
+        <select
+          className="h-6 max-w-72 rounded-none border bg-background px-2 text-xs"
+          value={selectedScope?.id ?? ""}
+          title={selectedScope?.description}
+          aria-label="Search scope"
+          disabled={isSearching || searchScopes.length === 0}
+          onChange={(event) => setSelectedScopeId(event.target.value)}
+        >
+          {searchScopes.map((scope) => (
+            <option key={scope.id} value={scope.id} title={scope.description}>
+              {scope.name}
+            </option>
+          ))}
+        </select>
+        <Separator orientation="vertical" className="h-5" />
         <span className="truncate text-xs">{commandPreview}</span>
       </section>
 

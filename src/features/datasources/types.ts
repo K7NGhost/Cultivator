@@ -13,7 +13,8 @@ export type DataSourcePlugin = {
   name: string;
   description: string;
   type: DataSourcePluginType;
-  mode: "each_file" | "path_regex";
+  mode: "each_file" | "path_glob" | "path_regex";
+  pathGlob?: string;
   pathRegex?: string;
   entry: string;
   function: string;

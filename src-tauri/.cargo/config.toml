@@ -1,2 +1,4 @@
 [env]
-PYO3_CONFIG_FILE = { value = "target/pyembed/pyo3-build-config-file.txt", relative = true }
+# Leave PyO3 free to auto-detect the local CPython runtime for normal Windows
+# development. Set PYO3_CONFIG_FILE explicitly when building with generated
+# PyOxidizer embedding artifacts.

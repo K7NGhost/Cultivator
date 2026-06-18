@@ -19,7 +19,7 @@ use tauri::Emitter;
 
 mod plugins;
 
-const MAX_TREE_DEPTH: usize = 4;
+const MAX_TREE_DEPTH: usize = 12;
 const MAX_DIRECTORY_CHILDREN: usize = 500;
 const MAX_LIST_ENTRIES: usize = 1_000;
 const MAX_HEX_PREVIEW_BYTES: usize = 512;
@@ -237,10 +237,53 @@ fn list_python_plugins(
 }
 
 #[tauri::command]
+fn python_plugin_directory(app_handle: tauri::AppHandle) -> Result<String, String> {
+    plugins::python_plugin_directory(app_handle)
+}
+
+#[tauri::command]
+fn open_python_plugin_directory(app_handle: tauri::AppHandle) -> Result<(), String> {
+    plugins::open_python_plugin_directory(app_handle)
+}
+
+#[tauri::command]
+fn open_python_plugin_directory_in_vscode(app_handle: tauri::AppHandle) -> Result<(), String> {
+    plugins::open_python_plugin_directory_in_vscode(app_handle)
+}
+
+#[tauri::command]
+fn open_python_api_guide(app_handle: tauri::AppHandle) -> Result<(), String> {
+    plugins::open_python_api_guide(app_handle)
+}
+
+#[tauri::command]
+fn create_python_plugin(
+    app_handle: tauri::AppHandle,
+    request: plugins::CreatePythonPluginRequest,
+) -> Result<plugins::CreatedPythonPlugin, String> {
+    plugins::create_python_plugin(app_handle, request)
+}
+
+#[tauri::command]
+fn delete_python_plugin(
+    app_handle: tauri::AppHandle,
+    request: plugins::DeletePythonPluginRequest,
+) -> Result<(), String> {
+    plugins::delete_python_plugin(app_handle, request)
+}
+
+#[tauri::command]
 async fn list_plugin_jobs(
     case_database_path: String,
 ) -> Result<Vec<plugins::PluginJobRecord>, String> {
     plugins::list_plugin_jobs(case_database_path).await
+}
+
+#[tauri::command]
+async fn list_plugin_artifacts(
+    case_database_path: String,
+) -> Result<Vec<plugins::PluginArtifactRecord>, String> {
+    plugins::list_plugin_artifacts(case_database_path).await
 }
 
 #[tauri::command]
@@ -249,12 +292,14 @@ async fn run_datasource_plugins(
     case_database_path: String,
     case_folder_path: String,
     datasource_id: String,
+    plugin_ids: Option<Vec<String>>,
 ) -> Result<plugins::PluginRunSummary, String> {
     plugins::run_datasource_plugins(
         app_handle,
         case_database_path,
         case_folder_path,
         datasource_id,
+        plugin_ids,
     )
     .await
 }
@@ -349,8 +394,8 @@ fn search_files_with_grep_library(
     let root = PathBuf::from(root_path);
     let trimmed_query = query.trim().to_string();
 
-    if !root.is_dir() {
-        return Err("Search root is not a directory.".to_string());
+    if !root.is_dir() && !root.is_file() {
+        return Err("Search root is not a file or directory.".to_string());
     }
 
     if trimmed_query.is_empty() {
@@ -365,7 +410,7 @@ fn search_files_with_grep_library(
     }
 
     let cancelled = Arc::new(AtomicBool::new(false));
-    build_grep_matcher(&trimmed_query, regex, case_sensitive)
+    let matcher = build_grep_matcher(&trimmed_query, regex, case_sensitive)
         .map_err(|error| format!("Failed to build grep matcher: {error}"))?;
 
     {
@@ -375,6 +420,63 @@ fn search_files_with_grep_library(
         *active_search = Some(ActiveSearch {
             search_id: search_id.clone(),
             cancelled: cancelled.clone(),
+        });
+    }
+
+    if root.is_file() {
+        let mut matches = Vec::new();
+        let mut searcher = build_grep_searcher(binary_files);
+        let mut sink = CultivatorGrepSink {
+            path: &root,
+            matcher: &matcher,
+            matches: &mut matches,
+        };
+
+        emit_search_progress(
+            &app_handle,
+            &search_id,
+            0,
+            1,
+            false,
+            started_at.elapsed().as_millis(),
+        );
+
+        if !cancelled.load(Ordering::Relaxed) {
+            searcher
+                .search_path(&matcher, &root, &mut sink)
+                .map_err(|error| format!("Failed to search file '{}': {error}", root.display()))?;
+        }
+
+        let was_cancelled = cancelled.load(Ordering::SeqCst);
+        {
+            let mut active_search = active_search
+                .lock()
+                .map_err(|_| "Search registry lock is poisoned.".to_string())?;
+
+            if active_search
+                .as_ref()
+                .is_some_and(|active_search| active_search.search_id == search_id)
+            {
+                *active_search = None;
+            }
+        }
+
+        emit_search_progress(
+            &app_handle,
+            &search_id,
+            1,
+            1,
+            true,
+            started_at.elapsed().as_millis(),
+        );
+
+        return Ok(SearchResult {
+            matches,
+            elapsed_ms: started_at.elapsed().as_millis(),
+            cancelled: was_cancelled,
+            scanned_files: 1,
+            total_files: 1,
+            total_complete: true,
         });
     }
 
@@ -907,7 +1009,14 @@ pub fn run() {
             list_directory_entries,
             describe_paths,
             list_python_plugins,
+            python_plugin_directory,
+            open_python_plugin_directory,
+            open_python_plugin_directory_in_vscode,
+            open_python_api_guide,
+            create_python_plugin,
+            delete_python_plugin,
             list_plugin_jobs,
+            list_plugin_artifacts,
             run_datasource_plugins,
             create_case_workspace,
             search_files,

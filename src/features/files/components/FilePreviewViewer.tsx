@@ -42,9 +42,31 @@ type PreviewLinesListProps = {
   wordWrap: boolean;
 };
 
+type ParsedPreviewLine = {
+  content: string;
+  lineNumber: string | null;
+};
+
 const TEXT_WORD_WRAP_STORAGE_KEY = "cultivator.files.textPreview.wordWrap";
 const TEXT_ROW_HEIGHT = 20;
 const TEXT_CHARACTER_WIDTH = 8;
+const TEXT_GUTTER_WIDTH = 64;
+
+function parsePreviewLine(line: string): ParsedPreviewLine {
+  const match = line.match(/^(\s*\d+)\s{2}(.*)$/s);
+
+  if (!match) {
+    return {
+      content: line,
+      lineNumber: null,
+    };
+  }
+
+  return {
+    content: match[2] ?? "",
+    lineNumber: match[1]?.trim() ?? null,
+  };
+}
 
 function loadTextWordWrapSetting() {
   if (typeof localStorage === "undefined") {
@@ -102,6 +124,8 @@ function PreviewLinesList({
           deferredMeasurementCache={measurementCache}
           overscanRowCount={20}
           rowRenderer={({ index, key, parent, style }: ListRowProps) => {
+            const parsedLine = parsePreviewLine(lines[index]);
+
             return (
               <CellMeasurer
                 cache={measurementCache}
@@ -114,9 +138,14 @@ function PreviewLinesList({
                   <div
                     ref={registerChild}
                     style={style}
-                    className="whitespace-pre-wrap break-words px-2 leading-5"
+                    className="grid grid-cols-[4rem_minmax(0,1fr)] leading-5"
                   >
-                    {lines[index]}
+                    <div className="select-none border-r px-1 text-right text-muted-foreground">
+                      {parsedLine.lineNumber ?? ""}
+                    </div>
+                    <div className="min-w-0 whitespace-pre-wrap break-words px-2">
+                      {parsedLine.content}
+                    </div>
                   </div>
                 )}
               </CellMeasurer>
@@ -134,10 +163,10 @@ function UnwrappedLinesList({ lines }: { lines: string[] }) {
   const [scrollTop, setScrollTop] = useState(0);
   const contentWidth = useMemo(() => {
     const longestLineLength = lines.reduce((longest, line) => {
-      return Math.max(longest, line.length);
+      return Math.max(longest, parsePreviewLine(line).content.length);
     }, 0);
 
-    return longestLineLength * TEXT_CHARACTER_WIDTH + 16;
+    return longestLineLength * TEXT_CHARACTER_WIDTH + TEXT_GUTTER_WIDTH + 16;
   }, [lines]);
   const startIndex = Math.max(0, Math.floor(scrollTop / TEXT_ROW_HEIGHT) - 8);
   const visibleRowCount = Math.ceil(viewportHeight / TEXT_ROW_HEIGHT) + 16;
@@ -179,17 +208,21 @@ function UnwrappedLinesList({ lines }: { lines: string[] }) {
       >
         {visibleLines.map((line, index) => {
           const lineIndex = startIndex + index;
+          const parsedLine = parsePreviewLine(line);
 
           return (
             <div
               key={lineIndex}
-              className="absolute left-0 right-0 whitespace-pre px-2 leading-5"
+              className="absolute left-0 right-0 grid grid-cols-[4rem_minmax(0,1fr)] whitespace-pre leading-5"
               style={{
                 height: `${TEXT_ROW_HEIGHT}px`,
                 top: `${lineIndex * TEXT_ROW_HEIGHT}px`,
               }}
             >
-              {line}
+              <div className="select-none border-r px-1 text-right text-muted-foreground">
+                {parsedLine.lineNumber ?? ""}
+              </div>
+              <div className="px-2">{parsedLine.content}</div>
             </div>
           );
         })}

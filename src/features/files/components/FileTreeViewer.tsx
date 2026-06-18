@@ -12,10 +12,19 @@ import {
   Database,
   File,
   FolderOpen,
+  Play,
+  Trash2,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import type { EvidenceTreeNode } from "@/features/evidence/evidence-provider";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +33,8 @@ type FileTreeViewerProps = {
   rootNodes?: EvidenceTreeNode[];
   selectedDirectory: EvidenceTreeNode | null;
   onSelectNode: (node: EvidenceTreeNode) => void;
+  onRemoveDataSource?: (node: EvidenceTreeNode) => void;
+  onRunDataSourcePlugins?: (node: EvidenceTreeNode) => void;
 };
 
 function useElementSize<TElement extends HTMLElement>() {
@@ -56,8 +67,12 @@ function EvidenceTreeNodeRow({
   node,
   style,
   onSelectNode,
+  onRemoveDataSource,
+  onRunDataSourcePlugins,
 }: NodeRendererProps<EvidenceTreeNode> & {
   onSelectNode: (node: EvidenceTreeNode) => void;
+  onRemoveDataSource?: (node: EvidenceTreeNode) => void;
+  onRunDataSourcePlugins?: (node: EvidenceTreeNode) => void;
 }) {
   const ancestorColumns: NodeApi<EvidenceTreeNode>[] = [];
   let parent = node.parent;
@@ -82,7 +97,7 @@ function EvidenceTreeNodeRow({
         ? "text-muted-foreground"
         : "text-amber-600 dark:text-amber-400";
 
-  return (
+  const row = (
     <div style={style} className="relative px-1">
       <div
         className="pointer-events-none absolute inset-y-0 left-1"
@@ -170,6 +185,53 @@ function EvidenceTreeNodeRow({
       </div>
     </div>
   );
+
+  if (
+    node.data.kind !== "datasource" ||
+    (!onRemoveDataSource && !onRunDataSourcePlugins)
+  ) {
+    return row;
+  }
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent className="min-w-44">
+        <ContextMenuItem
+          className="text-xs"
+          onSelect={() => {
+            node.select();
+            onSelectNode(node.data);
+          }}
+        >
+          Open datasource
+        </ContextMenuItem>
+        {onRunDataSourcePlugins && (
+          <ContextMenuItem
+            className="text-xs"
+            onSelect={() => {
+              onRunDataSourcePlugins(node.data);
+            }}
+          >
+            <Play className="size-3.5" aria-hidden="true" />
+            Run plugins...
+          </ContextMenuItem>
+        )}
+        <ContextMenuSeparator />
+        {onRemoveDataSource && (
+          <ContextMenuItem
+            className="text-xs text-destructive focus:text-destructive"
+            onSelect={() => {
+              onRemoveDataSource(node.data);
+            }}
+          >
+            <Trash2 className="size-3.5" aria-hidden="true" />
+            Remove datasource
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 export function FileTreeViewer({
@@ -177,6 +239,8 @@ export function FileTreeViewer({
   rootNodes,
   selectedDirectory,
   onSelectNode,
+  onRemoveDataSource,
+  onRunDataSourcePlugins,
 }: FileTreeViewerProps) {
   const treePanel = useElementSize<HTMLDivElement>();
   const treeRef = useRef<TreeApi<EvidenceTreeNode> | undefined>(undefined);
@@ -239,6 +303,8 @@ export function FileTreeViewer({
               <EvidenceTreeNodeRow
                 {...props}
                 onSelectNode={onSelectNode}
+                onRemoveDataSource={onRemoveDataSource}
+                onRunDataSourcePlugins={onRunDataSourcePlugins}
               />
             )}
           </Tree>

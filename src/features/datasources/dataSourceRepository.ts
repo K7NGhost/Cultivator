@@ -7,6 +7,7 @@ import type {
 } from "@/features/datasources/types";
 
 const databasePromises = new Map<string, Promise<Database>>();
+const dataSourcesChangedEvent = "cultivator:datasources-changed";
 
 type DataSourceRow = {
   id: string;
@@ -189,7 +190,42 @@ export async function createDataSource(
     );
   }
 
+  notifyDataSourcesChanged(input.caseId);
+
   return nextDataSource;
+}
+
+export function notifyDataSourcesChanged(caseId: string) {
+  window.dispatchEvent(
+    new CustomEvent(dataSourcesChangedEvent, {
+      detail: { caseId },
+    }),
+  );
+}
+
+export function subscribeToDataSourcesChanged(
+  listener: (caseId: string) => void,
+) {
+  function handleDataSourcesChanged(event: Event) {
+    const caseId =
+      event instanceof CustomEvent &&
+      typeof event.detail?.caseId === "string"
+        ? event.detail.caseId
+        : "";
+
+    if (caseId) {
+      listener(caseId);
+    }
+  }
+
+  window.addEventListener(dataSourcesChangedEvent, handleDataSourcesChanged);
+
+  return () => {
+    window.removeEventListener(
+      dataSourcesChangedEvent,
+      handleDataSourcesChanged,
+    );
+  };
 }
 
 export async function listDataSources(
@@ -271,4 +307,37 @@ export async function listDataSources(
       createdAt: row.created_at,
     };
   });
+}
+
+export async function removeDataSource(input: {
+  caseDatabasePath: string;
+  caseId: string;
+  dataSourceId: string;
+}): Promise<void> {
+  const database = await getCaseDatabase(input.caseDatabasePath);
+
+  await database.execute(
+    `
+      DELETE FROM data_source_plugins
+      WHERE data_source_id = $1
+    `,
+    [input.dataSourceId],
+  );
+  await database.execute(
+    `
+      DELETE FROM data_source_paths
+      WHERE data_source_id = $1
+    `,
+    [input.dataSourceId],
+  );
+  await database.execute(
+    `
+      DELETE FROM data_sources
+      WHERE id = $1
+        AND case_id = $2
+    `,
+    [input.dataSourceId, input.caseId],
+  );
+
+  notifyDataSourcesChanged(input.caseId);
 }

@@ -1,0 +1,3 @@
+Speaker 1: Hi Dana, this is Alice.
+Speaker 2: I found the phonebook export.
+Speaker 1: Send it to the case workspace.

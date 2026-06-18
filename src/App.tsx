@@ -1,51 +1,12 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 
 import { AppShell } from "@/app/AppShell";
-import { CasePage } from "@/features/cases/CasePage";
-import { FilesPage } from "@/features/files/FilesPage";
-import { PluginsPage } from "@/features/plugins/PluginsPage";
-import { SearchPage } from "@/features/search/SearchPage";
-import { PlaceholderPage } from "@/features/workspace/PlaceholderPage";
 import "./App.css";
 
 function App() {
   return (
     <Routes>
-      <Route element={<AppShell />}>
-        <Route index element={<Navigate to="/files" replace />} />
-        <Route path="/case" element={<CasePage />} />
-        <Route path="/files" element={<FilesPage />} />
-        <Route path="/search" element={<SearchPage />} />
-        <Route path="/plugins" element={<PluginsPage />} />
-        <Route
-          path="/artifacts"
-          element={
-            <PlaceholderPage
-              title="Artifacts"
-              description="Normalized records extracted from logical files by user plugins."
-            />
-          }
-        />
-        <Route
-          path="/timeline"
-          element={
-            <PlaceholderPage
-              title="Timeline"
-              description="Timestamps correlated from file metadata and plugin outputs."
-            />
-          }
-        />
-        <Route
-          path="/reports"
-          element={
-            <PlaceholderPage
-              title="Reports"
-              description="Findings, exports, evidence summaries, and review packages."
-            />
-          }
-        />
-        <Route path="*" element={<Navigate to="/files" replace />} />
-      </Route>
+      <Route path="*" element={<AppShell />} />
     </Routes>
   );
 }

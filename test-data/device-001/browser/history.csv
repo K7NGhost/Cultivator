@@ -1,0 +1,4 @@
+timestamp,url,title
+2026-06-18T10:15:02Z,https://example.test/login,Example Login
+2026-06-18T10:17:33Z,https://docs.example.test/api,Internal API Docs
+2026-06-18T11:01:09Z,https://mail.example.test,Mail

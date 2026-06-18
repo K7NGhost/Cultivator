@@ -1,8 +1,18 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertCircle, FolderOpen, Search } from "lucide-react";
+import { AlertCircle, FolderOpen, Play, Search } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   ResizableHandle,
@@ -11,7 +21,11 @@ import {
 } from "@/components/ui/resizable";
 import { Separator } from "@/components/ui/separator";
 import { useCases } from "@/features/cases/case-provider";
-import { listDataSources } from "@/features/datasources/dataSourceRepository";
+import {
+  listDataSources,
+  removeDataSource,
+  subscribeToDataSourcesChanged,
+} from "@/features/datasources/dataSourceRepository";
 import type { DataSourceRecord } from "@/features/datasources/types";
 import {
   type EvidenceDirectoryEntry,
@@ -25,6 +39,17 @@ import {
   type FilePreviewTab,
 } from "@/features/files/components/FilePreviewViewer";
 import { FileTreeViewer } from "@/features/files/components/FileTreeViewer";
+import {
+  listPythonPlugins,
+  runDatasourcePlugins,
+} from "@/features/plugins/pluginRepository";
+import {
+  showPluginRunFailedToast,
+  showPluginRunFinishedToasts,
+  showPluginRunStartedToast,
+} from "@/features/plugins/pluginToasts";
+import type { PythonPlugin } from "@/features/plugins/types";
+import { cn } from "@/lib/utils";
 
 export function FilesPage() {
   const { error, isLoading, listing, openDirectory } = useEvidence();
@@ -47,14 +72,46 @@ export function FilesPage() {
   const [dataSourceTreeNodes, setDataSourceTreeNodes] = useState<
     EvidenceTreeNode[]
   >([]);
+  const [dataSources, setDataSources] = useState<DataSourceRecord[]>([]);
+  const [pluginRunDataSource, setPluginRunDataSource] =
+    useState<DataSourceRecord | null>(null);
+  const [availablePlugins, setAvailablePlugins] = useState<PythonPlugin[]>([]);
+  const [selectedRunPluginIds, setSelectedRunPluginIds] = useState<string[]>([]);
+  const [activeRunPluginId, setActiveRunPluginId] = useState("");
+  const [pluginFilter, setPluginFilter] = useState("");
   const [isDataSourcesLoading, setIsDataSourcesLoading] = useState(false);
   const [isEntriesLoading, setIsEntriesLoading] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isPluginsLoading, setIsPluginsLoading] = useState(false);
+  const [isRunningPlugins, setIsRunningPlugins] = useState(false);
+  const [dataSourceRefreshKey, setDataSourceRefreshKey] = useState(0);
   const [activePreviewTab, setActivePreviewTab] =
     useState<FilePreviewTab>("text");
   const treeRootNodes = useMemo(() => {
     return [...dataSourceTreeNodes, ...(listing?.tree ? [listing.tree] : [])];
   }, [dataSourceTreeNodes, listing?.tree]);
+  const visiblePlugins = useMemo(() => {
+    const normalizedFilter = pluginFilter.trim().toLowerCase();
+
+    if (!normalizedFilter) {
+      return availablePlugins;
+    }
+
+    return availablePlugins.filter((plugin) => {
+      return (
+        plugin.name.toLowerCase().includes(normalizedFilter) ||
+        plugin.description.toLowerCase().includes(normalizedFilter) ||
+        plugin.id.toLowerCase().includes(normalizedFilter)
+      );
+    });
+  }, [availablePlugins, pluginFilter]);
+  const activeRunPlugin =
+    availablePlugins.find((plugin) => plugin.id === activeRunPluginId) ??
+    visiblePlugins[0] ??
+    null;
+  const pluginMap = useMemo(() => {
+    return new Map(availablePlugins.map((plugin) => [plugin.id, plugin]));
+  }, [availablePlugins]);
 
   useLayoutEffect(() => {
     setSelectedDirectory(listing?.tree ?? null);
@@ -67,6 +124,7 @@ export function FilesPage() {
 
   useEffect(() => {
     if (!activeCase) {
+      setDataSources([]);
       setDataSourceTreeNodes([]);
       setDataSourceError(null);
       setIsDataSourcesLoading(false);
@@ -87,6 +145,7 @@ export function FilesPage() {
           return;
         }
 
+        setDataSources(dataSources);
         setDataSourceTreeNodes(nextNodes);
       })
       .catch((caughtError) => {
@@ -99,6 +158,7 @@ export function FilesPage() {
             ? caughtError.message
             : String(caughtError),
         );
+        setDataSources([]);
         setDataSourceTreeNodes([]);
       })
       .finally(() => {
@@ -110,6 +170,18 @@ export function FilesPage() {
     return () => {
       isCurrent = false;
     };
+  }, [activeCase, dataSourceRefreshKey]);
+
+  useEffect(() => {
+    if (!activeCase) {
+      return;
+    }
+
+    return subscribeToDataSourcesChanged((caseId) => {
+      if (caseId === activeCase.id) {
+        setDataSourceRefreshKey((currentKey) => currentKey + 1);
+      }
+    });
   }, [activeCase]);
 
   useEffect(() => {
@@ -321,6 +393,171 @@ export function FilesPage() {
     void loadDirectoryEntries(node, { pushHistory: true });
   }
 
+  async function handleRemoveDataSource(node: EvidenceTreeNode) {
+    if (!activeCase || node.kind !== "datasource") {
+      return;
+    }
+
+    const dataSourceId = node.id.replace(/^datasource:/, "");
+
+    setDataSourceError(null);
+
+    try {
+      await removeDataSource({
+        caseDatabasePath: activeCase.databasePath,
+        caseId: activeCase.id,
+        dataSourceId,
+      });
+
+      if (selectedDirectory?.id === node.id) {
+        setSelectedDirectory(null);
+        setVisibleEntries([]);
+        setSelectedEntry(null);
+        setDirectoryHistory([]);
+      }
+    } catch (caughtError) {
+      setDataSourceError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : String(caughtError),
+      );
+    }
+  }
+
+  function openRunPluginsDialog(node: EvidenceTreeNode) {
+    if (!activeCase || node.kind !== "datasource") {
+      return;
+    }
+
+    const dataSourceId = node.id.replace(/^datasource:/, "");
+    const dataSource = dataSources.find(
+      (currentDataSource) => currentDataSource.id === dataSourceId,
+    );
+
+    if (!dataSource) {
+      setDataSourceError("Datasource was not found.");
+      return;
+    }
+
+    setPluginRunDataSource(dataSource);
+    setSelectedRunPluginIds(dataSource.pluginIds);
+    setPluginFilter("");
+    setDataSourceError(null);
+  }
+
+  function toggleRunPlugin(plugin: PythonPlugin, isSelected: boolean) {
+    setSelectedRunPluginIds((currentPluginIds) => {
+      if (isSelected) {
+        return currentPluginIds.includes(plugin.id)
+          ? currentPluginIds
+          : [...currentPluginIds, plugin.id];
+      }
+
+      return currentPluginIds.filter((pluginId) => pluginId !== plugin.id);
+    });
+  }
+
+  async function runSelectedPlugins() {
+    if (!activeCase || !pluginRunDataSource) {
+      return;
+    }
+
+    if (selectedRunPluginIds.length === 0) {
+      setDataSourceError("Select at least one plugin to run.");
+      return;
+    }
+
+    setIsRunningPlugins(true);
+    setDataSourceError(null);
+    const toastId = showPluginRunStartedToast({
+      datasourceName: pluginRunDataSource.name,
+      pluginCount: selectedRunPluginIds.length,
+    });
+
+    try {
+      const summary = await runDatasourcePlugins({
+        caseDatabasePath: activeCase.databasePath,
+        caseFolderPath: activeCase.folderPath,
+        datasourceId: pluginRunDataSource.id,
+        pluginIds: selectedRunPluginIds,
+      });
+      showPluginRunFinishedToasts({
+        datasourceName: pluginRunDataSource.name,
+        pluginMap,
+        summary,
+        toastId,
+      });
+      setPluginRunDataSource(null);
+    } catch (caughtError) {
+      showPluginRunFailedToast({
+        datasourceName: pluginRunDataSource.name,
+        error: caughtError,
+        toastId,
+      });
+      setDataSourceError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : String(caughtError),
+      );
+    } finally {
+      setIsRunningPlugins(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!pluginRunDataSource) {
+      return;
+    }
+
+    let isCurrent = true;
+
+    setIsPluginsLoading(true);
+    listPythonPlugins()
+      .then((plugins) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setAvailablePlugins(plugins);
+        setSelectedRunPluginIds((currentPluginIds) => {
+          const installedPluginIds = new Set(plugins.map((plugin) => plugin.id));
+
+          return currentPluginIds.filter((pluginId) =>
+            installedPluginIds.has(pluginId),
+          );
+        });
+
+        if (plugins[0]) {
+          setActiveRunPluginId((currentPluginId) =>
+            plugins.some((plugin) => plugin.id === currentPluginId)
+              ? currentPluginId
+              : plugins[0].id,
+          );
+        }
+      })
+      .catch((caughtError) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setDataSourceError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : String(caughtError),
+        );
+        setAvailablePlugins([]);
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsPluginsLoading(false);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [pluginRunDataSource]);
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <section className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
@@ -377,6 +614,10 @@ export function FilesPage() {
             rootNodes={treeRootNodes}
             selectedDirectory={selectedDirectory}
             onSelectNode={selectTreeNode}
+            onRemoveDataSource={(node) => {
+              void handleRemoveDataSource(node);
+            }}
+            onRunDataSourcePlugins={openRunPluginsDialog}
           />
         </ResizablePanel>
 
@@ -426,6 +667,175 @@ export function FilesPage() {
           </ResizablePanelGroup>
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      <Dialog
+        open={Boolean(pluginRunDataSource)}
+        onOpenChange={(isOpen) => {
+          if (!isOpen && !isRunningPlugins) {
+            setPluginRunDataSource(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-4xl rounded-sm p-0">
+          <DialogHeader className="border-b px-3 py-2">
+            <DialogTitle className="text-sm">Run Datasource Plugins</DialogTitle>
+            <DialogDescription className="text-xs">
+              Select Python plugins to run against{" "}
+              {pluginRunDataSource?.name ?? "this datasource"}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid h-[28rem] min-h-0 grid-cols-[minmax(0,1fr)_18rem] gap-2 p-2">
+            <div className="flex min-h-0 min-w-0 flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-medium uppercase text-muted-foreground">
+                  Plugins
+                </div>
+                <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
+                  {selectedRunPluginIds.length} selected
+                </Badge>
+              </div>
+              <Input
+                className="h-8 rounded-sm text-xs"
+                value={pluginFilter}
+                placeholder="Filter plugins"
+                onChange={(event) => setPluginFilter(event.target.value)}
+              />
+              <div className="min-h-0 flex-1 overflow-auto rounded-sm border">
+                {visiblePlugins.length > 0 ? (
+                  <div className="divide-y">
+                    {visiblePlugins.map((plugin) => {
+                      const isSelected = selectedRunPluginIds.includes(
+                        plugin.id,
+                      );
+                      const isActive = activeRunPlugin?.id === plugin.id;
+
+                      return (
+                        <label
+                          key={plugin.id}
+                          className={cn(
+                            "grid cursor-pointer grid-cols-[auto_1fr] items-start gap-2 px-2 py-1.5 text-xs hover:bg-accent",
+                            isActive && "bg-accent",
+                          )}
+                          onClick={() => setActiveRunPluginId(plugin.id)}
+                        >
+                          <Checkbox
+                            checked={isSelected}
+                            onCheckedChange={(checked) => {
+                              toggleRunPlugin(plugin, checked === true);
+                            }}
+                          />
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium">
+                              {plugin.name}
+                            </span>
+                            <span className="flex min-w-0 items-center gap-1">
+                              <Badge
+                                variant="secondary"
+                                className="h-4 shrink-0 rounded-sm px-1 text-[10px]"
+                              >
+                                {plugin.type}
+                              </Badge>
+                              <span className="block truncate text-[11px] text-muted-foreground">
+                                {plugin.description}
+                              </span>
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
+                    {isPluginsLoading ? "Loading plugins" : "No plugins found."}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex min-h-0 min-w-0 flex-col rounded-sm border">
+              <div className="border-b px-2 py-1.5">
+                <div className="text-xs font-medium uppercase text-muted-foreground">
+                  Options
+                </div>
+              </div>
+              {activeRunPlugin ? (
+                <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-2 text-xs">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">
+                      {activeRunPlugin.name}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1">
+                      <Badge
+                        variant="secondary"
+                        className="h-4 rounded-sm px-1 text-[10px]"
+                      >
+                        {activeRunPlugin.type}
+                      </Badge>
+                      <span className="truncate text-[11px] text-muted-foreground">
+                        {activeRunPlugin.id}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    {activeRunPlugin.description}
+                  </p>
+                  <label className="flex items-center gap-2 rounded-sm border px-2 py-1.5">
+                    <Checkbox
+                      checked={selectedRunPluginIds.includes(activeRunPlugin.id)}
+                      onCheckedChange={(checked) => {
+                        toggleRunPlugin(activeRunPlugin, checked === true);
+                      }}
+                    />
+                    <span>Run plugin</span>
+                  </label>
+                  <Separator />
+                  <div className="grid grid-cols-[5rem_1fr] gap-x-2 gap-y-1">
+                    <div className="text-muted-foreground">Datasource</div>
+                    <div className="truncate">{pluginRunDataSource?.name}</div>
+                    <div className="text-muted-foreground">Sources</div>
+                    <div>{pluginRunDataSource?.paths.length ?? 0}</div>
+                    <div className="text-muted-foreground">Mode</div>
+                    <div>{activeRunPlugin.mode}</div>
+                  </div>
+                  <div className="mt-auto rounded-sm border border-dashed px-2 py-2 text-[11px] text-muted-foreground">
+                    This plugin does not expose configurable options yet.
+                  </div>
+                </div>
+              ) : (
+                <div className="grid flex-1 place-items-center px-3 text-center text-xs text-muted-foreground">
+                  Select a plugin to view options.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter className="border-t p-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              className="h-7 rounded-sm px-2 text-xs"
+              disabled={isRunningPlugins}
+              onClick={() => setPluginRunDataSource(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              className="h-7 rounded-sm px-2 text-xs"
+              disabled={isRunningPlugins || selectedRunPluginIds.length === 0}
+              onClick={() => {
+                void runSelectedPlugins();
+              }}
+            >
+              <Play className="size-3.5" aria-hidden="true" />
+              {isRunningPlugins ? "Running" : "Run Plugins"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <footer className="flex h-6 shrink-0 items-center gap-3 border-t px-2 text-[11px] text-muted-foreground">
         <span>
