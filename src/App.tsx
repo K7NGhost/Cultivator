@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/app/AppShell";
 import { CasePage } from "@/features/cases/CasePage";
 import { FilesPage } from "@/features/files/FilesPage";
+import { PluginsPage } from "@/features/plugins/PluginsPage";
 import { SearchPage } from "@/features/search/SearchPage";
 import { PlaceholderPage } from "@/features/workspace/PlaceholderPage";
 import "./App.css";
@@ -15,15 +16,7 @@ function App() {
         <Route path="/case" element={<CasePage />} />
         <Route path="/files" element={<FilesPage />} />
         <Route path="/search" element={<SearchPage />} />
-        <Route
-          path="/plugins"
-          element={
-            <PlaceholderPage
-              title="Plugins"
-              description="User scripts, extractors, parser permissions, and execution priority."
-            />
-          }
-        />
+        <Route path="/plugins" element={<PluginsPage />} />
         <Route
           path="/artifacts"
           element={

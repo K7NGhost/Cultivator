@@ -3,9 +3,29 @@ import Database from "@tauri-apps/plugin-sql";
 import type {
   CreateDataSourceInput,
   DataSourceRecord,
+  DataSourceType,
 } from "@/features/datasources/types";
 
 const databasePromises = new Map<string, Promise<Database>>();
+
+type DataSourceRow = {
+  id: string;
+  case_id: string;
+  name: string;
+  type: DataSourceType;
+  path: string;
+  created_at: string;
+};
+
+type DataSourcePathRow = {
+  data_source_id: string;
+  path: string;
+};
+
+type DataSourcePluginRow = {
+  data_source_id: string;
+  plugin_id: string;
+};
 
 function createId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -170,4 +190,85 @@ export async function createDataSource(
   }
 
   return nextDataSource;
+}
+
+export async function listDataSources(
+  caseDatabasePath: string,
+  caseId: string,
+): Promise<DataSourceRecord[]> {
+  const database = await getCaseDatabase(caseDatabasePath);
+  const rows = await database.select<DataSourceRow[]>(
+    `
+      SELECT
+        id,
+        case_id,
+        name,
+        type,
+        path,
+        created_at
+      FROM data_sources
+      WHERE case_id = $1
+      ORDER BY created_at DESC
+    `,
+    [caseId],
+  );
+  const dataSourceIds = rows.map((row) => row.id);
+
+  if (dataSourceIds.length === 0) {
+    return [];
+  }
+
+  const pathRows = await database.select<DataSourcePathRow[]>(
+    `
+      SELECT
+        data_source_id,
+        path
+      FROM data_source_paths
+      WHERE data_source_id IN (${dataSourceIds.map(() => "?").join(", ")})
+      ORDER BY sort_order ASC
+    `,
+    dataSourceIds,
+  );
+  const pluginRows = await database.select<DataSourcePluginRow[]>(
+    `
+      SELECT
+        data_source_id,
+        plugin_id
+      FROM data_source_plugins
+      WHERE data_source_id IN (${dataSourceIds.map(() => "?").join(", ")})
+      ORDER BY created_at ASC
+    `,
+    dataSourceIds,
+  );
+  const pathsByDataSourceId = new Map<string, string[]>();
+  const pluginIdsByDataSourceId = new Map<string, string[]>();
+
+  for (const pathRow of pathRows) {
+    pathsByDataSourceId.set(pathRow.data_source_id, [
+      ...(pathsByDataSourceId.get(pathRow.data_source_id) ?? []),
+      pathRow.path,
+    ]);
+  }
+
+  for (const pluginRow of pluginRows) {
+    pluginIdsByDataSourceId.set(pluginRow.data_source_id, [
+      ...(pluginIdsByDataSourceId.get(pluginRow.data_source_id) ?? []),
+      pluginRow.plugin_id,
+    ]);
+  }
+
+  return rows.map((row) => {
+    const paths = pathsByDataSourceId.get(row.id) ?? [row.path];
+
+    return {
+      id: row.id,
+      caseId: row.case_id,
+      name: row.name,
+      type: row.type,
+      path: row.path,
+      paths,
+      pluginIds: pluginIdsByDataSourceId.get(row.id) ?? [],
+      createdAt: row.created_at,
+    };
+  });
 }

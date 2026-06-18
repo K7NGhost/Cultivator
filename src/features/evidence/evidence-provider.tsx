@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import * as React from "react";
 
-export type EvidenceEntryKind = "directory" | "file";
+export type EvidenceEntryKind = "datasource" | "directory" | "file";
 
 export type EvidenceTreeNode = {
   id: string;
@@ -10,6 +10,9 @@ export type EvidenceTreeNode = {
   path: string;
   kind: EvidenceEntryKind;
   files: number;
+  size?: number;
+  modifiedMs?: number;
+  childCount?: number;
   children?: EvidenceTreeNode[];
 };
 

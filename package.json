@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "python:embed": "powershell -ExecutionPolicy Bypass -File scripts/setup-pyoxidizer.ps1",
+    "tauri:python": "tauri dev --features python-plugins"
   },
   "dependencies": {
     "@radix-ui/react-menubar": "^1.1.18",

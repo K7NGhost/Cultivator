@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle, FolderOpen, Search } from "lucide-react";
 
@@ -10,8 +10,12 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { Separator } from "@/components/ui/separator";
+import { useCases } from "@/features/cases/case-provider";
+import { listDataSources } from "@/features/datasources/dataSourceRepository";
+import type { DataSourceRecord } from "@/features/datasources/types";
 import {
   type EvidenceDirectoryEntry,
+  type EvidenceDirectoryListing,
   type EvidenceTreeNode,
   useEvidence,
 } from "@/features/evidence/evidence-provider";
@@ -24,6 +28,7 @@ import { FileTreeViewer } from "@/features/files/components/FileTreeViewer";
 
 export function FilesPage() {
   const { error, isLoading, listing, openDirectory } = useEvidence();
+  const { activeCase } = useCases();
   const [selectedDirectory, setSelectedDirectory] =
     useState<EvidenceTreeNode | null>(null);
   const [directoryHistory, setDirectoryHistory] = useState<EvidenceTreeNode[]>(
@@ -37,11 +42,19 @@ export function FilesPage() {
   const [textPreview, setTextPreview] = useState<string[]>([]);
   const [hexPreview, setHexPreview] = useState<string[]>([]);
   const [entriesError, setEntriesError] = useState<string | null>(null);
+  const [dataSourceError, setDataSourceError] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [dataSourceTreeNodes, setDataSourceTreeNodes] = useState<
+    EvidenceTreeNode[]
+  >([]);
+  const [isDataSourcesLoading, setIsDataSourcesLoading] = useState(false);
   const [isEntriesLoading, setIsEntriesLoading] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [activePreviewTab, setActivePreviewTab] =
     useState<FilePreviewTab>("text");
+  const treeRootNodes = useMemo(() => {
+    return [...dataSourceTreeNodes, ...(listing?.tree ? [listing.tree] : [])];
+  }, [dataSourceTreeNodes, listing?.tree]);
 
   useLayoutEffect(() => {
     setSelectedDirectory(listing?.tree ?? null);
@@ -51,6 +64,61 @@ export function FilesPage() {
     setEntriesError(null);
     setPreviewError(null);
   }, [listing]);
+
+  useEffect(() => {
+    if (!activeCase) {
+      setDataSourceTreeNodes([]);
+      setDataSourceError(null);
+      setIsDataSourcesLoading(false);
+      return;
+    }
+
+    let isCurrent = true;
+    setIsDataSourcesLoading(true);
+    setDataSourceError(null);
+
+    listDataSources(activeCase.databasePath, activeCase.id)
+      .then(async (dataSources) => {
+        const nextNodes = await Promise.all(
+          dataSources.map((dataSource) => buildDataSourceTreeNode(dataSource)),
+        );
+
+        if (!isCurrent) {
+          return;
+        }
+
+        setDataSourceTreeNodes(nextNodes);
+      })
+      .catch((caughtError) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setDataSourceError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : String(caughtError),
+        );
+        setDataSourceTreeNodes([]);
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsDataSourcesLoading(false);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeCase]);
+
+  useEffect(() => {
+    if (listing || selectedDirectory || !dataSourceTreeNodes[0]) {
+      return;
+    }
+
+    selectDataSourceRoot(dataSourceTreeNodes[0]);
+  }, [dataSourceTreeNodes, listing, selectedDirectory]);
 
   useEffect(() => {
     if (!selectedEntry || selectedEntry.kind !== "file") {
@@ -153,7 +221,11 @@ export function FilesPage() {
     node: EvidenceTreeNode,
     options: { pushHistory?: boolean } = {},
   ) {
-    if (selectedDirectory?.path === node.path && options.pushHistory) {
+    if (node.kind !== "directory") {
+      return;
+    }
+
+    if (selectedDirectory?.id === node.id && options.pushHistory) {
       return;
     }
 
@@ -206,7 +278,47 @@ export function FilesPage() {
     }
 
     setDirectoryHistory((history) => history.slice(0, -1));
+
+    if (previousDirectory.kind === "datasource") {
+      selectDataSourceRoot(previousDirectory);
+      return;
+    }
+
     void loadDirectoryEntries(previousDirectory);
+  }
+
+  function selectDataSourceRoot(
+    node: EvidenceTreeNode,
+    options: { pushHistory?: boolean } = {},
+  ) {
+    if (options.pushHistory && selectedDirectory?.id !== node.id) {
+      setDirectoryHistory((history) =>
+        selectedDirectory ? [...history, selectedDirectory] : history,
+      );
+    }
+
+    const entries = (node.children ?? []).map(treeNodeToDirectoryEntry);
+
+    setSelectedDirectory(node);
+    setVisibleEntries(entries);
+    setSelectedEntry(entries[0] ?? null);
+    setEntriesError(null);
+    setPreviewError(null);
+  }
+
+  function selectTreeNode(node: EvidenceTreeNode) {
+    if (node.kind === "datasource") {
+      selectDataSourceRoot(node, { pushHistory: true });
+      return;
+    }
+
+    if (node.kind === "file") {
+      setSelectedEntry(treeNodeToDirectoryEntry(node));
+      setPreviewError(null);
+      return;
+    }
+
+    void loadDirectoryEntries(node, { pushHistory: true });
   }
 
   return (
@@ -241,10 +353,12 @@ export function FilesPage() {
         </div>
       </section>
 
-      {(error || entriesError || previewError) && (
+      {(error || dataSourceError || entriesError || previewError) && (
         <section className="flex h-8 shrink-0 items-center gap-2 border-b px-2 text-xs text-destructive">
           <AlertCircle className="size-3.5" aria-hidden="true" />
-          <span className="truncate">{error ?? entriesError ?? previewError}</span>
+          <span className="truncate">
+            {error ?? dataSourceError ?? entriesError ?? previewError}
+          </span>
         </section>
       )}
 
@@ -260,10 +374,9 @@ export function FilesPage() {
         >
           <FileTreeViewer
             rootNode={listing?.tree ?? null}
+            rootNodes={treeRootNodes}
             selectedDirectory={selectedDirectory}
-            onSelectDirectory={(node) => {
-              void loadDirectoryEntries(node, { pushHistory: true });
-            }}
+            onSelectNode={selectTreeNode}
           />
         </ResizablePanel>
 
@@ -315,12 +428,99 @@ export function FilesPage() {
       </ResizablePanelGroup>
 
       <footer className="flex h-6 shrink-0 items-center gap-3 border-t px-2 text-[11px] text-muted-foreground">
-        <span>{isLoading || isEntriesLoading ? "Loading" : "Ready"}</span>
+        <span>
+          {isLoading || isDataSourcesLoading || isEntriesLoading
+            ? "Loading"
+            : "Ready"}
+        </span>
         <span>Evidence: {listing?.rootName ?? "none"}</span>
+        <span>Datasources: {dataSourceTreeNodes.length}</span>
         <span>Folder: {selectedDirectory?.name ?? "none"}</span>
         <span>Files indexed: {visibleEntries.length}</span>
         <span>Plugin jobs: 0 running</span>
       </footer>
     </div>
   );
+}
+
+async function buildDataSourceTreeNode(
+  dataSource: DataSourceRecord,
+): Promise<EvidenceTreeNode> {
+  const entries = await invoke<EvidenceDirectoryEntry[]>("describe_paths", {
+    paths: dataSource.paths,
+  });
+  const children = await Promise.all(
+    entries.map((entry) => buildDataSourcePathTreeNode(dataSource, entry)),
+  );
+
+  return {
+    id: `datasource:${dataSource.id}`,
+    name: dataSource.name,
+    path: dataSource.path,
+    kind: "datasource",
+    files: entries.length,
+    children,
+  };
+}
+
+async function buildDataSourcePathTreeNode(
+  dataSource: DataSourceRecord,
+  entry: EvidenceDirectoryEntry,
+): Promise<EvidenceTreeNode> {
+  if (entry.kind === "directory") {
+    try {
+      const listing = await invoke<EvidenceDirectoryListing>("list_directory", {
+        path: entry.path,
+      });
+
+      return prefixTreeNodeId(listing.tree, `datasource:${dataSource.id}`);
+    } catch {
+      return directoryEntryToTreeNode(dataSource, entry);
+    }
+  }
+
+  return directoryEntryToTreeNode(dataSource, entry);
+}
+
+function directoryEntryToTreeNode(
+  dataSource: DataSourceRecord,
+  entry: EvidenceDirectoryEntry,
+): EvidenceTreeNode {
+  return {
+    id: `datasource:${dataSource.id}:${entry.path}`,
+    name: entry.name,
+    path: entry.path,
+    kind: entry.kind,
+    files: entry.kind === "directory" ? (entry.childCount ?? 0) : 0,
+    size: entry.size,
+    modifiedMs: entry.modifiedMs,
+    childCount: entry.childCount,
+  };
+}
+
+function prefixTreeNodeId(
+  node: EvidenceTreeNode,
+  idPrefix: string,
+): EvidenceTreeNode {
+  return {
+    ...node,
+    id: `${idPrefix}:${node.path}`,
+    children: node.children?.map((childNode) =>
+      prefixTreeNodeId(childNode, idPrefix),
+    ),
+  };
+}
+
+function treeNodeToDirectoryEntry(
+  node: EvidenceTreeNode,
+): EvidenceDirectoryEntry {
+  return {
+    id: node.path,
+    name: node.name,
+    path: node.path,
+    kind: node.kind === "datasource" ? "directory" : node.kind,
+    size: node.size,
+    modifiedMs: node.modifiedMs,
+    childCount: node.childCount ?? node.files,
+  };
 }

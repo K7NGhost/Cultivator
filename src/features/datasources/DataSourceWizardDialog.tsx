@@ -1,6 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, Files, FolderOpen, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,12 +29,12 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import type { CaseRecord } from "@/features/cases/types";
 import { createDataSource } from "@/features/datasources/dataSourceRepository";
-import { dataSourcePlugins } from "@/features/datasources/pluginCatalog";
 import type {
   DataSourcePlugin,
   DataSourcePluginType,
   DataSourceType,
 } from "@/features/datasources/types";
+import { listPythonPlugins } from "@/features/plugins/pluginRepository";
 import { cn } from "@/lib/utils";
 
 type DataSourceWizardDialogProps = {
@@ -77,8 +77,20 @@ const steps: Array<{ step: WizardStep; title: string; description: string }> = [
   { step: 4, title: "Plugins", description: "Queue parser plugins" },
 ];
 
-function getDefaultPluginIds() {
-  return ["file-metadata", "keyword-scanner", "string-extractor"];
+const preferredDefaultPluginIds = [
+  "file-metadata",
+  "keyword-scanner",
+  "string-extractor",
+];
+
+function getDefaultPluginIds(plugins: DataSourcePlugin[] = []) {
+  if (plugins.length === 0) {
+    return preferredDefaultPluginIds;
+  }
+
+  return preferredDefaultPluginIds.filter((pluginId) =>
+    plugins.some((plugin) => plugin.id === pluginId),
+  );
 }
 
 function normalizeSelectedPaths(selectedPaths: string | string[] | null) {
@@ -116,20 +128,24 @@ export function DataSourceWizardDialog({
     DataSourcePluginType | "all"
   >("all");
   const [activePluginId, setActivePluginId] = useState("file-metadata");
+  const [availablePlugins, setAvailablePlugins] = useState<DataSourcePlugin[]>(
+    [],
+  );
+  const [isPluginsLoading, setIsPluginsLoading] = useState(false);
   const [selectedPluginIds, setSelectedPluginIds] = useState<string[]>(
     getDefaultPluginIds(),
   );
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const selectedPlugins = useMemo(() => {
-    return dataSourcePlugins.filter((plugin) =>
+    return availablePlugins.filter((plugin) =>
       selectedPluginIds.includes(plugin.id),
     );
-  }, [selectedPluginIds]);
+  }, [availablePlugins, selectedPluginIds]);
   const visiblePlugins = useMemo(() => {
     const normalizedFilter = pluginFilter.trim().toLowerCase();
 
-    return dataSourcePlugins.filter((plugin) => {
+    return availablePlugins.filter((plugin) => {
       if (pluginTypeFilter !== "all" && plugin.type !== pluginTypeFilter) {
         return false;
       }
@@ -144,9 +160,9 @@ export function DataSourceWizardDialog({
         getPluginTypeLabel(plugin.type).toLowerCase().includes(normalizedFilter)
       );
     });
-  }, [pluginFilter, pluginTypeFilter]);
+  }, [availablePlugins, pluginFilter, pluginTypeFilter]);
   const activePlugin =
-    dataSourcePlugins.find((plugin) => plugin.id === activePluginId) ??
+    availablePlugins.find((plugin) => plugin.id === activePluginId) ??
     visiblePlugins[0] ??
     null;
   const canContinue =
@@ -163,15 +179,73 @@ export function DataSourceWizardDialog({
     setPluginFilter("");
     setPluginTypeFilter("all");
     setActivePluginId("file-metadata");
-    setSelectedPluginIds(getDefaultPluginIds());
+    setSelectedPluginIds(getDefaultPluginIds(availablePlugins));
     setError(null);
     setIsSaving(false);
   }
 
   function updateType(nextType: DataSourceType) {
     setType(nextType);
-    setSelectedPluginIds(getDefaultPluginIds());
+    setSelectedPluginIds(getDefaultPluginIds(availablePlugins));
   }
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    let isCurrent = true;
+
+    setIsPluginsLoading(true);
+    listPythonPlugins()
+      .then((plugins) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setAvailablePlugins(plugins);
+        setSelectedPluginIds((currentPluginIds) => {
+          const installedPluginIds = new Set(plugins.map((plugin) => plugin.id));
+          const retainedPluginIds = currentPluginIds.filter((pluginId) =>
+            installedPluginIds.has(pluginId),
+          );
+
+          return retainedPluginIds.length > 0
+            ? retainedPluginIds
+            : getDefaultPluginIds(plugins);
+        });
+
+        if (plugins[0]) {
+          setActivePluginId((currentPluginId) =>
+            plugins.some((plugin) => plugin.id === currentPluginId)
+              ? currentPluginId
+              : plugins[0].id,
+          );
+        }
+      })
+      .catch((caughtError) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : String(caughtError),
+        );
+        setAvailablePlugins([]);
+        setSelectedPluginIds([]);
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsPluginsLoading(false);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [isOpen]);
 
   function addSelectedPaths(nextPaths: string[]) {
     setPaths((currentPaths) =>
@@ -463,9 +537,9 @@ export function DataSourceWizardDialog({
                         variant="secondary"
                         className="h-5 rounded-sm text-[11px]"
                       >
-                        {selectedPlugins.length} selected
-                      </Badge>
-                    </div>
+                      {selectedPlugins.length} selected
+                    </Badge>
+                  </div>
                     <Input
                       className="h-8 text-xs"
                       value={pluginFilter}
@@ -492,7 +566,7 @@ export function DataSourceWizardDialog({
                       })}
                     </div>
                     <div className="min-h-0 flex-1 overflow-auto rounded-sm border">
-                      {visiblePlugins.length > 0 ? (
+                    {visiblePlugins.length > 0 ? (
                         <div className="divide-y">
                           {visiblePlugins.map((plugin) => {
                             const isSelected = selectedPluginIds.includes(
@@ -535,11 +609,13 @@ export function DataSourceWizardDialog({
                             );
                           })}
                         </div>
-                      ) : (
-                        <div className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
-                          No plugins match the filter.
-                        </div>
-                      )}
+                    ) : (
+                      <div className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
+                        {isPluginsLoading
+                          ? "Loading plugins"
+                          : "No plugins match the filter."}
+                      </div>
+                    )}
                     </div>
                   </div>
 

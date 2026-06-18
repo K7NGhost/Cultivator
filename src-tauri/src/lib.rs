@@ -17,6 +17,8 @@ use std::{
 };
 use tauri::Emitter;
 
+mod plugins;
+
 const MAX_TREE_DEPTH: usize = 4;
 const MAX_DIRECTORY_CHILDREN: usize = 500;
 const MAX_LIST_ENTRIES: usize = 1_000;
@@ -217,6 +219,44 @@ fn list_directory_entries(path: String) -> Result<Vec<DirectoryEntry>, String> {
     }
 
     list_immediate_entries(&directory)
+}
+
+#[tauri::command]
+fn describe_paths(paths: Vec<String>) -> Result<Vec<DirectoryEntry>, String> {
+    paths
+        .into_iter()
+        .map(|path| build_directory_entry(&PathBuf::from(path)))
+        .collect()
+}
+
+#[tauri::command]
+fn list_python_plugins(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<plugins::PythonPluginManifest>, String> {
+    plugins::list_python_plugins(app_handle)
+}
+
+#[tauri::command]
+async fn list_plugin_jobs(
+    case_database_path: String,
+) -> Result<Vec<plugins::PluginJobRecord>, String> {
+    plugins::list_plugin_jobs(case_database_path).await
+}
+
+#[tauri::command]
+async fn run_datasource_plugins(
+    app_handle: tauri::AppHandle,
+    case_database_path: String,
+    case_folder_path: String,
+    datasource_id: String,
+) -> Result<plugins::PluginRunSummary, String> {
+    plugins::run_datasource_plugins(
+        app_handle,
+        case_database_path,
+        case_folder_path,
+        datasource_id,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -633,19 +673,32 @@ fn format_hex_lines(bytes: &[u8], max_rows: Option<usize>) -> Vec<String> {
 }
 
 fn build_tree_node(path: &Path, depth: usize) -> Result<DirectoryTreeNode, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Failed to read path metadata '{}': {error}", path.display()))?;
+
+    if metadata.is_file() {
+        return Ok(DirectoryTreeNode {
+            id: path.to_string_lossy().to_string(),
+            name: display_name(path),
+            path: path.to_string_lossy().to_string(),
+            kind: EntryKind::File,
+            files: 0,
+            children: None,
+        });
+    }
+
     let children = if depth < MAX_TREE_DEPTH {
-        let mut directories = read_sorted_entries(path)?
+        let mut entries = read_sorted_entries(path)?
             .into_iter()
-            .filter(|entry| entry.path().is_dir())
             .take(MAX_DIRECTORY_CHILDREN)
             .map(|entry| build_tree_node(&entry.path(), depth + 1))
             .collect::<Result<Vec<_>, _>>()?;
 
-        if directories.is_empty() {
+        if entries.is_empty() {
             None
         } else {
-            directories.shrink_to_fit();
-            Some(directories)
+            entries.shrink_to_fit();
+            Some(entries)
         }
     } else {
         None
@@ -665,38 +718,41 @@ fn list_immediate_entries(path: &Path) -> Result<Vec<DirectoryEntry>, String> {
     read_sorted_entries(path)?
         .into_iter()
         .take(MAX_LIST_ENTRIES)
-        .map(|entry| {
-            let entry_path = entry.path();
-            let metadata = entry.metadata().ok();
-            let is_directory = metadata.as_ref().is_some_and(|meta| meta.is_dir());
-            let modified_ms = metadata
-                .as_ref()
-                .and_then(|meta| meta.modified().ok())
-                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_millis());
-
-            Ok(DirectoryEntry {
-                id: entry_path.to_string_lossy().to_string(),
-                name: display_name(&entry_path),
-                path: entry_path.to_string_lossy().to_string(),
-                kind: if is_directory {
-                    EntryKind::Directory
-                } else {
-                    EntryKind::File
-                },
-                size: metadata
-                    .as_ref()
-                    .filter(|meta| meta.is_file())
-                    .map(|meta| meta.len()),
-                modified_ms,
-                child_count: if is_directory {
-                    count_immediate_children(&entry_path)
-                } else {
-                    None
-                },
-            })
-        })
+        .map(|entry| build_directory_entry(&entry.path()))
         .collect()
+}
+
+fn build_directory_entry(path: &Path) -> Result<DirectoryEntry, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Failed to read path metadata '{}': {error}", path.display()))?;
+    let is_directory = metadata.is_dir();
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis());
+
+    Ok(DirectoryEntry {
+        id: path.to_string_lossy().to_string(),
+        name: display_name(path),
+        path: path.to_string_lossy().to_string(),
+        kind: if is_directory {
+            EntryKind::Directory
+        } else {
+            EntryKind::File
+        },
+        size: if metadata.is_file() {
+            Some(metadata.len())
+        } else {
+            None
+        },
+        modified_ms,
+        child_count: if is_directory {
+            count_immediate_children(path)
+        } else {
+            None
+        },
+    })
 }
 
 fn read_sorted_entries(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
@@ -849,6 +905,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_directory,
             list_directory_entries,
+            describe_paths,
+            list_python_plugins,
+            list_plugin_jobs,
+            run_datasource_plugins,
             create_case_workspace,
             search_files,
             cancel_search,

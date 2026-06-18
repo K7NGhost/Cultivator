@@ -9,6 +9,8 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   ChevronRight,
+  Database,
+  File,
   FolderOpen,
 } from "lucide-react";
 
@@ -19,8 +21,9 @@ import { cn } from "@/lib/utils";
 
 type FileTreeViewerProps = {
   rootNode: EvidenceTreeNode | null;
+  rootNodes?: EvidenceTreeNode[];
   selectedDirectory: EvidenceTreeNode | null;
-  onSelectDirectory: (node: EvidenceTreeNode) => void;
+  onSelectNode: (node: EvidenceTreeNode) => void;
 };
 
 function useElementSize<TElement extends HTMLElement>() {
@@ -52,9 +55,9 @@ function useElementSize<TElement extends HTMLElement>() {
 function EvidenceTreeNodeRow({
   node,
   style,
-  onSelectDirectory,
+  onSelectNode,
 }: NodeRendererProps<EvidenceTreeNode> & {
-  onSelectDirectory: (node: EvidenceTreeNode) => void;
+  onSelectNode: (node: EvidenceTreeNode) => void;
 }) {
   const ancestorColumns: NodeApi<EvidenceTreeNode>[] = [];
   let parent = node.parent;
@@ -66,6 +69,18 @@ function EvidenceTreeNodeRow({
 
   const connectorWidth = node.level * 16;
   const currentLineX = Math.max(connectorWidth - 8, 0);
+  const Icon =
+    node.data.kind === "datasource"
+      ? Database
+      : node.data.kind === "file"
+        ? File
+        : FolderOpen;
+  const iconClassName =
+    node.data.kind === "datasource"
+      ? "text-primary"
+      : node.data.kind === "file"
+        ? "text-muted-foreground"
+        : "text-amber-600 dark:text-amber-400";
 
   return (
     <div style={style} className="relative px-1">
@@ -118,8 +133,8 @@ function EvidenceTreeNodeRow({
           variant="ghost"
           size="icon"
           className="size-5 shrink-0 rounded-sm"
-          disabled={node.isLeaf}
-          aria-label={node.isOpen ? "Collapse folder" : "Expand folder"}
+          disabled={node.isLeaf || node.data.kind === "file"}
+          aria-label={node.isOpen ? "Collapse item" : "Expand item"}
           onClick={() => {
             if (node.isInternal) {
               node.toggle();
@@ -141,13 +156,10 @@ function EvidenceTreeNodeRow({
           className="h-7 min-w-0 flex-1 justify-start gap-1 rounded-sm px-1.5 text-xs font-normal"
           onClick={() => {
             node.select();
-            onSelectDirectory(node.data);
+            onSelectNode(node.data);
           }}
         >
-          <FolderOpen
-            className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
-            aria-hidden="true"
-          />
+          <Icon className={cn("size-3.5 shrink-0", iconClassName)} aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate text-left">
             {node.data.name}
           </span>
@@ -162,11 +174,13 @@ function EvidenceTreeNodeRow({
 
 export function FileTreeViewer({
   rootNode,
+  rootNodes,
   selectedDirectory,
-  onSelectDirectory,
+  onSelectNode,
 }: FileTreeViewerProps) {
   const treePanel = useElementSize<HTMLDivElement>();
   const treeRef = useRef<TreeApi<EvidenceTreeNode> | undefined>(undefined);
+  const treeData = rootNodes ?? (rootNode ? [rootNode] : []);
 
   return (
     <section className="h-full min-h-0" aria-label="Directory tree">
@@ -180,7 +194,7 @@ export function FileTreeViewer({
             variant="ghost"
             size="icon"
             className="size-6 rounded-sm"
-            disabled={!rootNode}
+            disabled={treeData.length === 0}
             aria-label="Expand all folders"
             title="Expand all"
             onClick={() => {
@@ -194,7 +208,7 @@ export function FileTreeViewer({
             variant="ghost"
             size="icon"
             className="size-6 rounded-sm"
-            disabled={!rootNode}
+            disabled={treeData.length === 0}
             aria-label="Collapse all folders"
             title="Collapse all"
             onClick={() => {
@@ -209,7 +223,7 @@ export function FileTreeViewer({
         {treePanel.size.height > 0 && (
           <Tree
             ref={treeRef}
-            data={rootNode ? [rootNode] : []}
+            data={treeData}
             width="100%"
             height={treePanel.size.height}
             rowHeight={28}
@@ -217,14 +231,14 @@ export function FileTreeViewer({
             openByDefault={false}
             disableDrag
             disableDrop
-            selection={selectedDirectory?.id ?? rootNode?.id}
+            selection={selectedDirectory?.id ?? treeData[0]?.id}
             className="py-1"
             aria-label="Evidence directory tree"
           >
             {(props) => (
               <EvidenceTreeNodeRow
                 {...props}
-                onSelectDirectory={onSelectDirectory}
+                onSelectNode={onSelectNode}
               />
             )}
           </Tree>

@@ -13,6 +13,10 @@ export type DataSourcePlugin = {
   name: string;
   description: string;
   type: DataSourcePluginType;
+  mode: "each_file" | "path_regex";
+  pathRegex?: string;
+  entry: string;
+  function: string;
 };
 
 export type DataSourceRecord = {
