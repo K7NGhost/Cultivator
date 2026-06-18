@@ -1,6 +1,5 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@svar-ui/react-grid/all.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -118,64 +117,4 @@
     min-width: 1024px;
     overflow: hidden;
   }
-}
-
-.cultivator-grid,
-.cultivator-grid .wx-willow-theme,
-.cultivator-grid .wx-willow-dark-theme {
-  --wx-background: var(--background);
-  --wx-background-alt: var(--muted);
-  --wx-background-hover: var(--accent);
-  --wx-color-font: var(--foreground);
-  --wx-color-font-alt: var(--muted-foreground);
-  --wx-color-primary: var(--primary);
-  --wx-color-primary-font: var(--primary-foreground);
-  --wx-border: 1px solid var(--border);
-  --wx-border-radius: var(--radius-sm);
-  --wx-font-family: inherit;
-  --wx-font-size: 12px;
-  --wx-input-background: var(--background);
-  --wx-input-border: 1px solid var(--input);
-  --wx-input-border-focus: 1px solid var(--ring);
-  --wx-input-border-radius: var(--radius-sm);
-  --wx-input-font-color: var(--foreground);
-  --wx-input-font-size: 12px;
-  --wx-input-placeholder-color: var(--muted-foreground);
-  --wx-table-border: 1px solid var(--border);
-  --wx-table-cell-border: 1px solid var(--border);
-  --wx-table-editor-dropdown-border: 1px solid var(--border);
-  --wx-table-fixed-column-border: 3px solid var(--border);
-  --wx-table-footer-cell-border: 1px solid var(--border);
-  --wx-table-header-background: var(--muted);
-  --wx-table-header-border: 1px solid var(--border);
-  --wx-table-header-cell-border: 1px solid var(--border);
-  --wx-table-select-background: var(--accent);
-  --wx-table-select-border: inset 3px 0 var(--primary);
-  --wx-table-select-color: var(--accent-foreground);
-  min-width: 0;
-}
-
-.cultivator-grid {
-  contain: layout;
-}
-
-.cultivator-grid > .wx-willow-theme,
-.cultivator-grid > .wx-willow-dark-theme {
-  display: block;
-  height: 100%;
-  min-width: 100%;
-  max-width: none;
-  width: max-content;
-}
-
-.cultivator-grid .wx-grid {
-  font-size: 12px;
-}
-
-.cultivator-grid .wx-scroll {
-  overflow: hidden !important;
-}
-
-.cultivator-grid .wx-cell {
-  padding: 4px 8px;
 }

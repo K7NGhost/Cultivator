@@ -21,6 +21,7 @@ const MAX_TREE_DEPTH: usize = 4;
 const MAX_DIRECTORY_CHILDREN: usize = 500;
 const MAX_LIST_ENTRIES: usize = 1_000;
 const MAX_HEX_PREVIEW_BYTES: usize = 512;
+const MAX_TEXT_PREVIEW_LINE_BYTES: usize = 4_096;
 const SEARCH_BATCH_FILE_LIMIT: u64 = 64;
 const SEARCH_BATCH_MATCH_LIMIT: usize = 512;
 const SEARCH_BATCH_INTERVAL: Duration = Duration::from_millis(100);
@@ -542,25 +543,28 @@ fn read_text_preview(path: String, _line: u64) -> Result<Vec<String>, String> {
         .read_to_end(&mut bytes)
         .map_err(|error| format!("Failed to read file preview: {error}"))?;
 
-    let content = String::from_utf8_lossy(&bytes);
-
-    Ok(split_preview_lines(&content)
-        .into_iter()
-        .enumerate()
-        .map(|(index, text)| format!("{:>6}  {}", index + 1, text))
-        .collect())
+    Ok(format_text_preview_lines(&bytes))
 }
 
 #[tauri::command]
 fn read_hex_preview(path: String) -> Result<Vec<String>, String> {
     let bytes = fs::read(&path).map_err(|error| format!("Failed to read file: {error}"))?;
-    let mut lines = Vec::new();
 
-    for (row_index, chunk) in bytes
-        .chunks(16)
-        .take(MAX_HEX_PREVIEW_BYTES / 16)
-        .enumerate()
-    {
+    Ok(format_hex_lines(&bytes, Some(MAX_HEX_PREVIEW_BYTES / 16)))
+}
+
+#[tauri::command]
+fn read_hex_file(path: String) -> Result<Vec<String>, String> {
+    let bytes = fs::read(&path).map_err(|error| format!("Failed to read file: {error}"))?;
+
+    Ok(format_hex_lines(&bytes, None))
+}
+
+fn format_hex_lines(bytes: &[u8], max_rows: Option<usize>) -> Vec<String> {
+    let mut lines = Vec::new();
+    let row_limit = max_rows.unwrap_or(usize::MAX);
+
+    for (row_index, chunk) in bytes.chunks(16).take(row_limit).enumerate() {
         let offset = row_index * 16;
         let hex = chunk
             .iter()
@@ -584,7 +588,7 @@ fn read_hex_preview(path: String) -> Result<Vec<String>, String> {
         lines.push(format!("{offset:08x}  {hex:<49} {ascii}"));
     }
 
-    Ok(lines)
+    lines
 }
 
 fn build_tree_node(path: &Path, depth: usize) -> Result<DirectoryTreeNode, String> {
@@ -695,31 +699,56 @@ fn emit_search_progress(
     );
 }
 
-fn split_preview_lines(content: &str) -> Vec<&str> {
+fn format_text_preview_lines(bytes: &[u8]) -> Vec<String> {
     let mut lines = Vec::new();
     let mut start = 0;
-    let bytes = content.as_bytes();
     let mut index = 0;
+    let mut line_number = 1;
 
     while index < bytes.len() {
-        if bytes[index] == b'\n' {
-            let end = if index > start && bytes[index - 1] == b'\r' {
-                index - 1
+        let is_line_break = bytes[index] == b'\n';
+        let is_long_line = index.saturating_sub(start) >= MAX_TEXT_PREVIEW_LINE_BYTES;
+
+        if is_line_break || is_long_line {
+            let mut end = index;
+
+            if is_line_break && index > start && bytes[index - 1] == b'\r' {
+                end = index - 1;
+            }
+
+            lines.push(format_text_preview_line(
+                line_number,
+                &bytes[start..end],
+                is_long_line && !is_line_break,
+            ));
+
+            if is_line_break {
+                line_number += 1;
+                start = index + 1;
             } else {
-                index
-            };
-            lines.push(&content[start..end]);
-            start = index + 1;
+                start = index;
+            }
         }
 
         index += 1;
     }
 
-    if start < content.len() {
-        lines.push(&content[start..]);
+    if start < bytes.len() {
+        lines.push(format_text_preview_line(
+            line_number,
+            &bytes[start..],
+            false,
+        ));
     }
 
     lines
+}
+
+fn format_text_preview_line(line_number: usize, bytes: &[u8], is_continued: bool) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let continuation = if is_continued { " ..." } else { "" };
+
+    format!("{line_number:>6}  {text}{continuation}")
 }
 
 fn display_name(path: &Path) -> String {
@@ -748,7 +777,8 @@ pub fn run() {
             search_files,
             cancel_search,
             read_text_preview,
-            read_hex_preview
+            read_hex_preview,
+            read_hex_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
