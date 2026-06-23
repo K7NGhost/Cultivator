@@ -1,5 +1,6 @@
-export type SearchReportMatch = {
+export type SearchReportFile = {
   file: string;
+  hits: number;
   path: string;
   kind: string;
 };
@@ -9,7 +10,8 @@ export type SearchReportStatus = "idle" | "searching" | "completed" | "cancelled
 export type BuildSearchReportInput = {
   completedAt: Date | null;
   elapsedMs: number | null;
-  matches: SearchReportMatch[];
+  files: SearchReportFile[];
+  hitCount: number;
   query: string;
   rootPath: string | null;
   scannedFiles: number | null;
@@ -36,14 +38,15 @@ const REPORT_COLUMNS = [
 export function buildSearchReport({
   completedAt,
   elapsedMs,
-  matches,
+  files,
+  hitCount,
   query,
   rootPath,
   scannedFiles,
   status,
   totalFiles,
 }: BuildSearchReportInput) {
-  const fileRows = buildFileRows(matches);
+  const fileRows = buildFileRows(files);
   const lines = [
     "Search Criteria",
     "",
@@ -55,7 +58,7 @@ export function buildSearchReport({
     "Search Statistics",
     "",
     `Found:      ${formatCount(fileRows.length)} ${fileRows.length === 1 ? "item" : "items"}`,
-    `Text:       ${formatCount(matches.length)} ${matches.length === 1 ? "hit" : "hits"}`,
+    `Text:       ${formatCount(hitCount)} ${hitCount === 1 ? "hit" : "hits"}`,
     `Searched:   ${formatNullableCount(scannedFiles)} items`,
     `Checked:    ${formatNullableCount(totalFiles)} items`,
     `Status:     ${formatStatus(status, elapsedMs)}`,
@@ -70,31 +73,18 @@ export function buildSearchReport({
   return lines.join("\n");
 }
 
-function buildFileRows(matches: SearchReportMatch[]): SearchReportFileRow[] {
-  return Array.from(
-    matches
-      .reduce((rows, match) => {
-        const existingRow = rows.get(match.path);
-
-        if (existingRow) {
-          existingRow.hits += 1;
-          return rows;
-        }
-
-        rows.set(match.path, {
-          hits: 1,
-          kind: formatType(match.kind),
-          location: getDirectoryPath(match.path),
-          name: match.file,
-        });
-
-        return rows;
-      }, new Map<string, SearchReportFileRow>())
-      .values(),
-  ).sort((first, second) =>
-    first.location.localeCompare(second.location) ||
-    first.name.localeCompare(second.name),
-  );
+function buildFileRows(files: SearchReportFile[]): SearchReportFileRow[] {
+  return files
+    .map((file) => ({
+      hits: file.hits,
+      kind: formatType(file.kind),
+      location: getDirectoryPath(file.path),
+      name: file.file,
+    }))
+    .sort((first, second) =>
+      first.location.localeCompare(second.location) ||
+      first.name.localeCompare(second.name),
+    );
 }
 
 function buildReportHeader() {

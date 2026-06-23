@@ -17,7 +17,8 @@ export type ArtifactCategory =
   | "notes"
   | "system"
   | "timeline"
-  | "other";
+  | "other"
+  | (string & {});
 
 export type ArtifactConfidence = "low" | "medium" | "high";
 
@@ -219,6 +220,23 @@ export type GenericArtifact = BaseArtifact & {
   fields: Record<string, unknown>;
 };
 
+export type CustomTableColumn = {
+  key: string;
+  label: string;
+};
+
+export type CustomTablePayload = {
+  name: string;
+  columns: CustomTableColumn[];
+  rows: Record<string, unknown>[];
+};
+
+export type CustomTableArtifact = BaseArtifact & {
+  kind: "custom_table";
+  category: ArtifactCategory;
+  table: CustomTablePayload;
+};
+
 /** Discriminated union of every supported artifact payload model. */
 export type Artifact =
   | AccountArtifact
@@ -234,7 +252,8 @@ export type Artifact =
   | NoteArtifact
   | SystemArtifact
   | TimelineArtifact
-  | GenericArtifact;
+  | GenericArtifact
+  | CustomTableArtifact;
 
 /**
  * Field descriptor used by UI builders, validators, and documentation tables.

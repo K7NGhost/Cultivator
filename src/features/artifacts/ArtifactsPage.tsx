@@ -22,6 +22,14 @@ import {
 } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCases } from "@/features/cases/case-provider";
 import { listDataSources } from "@/features/datasources/dataSourceRepository";
@@ -48,6 +56,17 @@ type ArtifactTreeNode = {
   count: number;
   artifact?: StoredArtifactRecord;
   children?: ArtifactTreeNode[];
+};
+
+type CustomTableColumn = {
+  key: string;
+  label: string;
+};
+
+type CustomTableData = {
+  name: string;
+  columns: CustomTableColumn[];
+  rows: Record<string, unknown>[];
 };
 
 function useElementSize<TElement extends HTMLElement>() {
@@ -148,7 +167,7 @@ function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2) ?? "";
 }
 
-function isPayloadObject(value: StoredArtifactRecord["payload"]): value is Record<string, unknown> {
+function isPayloadObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -174,6 +193,59 @@ function getPayloadStringList(
   return value.filter(
     (item): item is string => typeof item === "string" && item.length > 0,
   );
+}
+
+function getCustomTableData(payload: unknown): CustomTableData | null {
+  if (!isPayloadObject(payload) || !isPayloadObject(payload.table)) {
+    return null;
+  }
+
+  const table = payload.table;
+
+  if (!Array.isArray(table.columns) || !Array.isArray(table.rows)) {
+    return null;
+  }
+
+  const columns = table.columns
+    .filter(isPayloadObject)
+    .map((column) => ({
+      key: typeof column.key === "string" ? column.key : "",
+      label: typeof column.label === "string" ? column.label : "",
+    }))
+    .filter((column) => column.key.length > 0 && column.label.length > 0);
+
+  if (columns.length === 0) {
+    return null;
+  }
+
+  return {
+    name:
+      typeof table.name === "string" && table.name.length > 0
+        ? table.name
+        : getPayloadString(payload, "label") ?? "Custom Table",
+    columns,
+    rows: table.rows.filter(isPayloadObject),
+  };
+}
+
+function formatTableCell(value: unknown) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function buildArtifactTree(artifacts: StoredArtifactRecord[]): ArtifactTreeNode[] {
@@ -639,6 +711,12 @@ function ArtifactPreviewPanel({
 }: {
   artifact: StoredArtifactRecord;
 }) {
+  const customTable = getCustomTableData(artifact.payload);
+
+  if (customTable) {
+    return <CustomTableArtifactPreview table={customTable} />;
+  }
+
   if (artifact.resultKind === "message" && isPayloadObject(artifact.payload)) {
     return <MessageArtifactPreview artifact={artifact} payload={artifact.payload} />;
   }
@@ -662,6 +740,70 @@ function ArtifactPreviewPanel({
         </div>
       </div>
     </ScrollArea>
+  );
+}
+
+function CustomTableArtifactPreview({ table }: { table: CustomTableData }) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-8 shrink-0 items-center justify-between border-b bg-muted/20 px-2 text-xs">
+        <div className="min-w-0 truncate font-medium">{table.name}</div>
+        <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
+          {table.rows.length.toLocaleString()} rows
+        </Badge>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-hidden p-2">
+        <Table
+          containerClassName="h-full overflow-auto rounded-sm border"
+          className="table-fixed text-xs"
+        >
+          <TableHeader className="sticky top-0 z-10 bg-background">
+            <TableRow className="h-7 hover:bg-transparent">
+              {table.columns.map((column) => (
+                <TableHead
+                  key={column.key}
+                  className="h-7 border-r px-2 py-1 text-[11px] last:border-r-0"
+                  title={column.label}
+                >
+                  <span className="block truncate">{column.label}</span>
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {table.rows.map((row, rowIndex) => (
+              <TableRow key={rowIndex} className="h-7">
+                {table.columns.map((column) => {
+                  const value = formatTableCell(row[column.key]);
+
+                  return (
+                    <TableCell
+                      key={column.key}
+                      className="border-r px-2 py-1 text-[11px] last:border-r-0"
+                      title={value}
+                    >
+                      <span className="block truncate">{value || "-"}</span>
+                    </TableCell>
+                  );
+                })}
+              </TableRow>
+            ))}
+
+            {table.rows.length === 0 && (
+              <TableRow>
+                <TableCell
+                  colSpan={table.columns.length}
+                  className="h-12 px-2 py-2 text-center text-xs text-muted-foreground"
+                >
+                  No rows were added to this table.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
   );
 }
 

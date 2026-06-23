@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertCircle, FolderOpen, Play, Search } from "lucide-react";
+import { AlertCircle, Plus, Play, Search } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import {
   removeDataSource,
   subscribeToDataSourcesChanged,
 } from "@/features/datasources/dataSourceRepository";
+import { DataSourceWizardDialog } from "@/features/datasources/DataSourceWizardDialog";
 import type { DataSourceRecord } from "@/features/datasources/types";
 import {
   type EvidenceDirectoryEntry,
@@ -36,6 +37,7 @@ import {
 import { FileListViewer } from "@/features/files/components/FileListViewer";
 import {
   FilePreviewViewer,
+  type FileFormatPreview,
   type FilePreviewTab,
 } from "@/features/files/components/FilePreviewViewer";
 import { FileTreeViewer } from "@/features/files/components/FileTreeViewer";
@@ -52,7 +54,7 @@ import type { PythonPlugin } from "@/features/plugins/types";
 import { cn } from "@/lib/utils";
 
 export function FilesPage() {
-  const { error, isLoading, listing, openDirectory } = useEvidence();
+  const { error, isLoading, listing } = useEvidence();
   const { activeCase } = useCases();
   const [selectedDirectory, setSelectedDirectory] =
     useState<EvidenceTreeNode | null>(null);
@@ -66,6 +68,7 @@ export function FilesPage() {
     useState<EvidenceDirectoryEntry | null>(null);
   const [textPreview, setTextPreview] = useState<string[]>([]);
   const [hexPreview, setHexPreview] = useState<string[]>([]);
+  const [filePreview, setFilePreview] = useState<FileFormatPreview | null>(null);
   const [entriesError, setEntriesError] = useState<string | null>(null);
   const [dataSourceError, setDataSourceError] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -84,6 +87,7 @@ export function FilesPage() {
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [isPluginsLoading, setIsPluginsLoading] = useState(false);
   const [isRunningPlugins, setIsRunningPlugins] = useState(false);
+  const [isDataSourceWizardOpen, setIsDataSourceWizardOpen] = useState(false);
   const [dataSourceRefreshKey, setDataSourceRefreshKey] = useState(0);
   const [activePreviewTab, setActivePreviewTab] =
     useState<FilePreviewTab>("text");
@@ -196,6 +200,7 @@ export function FilesPage() {
     if (!selectedEntry || selectedEntry.kind !== "file") {
       setTextPreview([]);
       setHexPreview([]);
+      setFilePreview(null);
       setPreviewError(null);
       setIsPreviewLoading(false);
       return;
@@ -206,6 +211,7 @@ export function FilesPage() {
     setPreviewError(null);
     setTextPreview([]);
     setHexPreview([]);
+    setFilePreview(null);
 
     const textPreviewRequest = invoke<string[]>("read_text_preview", {
       path: selectedEntry.path,
@@ -231,7 +237,40 @@ export function FilesPage() {
         setTextPreview([]);
       });
 
-    textPreviewRequest.finally(() => {
+    const filePreviewRequest = invoke<FileFormatPreview | null>(
+      "read_file_format_preview",
+      {
+        path: selectedEntry.path,
+      },
+    )
+      .then((nextFilePreview) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setFilePreview(nextFilePreview);
+        setActivePreviewTab((currentTab) => {
+          if (nextFilePreview) {
+            return "file";
+          }
+
+          return currentTab === "file" ? "text" : currentTab;
+        });
+      })
+      .catch((caughtError) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setPreviewError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : String(caughtError),
+        );
+        setFilePreview(null);
+      });
+
+    Promise.allSettled([textPreviewRequest, filePreviewRequest]).finally(() => {
       if (isCurrent) {
         setIsPreviewLoading(false);
       }
@@ -564,13 +603,11 @@ export function FilesPage() {
         <Button
           size="xs"
           className="h-7 px-2 text-xs"
-          disabled={isLoading}
-          onClick={() => {
-            void openDirectory();
-          }}
+          disabled={!activeCase}
+          onClick={() => setIsDataSourceWizardOpen(true)}
         >
-          <FolderOpen className="size-3.5" aria-hidden="true" />
-          {isLoading ? "Opening..." : "Open Directory"}
+          <Plus className="size-3.5" aria-hidden="true" />
+          Add Data Source
         </Button>
         <Separator orientation="vertical" className="h-5" />
         <div className="relative w-72">
@@ -589,6 +626,11 @@ export function FilesPage() {
           <span>{visibleEntries.length} visible entries</span>
         </div>
       </section>
+      <DataSourceWizardDialog
+        activeCase={activeCase}
+        open={isDataSourceWizardOpen}
+        onOpenChange={setIsDataSourceWizardOpen}
+      />
 
       {(error || dataSourceError || entriesError || previewError) && (
         <section className="flex h-8 shrink-0 items-center gap-2 border-b px-2 text-xs text-destructive">
@@ -657,6 +699,7 @@ export function FilesPage() {
             >
               <FilePreviewViewer
                 activeTab={activePreviewTab}
+                filePreview={filePreview}
                 hexPreview={hexPreview}
                 isLoading={isPreviewLoading}
                 onActiveTabChange={setActivePreviewTab}

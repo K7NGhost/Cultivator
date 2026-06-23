@@ -5,10 +5,17 @@ use grep::{
 };
 use ignore::{WalkBuilder, WalkState};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    Row, SqlitePool, TypeInfo, ValueRef,
+};
 use std::{
+    collections::{HashMap, HashSet},
     fs,
-    io::{self, Read},
+    io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
@@ -25,9 +32,11 @@ const MAX_LIST_ENTRIES: usize = 1_000;
 const MAX_HEX_PREVIEW_BYTES: usize = 512;
 const MAX_TEXT_PREVIEW_LINE_BYTES: usize = 4_096;
 const SEARCH_BATCH_FILE_LIMIT: u64 = 64;
-const SEARCH_BATCH_MATCH_LIMIT: usize = 512;
+const SEARCH_BATCH_MATCH_LIMIT: usize = 2_048;
 const SEARCH_BATCH_INTERVAL: Duration = Duration::from_millis(100);
 const SEARCH_PROGRESS_EVENT: &str = "search-progress";
+const SEARCH_SUMMARIES_EVENT: &str = "search-summaries";
+const SEARCH_WORKER_FLAG: &str = "--cultivator-search-worker";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,7 +77,7 @@ struct CaseWorkspacePaths {
     database_path: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SearchMatch {
     id: String,
@@ -81,7 +90,7 @@ struct SearchMatch {
     context: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SearchResult {
     matches: Vec<SearchMatch>,
@@ -92,7 +101,7 @@ struct SearchResult {
     total_complete: bool,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SearchProgress {
     search_id: String,
@@ -102,7 +111,58 @@ struct SearchProgress {
     elapsed_ms: u128,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchFileSummary {
+    path: String,
+    file: String,
+    kind: String,
+    match_count: u64,
+    matched_lines: Vec<u64>,
+    first_match: SearchMatch,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchSummaries {
+    search_id: String,
+    files: Vec<SearchFileSummary>,
+    elapsed_ms: u128,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileFormatPreview {
+    kind: String,
+    label: String,
+    details: Vec<FileFormatDetail>,
+    media_path: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileFormatDetail {
+    label: String,
+    value: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqliteTableSummary {
+    name: String,
+    table_type: String,
+    row_count: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqliteTableRows {
+    columns: Vec<String>,
+    rows: Vec<Vec<JsonValue>>,
+    total_rows: i64,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SearchRequest {
     search_id: String,
@@ -116,17 +176,27 @@ struct SearchRequest {
 #[derive(Clone, Default)]
 struct SearchRegistry {
     active: Arc<Mutex<Option<ActiveSearch>>>,
+    pending_cancellations: Arc<Mutex<HashSet<String>>>,
 }
 
 #[derive(Clone)]
 struct ActiveSearch {
     search_id: String,
     cancelled: Arc<AtomicBool>,
+    child: Option<Arc<Mutex<Child>>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type", content = "payload", rename_all = "camelCase")]
+enum SearchWorkerOutput {
+    Progress(SearchProgress),
+    Summaries(SearchSummaries),
+    Done(SearchResult),
+    Error(String),
 }
 
 #[derive(Default)]
 struct GrepSearchBatch {
-    matches: Vec<SearchMatch>,
     scanned_files: u64,
     total_files: u64,
 }
@@ -150,13 +220,11 @@ impl BatchedGrepSender {
         }
     }
 
-    fn record_file(&mut self, matches: Vec<SearchMatch>) {
+    fn record_file(&mut self) {
         self.batch.total_files += 1;
         self.batch.scanned_files += 1;
-        self.batch.matches.extend(matches);
 
         if self.batch.scanned_files >= SEARCH_BATCH_FILE_LIMIT
-            || self.batch.matches.len() >= SEARCH_BATCH_MATCH_LIMIT
             || self.last_flush.elapsed() >= SEARCH_BATCH_INTERVAL
         {
             self.flush();
@@ -164,10 +232,7 @@ impl BatchedGrepSender {
     }
 
     fn flush(&mut self) {
-        if self.batch.scanned_files == 0
-            && self.batch.total_files == 0
-            && self.batch.matches.is_empty()
-        {
+        if self.batch.scanned_files == 0 && self.batch.total_files == 0 {
             return;
         }
 
@@ -178,6 +243,148 @@ impl BatchedGrepSender {
 }
 
 impl Drop for BatchedGrepSender {
+    fn drop(&mut self) {
+        self.flush();
+    }
+}
+
+#[derive(Clone)]
+enum SearchEventSink {
+    Stdout(Arc<Mutex<io::Stdout>>),
+}
+
+impl SearchEventSink {
+    fn emit_progress(
+        &self,
+        search_id: &str,
+        scanned_files: u64,
+        total_files: u64,
+        total_complete: bool,
+        elapsed_ms: u128,
+    ) {
+        let progress = SearchProgress {
+            search_id: search_id.to_string(),
+            scanned_files,
+            total_files,
+            total_complete,
+            elapsed_ms,
+        };
+
+        match self {
+            SearchEventSink::Stdout(stdout) => {
+                emit_worker_output(stdout, &SearchWorkerOutput::Progress(progress));
+            }
+        }
+    }
+
+    fn emit_summaries(&self, search_id: &str, files: Vec<SearchFileSummary>, elapsed_ms: u128) {
+        if files.is_empty() {
+            return;
+        }
+
+        let summaries = SearchSummaries {
+            search_id: search_id.to_string(),
+            files,
+            elapsed_ms,
+        };
+
+        match self {
+            SearchEventSink::Stdout(stdout) => {
+                emit_worker_output(stdout, &SearchWorkerOutput::Summaries(summaries));
+            }
+        }
+    }
+}
+
+struct SearchFileSummaryAccumulator {
+    path: String,
+    file: String,
+    kind: String,
+    match_count: u64,
+    matched_lines: HashSet<u64>,
+    first_match: SearchMatch,
+}
+
+struct BatchedSearchSummaryEmitter {
+    event_sink: SearchEventSink,
+    search_id: String,
+    started_at: Instant,
+    files: HashMap<String, SearchFileSummaryAccumulator>,
+    match_count: usize,
+    last_flush: Instant,
+}
+
+impl BatchedSearchSummaryEmitter {
+    fn new(event_sink: SearchEventSink, search_id: String, started_at: Instant) -> Self {
+        let now = Instant::now();
+
+        Self {
+            event_sink,
+            search_id,
+            started_at,
+            files: HashMap::new(),
+            match_count: 0,
+            last_flush: now.checked_sub(SEARCH_BATCH_INTERVAL).unwrap_or(now),
+        }
+    }
+
+    fn record_match(&mut self, search_match: SearchMatch) {
+        self.match_count += 1;
+        let file_summary = self
+            .files
+            .entry(search_match.path.clone())
+            .or_insert_with(|| SearchFileSummaryAccumulator {
+                path: search_match.path.clone(),
+                file: search_match.file.clone(),
+                kind: search_match.kind.clone(),
+                match_count: 0,
+                matched_lines: HashSet::new(),
+                first_match: search_match.clone(),
+            });
+
+        file_summary.match_count += 1;
+        file_summary.matched_lines.insert(search_match.line);
+
+        if self.match_count >= SEARCH_BATCH_MATCH_LIMIT
+            || self.last_flush.elapsed() >= SEARCH_BATCH_INTERVAL
+        {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.files.is_empty() {
+            return;
+        }
+
+        let files = std::mem::take(&mut self.files)
+            .into_values()
+            .map(|summary| {
+                let mut matched_lines = summary.matched_lines.into_iter().collect::<Vec<_>>();
+                matched_lines.sort_unstable();
+
+                SearchFileSummary {
+                    path: summary.path,
+                    file: summary.file,
+                    kind: summary.kind,
+                    match_count: summary.match_count,
+                    matched_lines,
+                    first_match: summary.first_match,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.event_sink.emit_summaries(
+            &self.search_id,
+            files,
+            self.started_at.elapsed().as_millis(),
+        );
+        self.match_count = 0;
+        self.last_flush = Instant::now();
+    }
+}
+
+impl Drop for BatchedSearchSummaryEmitter {
     fn drop(&mut self) {
         self.flush();
     }
@@ -345,9 +552,10 @@ async fn search_files(
     request: SearchRequest,
 ) -> Result<SearchResult, String> {
     let active_search = search_registry.active.clone();
+    let pending_cancellations = search_registry.pending_cancellations.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        search_files_with_grep_library(app_handle, active_search, request)
+        search_files_in_worker_process(app_handle, active_search, pending_cancellations, request)
     })
     .await
     .map_err(|error| format!("Search worker failed: {error}"))?
@@ -364,23 +572,339 @@ fn cancel_search(
         .map_err(|_| "Search registry lock is poisoned.".to_string())?
         .clone();
 
-    let Some(active_search) = active_search else {
-        return Ok(false);
-    };
+    if let Some(active_search) = active_search {
+        if active_search.search_id == search_id {
+            active_search.cancelled.store(true, Ordering::SeqCst);
 
-    if active_search.search_id != search_id {
-        return Ok(false);
+            if let Some(child) = active_search.child {
+                let _ = child
+                    .lock()
+                    .map_err(|_| "Search worker lock is poisoned.".to_string())?
+                    .kill();
+            }
+
+            return Ok(true);
+        }
     }
 
-    active_search.cancelled.store(true, Ordering::SeqCst);
+    search_registry
+        .pending_cancellations
+        .lock()
+        .map_err(|_| "Search registry lock is poisoned.".to_string())?
+        .insert(search_id);
 
     Ok(true)
 }
 
-fn search_files_with_grep_library(
+#[tauri::command]
+async fn read_search_match_details(
+    path: String,
+    query: String,
+    regex: bool,
+    case_sensitive: bool,
+    binary_files: bool,
+) -> Result<Vec<SearchMatch>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        search_single_file_matches(path, query, regex, case_sensitive, binary_files)
+    })
+    .await
+    .map_err(|error| format!("Search details worker failed: {error}"))?
+}
+
+fn search_single_file_matches(
+    path: String,
+    query: String,
+    regex: bool,
+    case_sensitive: bool,
+    binary_files: bool,
+) -> Result<Vec<SearchMatch>, String> {
+    let mut matches = Vec::new();
+    let path = PathBuf::from(path);
+    let trimmed_query = query.trim();
+
+    if !path.is_file() {
+        return Err("Search details path is not a file.".to_string());
+    }
+
+    if trimmed_query.is_empty() {
+        return Ok(matches);
+    }
+
+    let matcher = build_grep_matcher(trimmed_query, regex, case_sensitive)
+        .map_err(|error| format!("Failed to build grep matcher: {error}"))?;
+    let mut searcher = build_grep_searcher(binary_files);
+    let mut sink = CollectingGrepSink {
+        path: &path,
+        matcher: &matcher,
+        matches: &mut matches,
+    };
+
+    searcher
+        .search_path(&matcher, &path, &mut sink)
+        .map_err(|error| format!("Failed to search file '{}': {error}", path.display()))?;
+
+    Ok(matches)
+}
+
+fn apply_pending_search_cancellation(
+    pending_cancellations: &Arc<Mutex<HashSet<String>>>,
+    search_id: &str,
+    cancelled: &AtomicBool,
+) -> Result<(), String> {
+    let mut pending_cancellations = pending_cancellations
+        .lock()
+        .map_err(|_| "Search registry lock is poisoned.".to_string())?;
+
+    if pending_cancellations.remove(search_id) {
+        cancelled.store(true, Ordering::SeqCst);
+    }
+
+    Ok(())
+}
+
+fn clear_search_registration(
+    active_search: &Arc<Mutex<Option<ActiveSearch>>>,
+    pending_cancellations: &Arc<Mutex<HashSet<String>>>,
+    search_id: &str,
+) -> Result<(), String> {
+    {
+        let mut active_search = active_search
+            .lock()
+            .map_err(|_| "Search registry lock is poisoned.".to_string())?;
+
+        if active_search
+            .as_ref()
+            .is_some_and(|active_search| active_search.search_id == search_id)
+        {
+            *active_search = None;
+        }
+    }
+
+    pending_cancellations
+        .lock()
+        .map_err(|_| "Search registry lock is poisoned.".to_string())?
+        .remove(search_id);
+
+    Ok(())
+}
+
+fn search_files_in_worker_process(
     app_handle: tauri::AppHandle,
     active_search: Arc<Mutex<Option<ActiveSearch>>>,
+    pending_cancellations: Arc<Mutex<HashSet<String>>>,
     request: SearchRequest,
+) -> Result<SearchResult, String> {
+    let started_at = Instant::now();
+    let search_id = request.search_id.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+
+    apply_pending_search_cancellation(&pending_cancellations, &search_id, &cancelled)?;
+    register_active_search(&active_search, &search_id, cancelled.clone(), None)?;
+    apply_pending_search_cancellation(&pending_cancellations, &search_id, &cancelled)?;
+
+    if cancelled.load(Ordering::SeqCst) {
+        clear_search_registration(&active_search, &pending_cancellations, &search_id)?;
+        return Ok(cancelled_search_result(
+            started_at.elapsed().as_millis(),
+            0,
+            0,
+        ));
+    }
+
+    let mut child = match spawn_search_worker() {
+        Ok(child) => child,
+        Err(error) => {
+            clear_search_registration(&active_search, &pending_cancellations, &search_id)?;
+            return Err(error);
+        }
+    };
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            let _ = child.kill();
+            clear_search_registration(&active_search, &pending_cancellations, &search_id)?;
+            return Err("Search worker stdin was not available.".to_string());
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            clear_search_registration(&active_search, &pending_cancellations, &search_id)?;
+            return Err("Search worker stdout was not available.".to_string());
+        }
+    };
+
+    if let Some(stderr) = child.stderr.take() {
+        drain_worker_stderr(stderr);
+    }
+
+    let child = Arc::new(Mutex::new(child));
+    register_active_search(
+        &active_search,
+        &search_id,
+        cancelled.clone(),
+        Some(child.clone()),
+    )?;
+
+    if cancelled.load(Ordering::SeqCst) {
+        let _ = child
+            .lock()
+            .map_err(|_| "Search worker lock is poisoned.".to_string())?
+            .kill();
+    } else if let Err(error) = write_worker_request(&mut stdin, &request) {
+        let _ = child
+            .lock()
+            .map_err(|_| "Search worker lock is poisoned.".to_string())?
+            .kill();
+        clear_search_registration(&active_search, &pending_cancellations, &search_id)?;
+        return Err(error);
+    }
+
+    drop(stdin);
+
+    let mut final_result = None;
+    let mut scanned_files = 0;
+    let mut total_files = 0;
+
+    for line in BufReader::new(stdout).lines() {
+        let line = line.map_err(|error| format!("Failed to read search worker output: {error}"))?;
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        match serde_json::from_str::<SearchWorkerOutput>(&line)
+            .map_err(|error| format!("Invalid search worker output: {error}"))?
+        {
+            SearchWorkerOutput::Progress(progress) => {
+                scanned_files = progress.scanned_files;
+                total_files = progress.total_files;
+                let _ = app_handle.emit(SEARCH_PROGRESS_EVENT, progress);
+            }
+            SearchWorkerOutput::Summaries(summaries) => {
+                let _ = app_handle.emit(SEARCH_SUMMARIES_EVENT, summaries);
+            }
+            SearchWorkerOutput::Done(result) => {
+                final_result = Some(result);
+                break;
+            }
+            SearchWorkerOutput::Error(error) => {
+                clear_search_registration(&active_search, &pending_cancellations, &search_id)?;
+                let _ = child
+                    .lock()
+                    .map_err(|_| "Search worker lock is poisoned.".to_string())?
+                    .wait();
+                return Err(error);
+            }
+        }
+    }
+
+    let status = child
+        .lock()
+        .map_err(|_| "Search worker lock is poisoned.".to_string())?
+        .wait()
+        .map_err(|error| format!("Failed to wait for search worker: {error}"))?;
+    let was_cancelled = cancelled.load(Ordering::SeqCst);
+
+    clear_search_registration(&active_search, &pending_cancellations, &search_id)?;
+
+    if let Some(result) = final_result {
+        return Ok(result);
+    }
+
+    if was_cancelled {
+        let result =
+            cancelled_search_result(started_at.elapsed().as_millis(), scanned_files, total_files);
+        emit_search_progress(
+            &app_handle,
+            &search_id,
+            result.scanned_files,
+            result.total_files,
+            true,
+            result.elapsed_ms,
+        );
+        return Ok(result);
+    }
+
+    Err(format!("Search worker exited without a result: {status}"))
+}
+
+fn register_active_search(
+    active_search: &Arc<Mutex<Option<ActiveSearch>>>,
+    search_id: &str,
+    cancelled: Arc<AtomicBool>,
+    child: Option<Arc<Mutex<Child>>>,
+) -> Result<(), String> {
+    let mut active_search = active_search
+        .lock()
+        .map_err(|_| "Search registry lock is poisoned.".to_string())?;
+
+    *active_search = Some(ActiveSearch {
+        search_id: search_id.to_string(),
+        cancelled,
+        child,
+    });
+
+    Ok(())
+}
+
+fn cancelled_search_result(elapsed_ms: u128, scanned_files: u64, total_files: u64) -> SearchResult {
+    SearchResult {
+        matches: Vec::new(),
+        elapsed_ms,
+        cancelled: true,
+        scanned_files,
+        total_files,
+        total_complete: true,
+    }
+}
+
+fn spawn_search_worker() -> Result<Child, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Failed to locate app executable: {error}"))?;
+    let mut command = Command::new(executable);
+
+    command
+        .arg(SEARCH_WORKER_FLAG)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    command
+        .spawn()
+        .map_err(|error| format!("Failed to start search worker: {error}"))
+}
+
+fn write_worker_request(stdin: &mut impl Write, request: &SearchRequest) -> Result<(), String> {
+    serde_json::to_writer(&mut *stdin, request)
+        .map_err(|error| format!("Failed to serialize search request: {error}"))?;
+    stdin
+        .write_all(b"\n")
+        .map_err(|error| format!("Failed to write search request: {error}"))?;
+    stdin
+        .flush()
+        .map_err(|error| format!("Failed to flush search request: {error}"))
+}
+
+fn drain_worker_stderr(stderr: impl Read + Send + 'static) {
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            eprintln!("{line}");
+        }
+    });
+}
+
+fn run_grep_search(
+    event_sink: SearchEventSink,
+    request: SearchRequest,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<SearchResult, String> {
     let started_at = Instant::now();
     let SearchRequest {
@@ -409,69 +933,41 @@ fn search_files_with_grep_library(
         });
     }
 
-    let cancelled = Arc::new(AtomicBool::new(false));
     let matcher = build_grep_matcher(&trimmed_query, regex, case_sensitive)
         .map_err(|error| format!("Failed to build grep matcher: {error}"))?;
 
-    {
-        let mut active_search = active_search
-            .lock()
-            .map_err(|_| "Search registry lock is poisoned.".to_string())?;
-        *active_search = Some(ActiveSearch {
-            search_id: search_id.clone(),
-            cancelled: cancelled.clone(),
-        });
-    }
-
     if root.is_file() {
-        let mut matches = Vec::new();
         let mut searcher = build_grep_searcher(binary_files);
-        let mut sink = CultivatorGrepSink {
-            path: &root,
-            matcher: &matcher,
-            matches: &mut matches,
-        };
+        let mut result_emitter =
+            BatchedSearchSummaryEmitter::new(event_sink.clone(), search_id.clone(), started_at);
 
-        emit_search_progress(
-            &app_handle,
-            &search_id,
-            0,
-            1,
-            false,
-            started_at.elapsed().as_millis(),
-        );
+        event_sink.emit_progress(&search_id, 0, 1, false, started_at.elapsed().as_millis());
 
         if !cancelled.load(Ordering::Relaxed) {
-            searcher
-                .search_path(&matcher, &root, &mut sink)
-                .map_err(|error| format!("Failed to search file '{}': {error}", root.display()))?;
+            let mut sink = CultivatorGrepSink {
+                path: &root,
+                matcher: &matcher,
+                result_emitter: &mut result_emitter,
+                cancelled: cancelled.as_ref(),
+            };
+
+            search_file_with_cancellation(
+                &mut searcher,
+                &matcher,
+                &root,
+                &mut sink,
+                cancelled.as_ref(),
+            )
+            .map_err(|error| format!("Failed to search file '{}': {error}", root.display()))?;
         }
+        result_emitter.flush();
 
         let was_cancelled = cancelled.load(Ordering::SeqCst);
-        {
-            let mut active_search = active_search
-                .lock()
-                .map_err(|_| "Search registry lock is poisoned.".to_string())?;
 
-            if active_search
-                .as_ref()
-                .is_some_and(|active_search| active_search.search_id == search_id)
-            {
-                *active_search = None;
-            }
-        }
-
-        emit_search_progress(
-            &app_handle,
-            &search_id,
-            1,
-            1,
-            true,
-            started_at.elapsed().as_millis(),
-        );
+        event_sink.emit_progress(&search_id, 1, 1, true, started_at.elapsed().as_millis());
 
         return Ok(SearchResult {
-            matches,
+            matches: Vec::new(),
             elapsed_ms: started_at.elapsed().as_millis(),
             cancelled: was_cancelled,
             scanned_files: 1,
@@ -484,10 +980,10 @@ fn search_files_with_grep_library(
     let worker_sender = message_sender.clone();
     let worker_cancelled = cancelled.clone();
     let worker_query = trimmed_query.clone();
+    let worker_event_sink = event_sink.clone();
+    let worker_search_id = search_id.clone();
     let worker_handle = std::thread::spawn(move || {
-        let thread_count = std::thread::available_parallelism()
-            .map_or(1, |parallelism| parallelism.get())
-            .min(12);
+        let thread_count = search_worker_thread_count();
         let mut walker = WalkBuilder::new(root);
 
         walker
@@ -501,6 +997,11 @@ fn search_files_with_grep_library(
 
         walker.build_parallel().run(|| {
             let mut batch_sender = BatchedGrepSender::new(worker_sender.clone());
+            let mut result_emitter = BatchedSearchSummaryEmitter::new(
+                worker_event_sink.clone(),
+                worker_search_id.clone(),
+                started_at,
+            );
             let matcher = build_grep_matcher(&worker_query, regex, case_sensitive)
                 .expect("grep matcher was validated before the parallel search started");
             let mut searcher = build_grep_searcher(binary_files);
@@ -527,18 +1028,25 @@ fn search_files_with_grep_library(
                 }
 
                 let path = entry.into_path();
-                let mut file_matches = Vec::new();
                 let mut sink = CultivatorGrepSink {
                     path: &path,
                     matcher: &matcher,
-                    matches: &mut file_matches,
+                    result_emitter: &mut result_emitter,
+                    cancelled: cancelled.as_ref(),
                 };
 
-                if let Err(error) = searcher.search_path(&matcher, &path, &mut sink) {
+                if let Err(error) = search_file_with_cancellation(
+                    &mut searcher,
+                    &matcher,
+                    &path,
+                    &mut sink,
+                    cancelled.as_ref(),
+                ) {
                     eprintln!("{}: {}", path.display(), error);
                 }
 
-                batch_sender.record_file(file_matches);
+                result_emitter.flush();
+                batch_sender.record_file();
 
                 if cancelled.load(Ordering::Relaxed) {
                     WalkState::Quit
@@ -550,27 +1058,17 @@ fn search_files_with_grep_library(
     });
     drop(message_sender);
 
-    let mut matches = Vec::new();
     let mut scanned_files = 0u64;
     let mut total_files = 0u64;
 
-    emit_search_progress(
-        &app_handle,
-        &search_id,
-        0,
-        0,
-        false,
-        started_at.elapsed().as_millis(),
-    );
+    event_sink.emit_progress(&search_id, 0, 0, false, started_at.elapsed().as_millis());
 
     for message in message_receiver {
         match message {
             GrepSearchMessage::Batch(batch) => {
                 scanned_files += batch.scanned_files;
                 total_files += batch.total_files;
-                matches.extend(batch.matches);
-                emit_search_progress(
-                    &app_handle,
+                event_sink.emit_progress(
                     &search_id,
                     scanned_files,
                     total_files,
@@ -586,21 +1084,8 @@ fn search_files_with_grep_library(
         .map_err(|_| "Parallel grep worker panicked.".to_string())?;
 
     let was_cancelled = cancelled.load(Ordering::SeqCst);
-    {
-        let mut active_search = active_search
-            .lock()
-            .map_err(|_| "Search registry lock is poisoned.".to_string())?;
 
-        if active_search
-            .as_ref()
-            .is_some_and(|active_search| active_search.search_id == search_id)
-        {
-            *active_search = None;
-        }
-    }
-
-    emit_search_progress(
-        &app_handle,
+    event_sink.emit_progress(
         &search_id,
         scanned_files,
         total_files,
@@ -609,7 +1094,7 @@ fn search_files_with_grep_library(
     );
 
     Ok(SearchResult {
-        matches,
+        matches: Vec::new(),
         elapsed_ms: started_at.elapsed().as_millis(),
         cancelled: was_cancelled,
         scanned_files,
@@ -629,6 +1114,12 @@ fn build_grep_matcher(
         .build(query)
 }
 
+fn search_worker_thread_count() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |parallelism| parallelism.get())
+        .min(12)
+}
+
 fn build_grep_searcher(binary_files: bool) -> Searcher {
     SearcherBuilder::new()
         .line_number(true)
@@ -640,13 +1131,108 @@ fn build_grep_searcher(binary_files: bool) -> Searcher {
         .build()
 }
 
+fn search_file_with_cancellation(
+    searcher: &mut Searcher,
+    matcher: &RegexMatcher,
+    path: &Path,
+    sink: &mut CultivatorGrepSink<'_>,
+    cancelled: &AtomicBool,
+) -> Result<(), io::Error> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+
+    let result = searcher.search_path(matcher, path, sink);
+
+    if cancelled.load(Ordering::SeqCst) {
+        Ok(())
+    } else {
+        result
+    }
+}
+
 struct CultivatorGrepSink<'a> {
+    path: &'a Path,
+    matcher: &'a RegexMatcher,
+    result_emitter: &'a mut BatchedSearchSummaryEmitter,
+    cancelled: &'a AtomicBool,
+}
+
+impl Sink for CultivatorGrepSink<'_> {
+    type Error = io::Error;
+
+    fn begin(&mut self, _searcher: &Searcher) -> Result<bool, Self::Error> {
+        Ok(!self.cancelled.load(Ordering::Relaxed))
+    }
+
+    fn matched(
+        &mut self,
+        _searcher: &Searcher,
+        matched: &SinkMatch<'_>,
+    ) -> Result<bool, Self::Error> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+
+        let line_number = matched.line_number().unwrap_or(0);
+        let line_bytes = trim_line_ending_bytes(matched.bytes());
+        let context = String::from_utf8_lossy(line_bytes).to_string();
+        let path = self.path.to_string_lossy().to_string();
+        let file = display_name(self.path);
+        let kind = file_kind_label(self.path);
+        let cancelled = self.cancelled;
+        let result_emitter = &mut *self.result_emitter;
+        let mut match_index = 0usize;
+
+        self.matcher
+            .find_iter(line_bytes, |submatch| {
+                if cancelled.load(Ordering::Relaxed) {
+                    return false;
+                }
+
+                let column = submatch.start() as u64 + 1;
+                let matched_text = String::from_utf8_lossy(&line_bytes[submatch]).to_string();
+                let id = format!("{path}:{line_number}:{column}:{match_index}");
+                match_index += 1;
+
+                result_emitter.record_match(SearchMatch {
+                    id,
+                    file: file.clone(),
+                    path: path.clone(),
+                    line: line_number,
+                    column,
+                    kind: kind.clone(),
+                    matched_text,
+                    context: context.clone(),
+                });
+
+                !cancelled.load(Ordering::Relaxed)
+            })
+            .map_err(|error| io::Error::other(error.to_string()))?;
+
+        Ok(!self.cancelled.load(Ordering::Relaxed))
+    }
+
+    fn binary_data(
+        &mut self,
+        _searcher: &Searcher,
+        _binary_byte_offset: u64,
+    ) -> Result<bool, Self::Error> {
+        Ok(!self.cancelled.load(Ordering::Relaxed))
+    }
+
+    fn finish(&mut self, _searcher: &Searcher, _finish: &SinkFinish) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+struct CollectingGrepSink<'a> {
     path: &'a Path,
     matcher: &'a RegexMatcher,
     matches: &'a mut Vec<SearchMatch>,
 }
 
-impl Sink for CultivatorGrepSink<'_> {
+impl Sink for CollectingGrepSink<'_> {
     type Error = io::Error;
 
     fn matched(
@@ -686,18 +1272,6 @@ impl Sink for CultivatorGrepSink<'_> {
 
         Ok(true)
     }
-
-    fn binary_data(
-        &mut self,
-        _searcher: &Searcher,
-        _binary_byte_offset: u64,
-    ) -> Result<bool, Self::Error> {
-        Ok(true)
-    }
-
-    fn finish(&mut self, _searcher: &Searcher, _finish: &SinkFinish) -> Result<(), Self::Error> {
-        Ok(())
-    }
 }
 
 fn trim_line_ending_bytes(bytes: &[u8]) -> &[u8] {
@@ -722,7 +1296,7 @@ fn read_text_preview(path: String, _line: u64) -> Result<Vec<String>, String> {
         fs::File::open(&path).map_err(|error| format!("Failed to open file: {error}"))?;
     let mut bytes = Vec::new();
 
-    file.by_ref()
+    Read::by_ref(&mut file)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("Failed to read file preview: {error}"))?;
 
@@ -741,6 +1315,428 @@ fn read_hex_file(path: String) -> Result<Vec<String>, String> {
     let bytes = fs::read(&path).map_err(|error| format!("Failed to read file: {error}"))?;
 
     Ok(format_hex_lines(&bytes, None))
+}
+
+#[tauri::command]
+fn read_file_format_preview(path: String) -> Result<Option<FileFormatPreview>, String> {
+    let bytes = fs::read(&path).map_err(|error| format!("Failed to read file: {error}"))?;
+
+    if bytes.starts_with(b"SQLite format 3\0") {
+        return Ok(Some(sqlite_file_format_preview(&bytes)));
+    }
+
+    if let Some(image_preview) = image_file_format_preview(&path, &bytes) {
+        return Ok(Some(image_preview));
+    }
+
+    Ok(None)
+}
+
+#[tauri::command]
+async fn list_sqlite_tables(path: String) -> Result<Vec<SqliteTableSummary>, String> {
+    let pool = open_readonly_sqlite_database(&path).await?;
+    let rows = sqlx::query(
+        r#"
+          SELECT name, type
+          FROM sqlite_schema
+          WHERE type IN ('table', 'view')
+            AND name NOT LIKE 'sqlite_%'
+          ORDER BY name COLLATE NOCASE
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|error| format!("Failed to list SQLite tables: {error}"))?;
+    let mut tables = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let name: String = row.get("name");
+        let table_type: String = row.get("type");
+        let row_count = count_sqlite_table_rows(&pool, &name).await.unwrap_or(0);
+
+        tables.push(SqliteTableSummary {
+            name,
+            table_type,
+            row_count,
+        });
+    }
+
+    Ok(tables)
+}
+
+#[tauri::command]
+async fn read_sqlite_table_rows(
+    path: String,
+    table: String,
+    limit: i64,
+    offset: i64,
+) -> Result<SqliteTableRows, String> {
+    let pool = open_readonly_sqlite_database(&path).await?;
+    let table = table.trim();
+
+    if table.is_empty() {
+        return Err("Table name is required.".to_string());
+    }
+
+    ensure_sqlite_table_exists(&pool, table).await?;
+
+    let limit = limit.clamp(1, 500);
+    let offset = offset.max(0);
+    let table_identifier = quote_sqlite_identifier(table);
+    let total_rows = count_sqlite_table_rows(&pool, table).await?;
+    let columns = sqlite_table_columns(&pool, table).await?;
+    let rows = sqlx::query(&format!(
+        "SELECT * FROM {table_identifier} LIMIT $1 OFFSET $2"
+    ))
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&pool)
+    .await
+    .map_err(|error| format!("Failed to read SQLite table rows: {error}"))?;
+    let values = rows
+        .iter()
+        .map(sqlite_row_to_json_values)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(SqliteTableRows {
+        columns,
+        rows: values,
+        total_rows,
+    })
+}
+
+fn sqlite_file_format_preview(bytes: &[u8]) -> FileFormatPreview {
+    let mut details = vec![FileFormatDetail {
+        label: "Magic".to_string(),
+        value: "SQLite format 3".to_string(),
+    }];
+
+    if bytes.len() >= 100 {
+        let raw_page_size = u16::from_be_bytes([bytes[16], bytes[17]]);
+        let page_size = if raw_page_size == 1 {
+            65_536
+        } else {
+            raw_page_size as u32
+        };
+        let page_count = u32::from_be_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]);
+        let schema_version = u32::from_be_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]);
+        let text_encoding = match u32::from_be_bytes([bytes[56], bytes[57], bytes[58], bytes[59]]) {
+            1 => "UTF-8",
+            2 => "UTF-16le",
+            3 => "UTF-16be",
+            _ => "Unknown",
+        };
+
+        details.extend([
+            FileFormatDetail {
+                label: "Page size".to_string(),
+                value: format!("{page_size} bytes"),
+            },
+            FileFormatDetail {
+                label: "Page count".to_string(),
+                value: page_count.to_string(),
+            },
+            FileFormatDetail {
+                label: "Schema version".to_string(),
+                value: schema_version.to_string(),
+            },
+            FileFormatDetail {
+                label: "Text encoding".to_string(),
+                value: text_encoding.to_string(),
+            },
+        ]);
+    }
+
+    FileFormatPreview {
+        kind: "sqlite".to_string(),
+        label: "SQLite Database".to_string(),
+        details,
+        media_path: None,
+    }
+}
+
+fn image_file_format_preview(path: &str, bytes: &[u8]) -> Option<FileFormatPreview> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some(FileFormatPreview {
+            kind: "jpeg".to_string(),
+            label: "JPEG Image".to_string(),
+            details: jpeg_image_details(bytes),
+            media_path: Some(path.to_string()),
+        });
+    }
+
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some(FileFormatPreview {
+            kind: "png".to_string(),
+            label: "PNG Image".to_string(),
+            details: png_image_details(bytes),
+            media_path: Some(path.to_string()),
+        });
+    }
+
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some(FileFormatPreview {
+            kind: "gif".to_string(),
+            label: "GIF Image".to_string(),
+            details: gif_image_details(bytes),
+            media_path: Some(path.to_string()),
+        });
+    }
+
+    if bytes.starts_with(b"BM") {
+        return Some(FileFormatPreview {
+            kind: "bmp".to_string(),
+            label: "BMP Image".to_string(),
+            details: bmp_image_details(bytes),
+            media_path: Some(path.to_string()),
+        });
+    }
+
+    None
+}
+
+fn png_image_details(bytes: &[u8]) -> Vec<FileFormatDetail> {
+    let mut details = vec![FileFormatDetail {
+        label: "Magic".to_string(),
+        value: "PNG".to_string(),
+    }];
+
+    if bytes.len() >= 24 {
+        details.extend([
+            FileFormatDetail {
+                label: "Width".to_string(),
+                value: u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]).to_string(),
+            },
+            FileFormatDetail {
+                label: "Height".to_string(),
+                value: u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]).to_string(),
+            },
+        ]);
+    }
+
+    details
+}
+
+fn gif_image_details(bytes: &[u8]) -> Vec<FileFormatDetail> {
+    let mut details = vec![FileFormatDetail {
+        label: "Magic".to_string(),
+        value: String::from_utf8_lossy(&bytes[..6.min(bytes.len())]).to_string(),
+    }];
+
+    if bytes.len() >= 10 {
+        details.extend([
+            FileFormatDetail {
+                label: "Width".to_string(),
+                value: u16::from_le_bytes([bytes[6], bytes[7]]).to_string(),
+            },
+            FileFormatDetail {
+                label: "Height".to_string(),
+                value: u16::from_le_bytes([bytes[8], bytes[9]]).to_string(),
+            },
+        ]);
+    }
+
+    details
+}
+
+fn bmp_image_details(bytes: &[u8]) -> Vec<FileFormatDetail> {
+    let mut details = vec![FileFormatDetail {
+        label: "Magic".to_string(),
+        value: "BMP".to_string(),
+    }];
+
+    if bytes.len() >= 26 {
+        details.extend([
+            FileFormatDetail {
+                label: "Width".to_string(),
+                value: i32::from_le_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]).to_string(),
+            },
+            FileFormatDetail {
+                label: "Height".to_string(),
+                value: i32::from_le_bytes([bytes[22], bytes[23], bytes[24], bytes[25]]).to_string(),
+            },
+        ]);
+    }
+
+    details
+}
+
+fn jpeg_image_details(bytes: &[u8]) -> Vec<FileFormatDetail> {
+    let mut details = vec![FileFormatDetail {
+        label: "Magic".to_string(),
+        value: "JPEG".to_string(),
+    }];
+
+    if let Some((width, height)) = jpeg_dimensions(bytes) {
+        details.extend([
+            FileFormatDetail {
+                label: "Width".to_string(),
+                value: width.to_string(),
+            },
+            FileFormatDetail {
+                label: "Height".to_string(),
+                value: height.to_string(),
+            },
+        ]);
+    }
+
+    details
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u16, u16)> {
+    let mut index = 2;
+
+    while index + 9 < bytes.len() {
+        if bytes[index] != 0xff {
+            index += 1;
+            continue;
+        }
+
+        while index < bytes.len() && bytes[index] == 0xff {
+            index += 1;
+        }
+
+        if index >= bytes.len() {
+            return None;
+        }
+
+        let marker = bytes[index];
+        index += 1;
+
+        if marker == 0xd8 || marker == 0xd9 || (0xd0..=0xd7).contains(&marker) {
+            continue;
+        }
+
+        if index + 2 > bytes.len() {
+            return None;
+        }
+
+        let segment_length = u16::from_be_bytes([bytes[index], bytes[index + 1]]) as usize;
+
+        if segment_length < 2 || index + segment_length > bytes.len() {
+            return None;
+        }
+
+        if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
+            if index + 7 > bytes.len() {
+                return None;
+            }
+
+            let height = u16::from_be_bytes([bytes[index + 3], bytes[index + 4]]);
+            let width = u16::from_be_bytes([bytes[index + 5], bytes[index + 6]]);
+
+            return Some((width, height));
+        }
+
+        index += segment_length;
+    }
+
+    None
+}
+
+async fn open_readonly_sqlite_database(path: &str) -> Result<SqlitePool, String> {
+    let path = PathBuf::from(path);
+
+    if !path.is_file() {
+        return Err("SQLite path is not a file.".to_string());
+    }
+
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .create_if_missing(false);
+
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .map_err(|error| format!("Failed to open SQLite database: {error}"))
+}
+
+async fn ensure_sqlite_table_exists(pool: &SqlitePool, table: &str) -> Result<(), String> {
+    let exists: i64 = sqlx::query_scalar(
+        r#"
+          SELECT COUNT(*)
+          FROM sqlite_schema
+          WHERE type IN ('table', 'view')
+            AND name = $1
+          LIMIT 1
+        "#,
+    )
+    .bind(table)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("Failed to inspect SQLite schema: {error}"))?;
+
+    if exists == 0 {
+        return Err(format!("SQLite table '{table}' was not found."));
+    }
+
+    Ok(())
+}
+
+async fn count_sqlite_table_rows(pool: &SqlitePool, table: &str) -> Result<i64, String> {
+    let table_identifier = quote_sqlite_identifier(table);
+
+    sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table_identifier}"))
+        .fetch_one(pool)
+        .await
+        .map_err(|error| format!("Failed to count SQLite table rows: {error}"))
+}
+
+async fn sqlite_table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<String>, String> {
+    let table_identifier = quote_sqlite_identifier(table);
+    let rows = sqlx::query(&format!("PRAGMA table_info({table_identifier})"))
+        .fetch_all(pool)
+        .await
+        .map_err(|error| format!("Failed to inspect SQLite table columns: {error}"))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect())
+}
+
+fn quote_sqlite_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn sqlite_row_to_json_values(row: &sqlx::sqlite::SqliteRow) -> Result<Vec<JsonValue>, String> {
+    (0..row.columns().len())
+        .map(|index| sqlite_cell_to_json_value(row, index))
+        .collect()
+}
+
+fn sqlite_cell_to_json_value(
+    row: &sqlx::sqlite::SqliteRow,
+    index: usize,
+) -> Result<JsonValue, String> {
+    let raw = row
+        .try_get_raw(index)
+        .map_err(|error| format!("Failed to read SQLite cell: {error}"))?;
+
+    if raw.is_null() {
+        return Ok(JsonValue::Null);
+    }
+
+    match raw.type_info().name() {
+        "INTEGER" => row
+            .try_get::<i64, _>(index)
+            .map(JsonValue::from)
+            .map_err(|error| format!("Failed to decode SQLite integer: {error}")),
+        "REAL" => row
+            .try_get::<f64, _>(index)
+            .map(JsonValue::from)
+            .map_err(|error| format!("Failed to decode SQLite real: {error}")),
+        "BLOB" => row
+            .try_get::<Vec<u8>, _>(index)
+            .map(|bytes| JsonValue::String(format!("<blob {} bytes>", bytes.len())))
+            .map_err(|error| format!("Failed to decode SQLite blob: {error}")),
+        _ => row
+            .try_get::<String, _>(index)
+            .map(JsonValue::from)
+            .map_err(|error| format!("Failed to decode SQLite text: {error}")),
+    }
 }
 
 fn format_hex_lines(bytes: &[u8], max_rows: Option<usize>) -> Vec<String> {
@@ -898,6 +1894,17 @@ fn emit_search_progress(
     );
 }
 
+fn emit_worker_output(stdout: &Arc<Mutex<io::Stdout>>, output: &SearchWorkerOutput) {
+    let Ok(mut stdout) = stdout.lock() else {
+        return;
+    };
+
+    if serde_json::to_writer(&mut *stdout, output).is_ok() {
+        let _ = stdout.write_all(b"\n");
+        let _ = stdout.flush();
+    }
+}
+
 fn format_text_preview_lines(bytes: &[u8]) -> Vec<String> {
     let mut lines = Vec::new();
     let mut start = 0;
@@ -997,6 +2004,38 @@ fn file_kind_label(path: &Path) -> String {
         .unwrap_or_else(|| "File".to_string())
 }
 
+pub fn is_search_worker_process() -> bool {
+    std::env::args().any(|argument| argument == SEARCH_WORKER_FLAG)
+}
+
+pub fn run_search_worker_stdio() -> i32 {
+    let stdout = Arc::new(Mutex::new(io::stdout()));
+    let request = match serde_json::from_reader::<_, SearchRequest>(io::stdin().lock()) {
+        Ok(request) => request,
+        Err(error) => {
+            emit_worker_output(
+                &stdout,
+                &SearchWorkerOutput::Error(format!(
+                    "Failed to read search worker request: {error}"
+                )),
+            );
+            return 1;
+        }
+    };
+    let cancelled = Arc::new(AtomicBool::new(false));
+
+    match run_grep_search(SearchEventSink::Stdout(stdout.clone()), request, cancelled) {
+        Ok(result) => {
+            emit_worker_output(&stdout, &SearchWorkerOutput::Done(result));
+            0
+        }
+        Err(error) => {
+            emit_worker_output(&stdout, &SearchWorkerOutput::Error(error));
+            1
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1021,9 +2060,13 @@ pub fn run() {
             create_case_workspace,
             search_files,
             cancel_search,
+            read_search_match_details,
             read_text_preview,
             read_hex_preview,
-            read_hex_file
+            read_hex_file,
+            read_file_format_preview,
+            list_sqlite_tables,
+            read_sqlite_table_rows
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

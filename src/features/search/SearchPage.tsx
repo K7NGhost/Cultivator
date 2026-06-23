@@ -45,14 +45,6 @@ import {
 } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCases } from "@/features/cases/case-provider";
 import {
@@ -99,6 +91,21 @@ type SearchProgress = {
   elapsedMs: number;
 };
 
+type SearchFileSummary = {
+  path: string;
+  file: string;
+  kind: string;
+  matchCount: number;
+  matchedLines: number[];
+  firstMatch: SearchMatch;
+};
+
+type SearchSummaries = {
+  searchId: string;
+  files: SearchFileSummary[];
+  elapsedMs: number;
+};
+
 type SearchScope = {
   id: string;
   name: string;
@@ -108,6 +115,7 @@ type SearchScope = {
 
 type FileMatch = {
   match: SearchMatch;
+  matchCount: number;
   matchedLines: Set<number>;
 };
 
@@ -124,6 +132,19 @@ type TextPreviewListProps = {
   selectedTextLineIndex: number;
   width: number;
 };
+
+type SearchFileMatchListProps = {
+  fileMatches: FileMatch[];
+  height: number;
+  isSearching: boolean;
+  onSelectMatch: (match: SearchMatch) => void;
+  selectedPath: string | null;
+  width: number;
+};
+
+const SEARCH_UI_MATCH_FLUSH_INTERVAL_MS = 100;
+const FILE_MATCH_HEADER_HEIGHT = 28;
+const FILE_MATCH_ROW_HEIGHT = 32;
 
 function parsePreviewLine(line: string): ParsedPreviewLine {
   const match = line.match(/^(\s*\d+)(?::|\s)(.*)$/s);
@@ -220,6 +241,102 @@ function TextPreviewList({
   );
 }
 
+function SearchFileMatchList({
+  fileMatches,
+  height,
+  isSearching,
+  onSelectMatch,
+  selectedPath,
+  width,
+}: SearchFileMatchListProps) {
+  const bodyHeight = Math.max(height - FILE_MATCH_HEADER_HEIGHT, 0);
+
+  return (
+    <div className="grid h-full min-h-0 grid-rows-[28px_minmax(0,1fr)] text-xs">
+      <div className="grid grid-cols-[minmax(0,52%)_18%_15%_15%] border-b bg-muted text-[11px] font-medium text-muted-foreground">
+        <div className="flex h-7 items-center px-2">File</div>
+        <div className="flex h-7 items-center px-2">Lines</div>
+        <div className="flex h-7 items-center px-2">Type</div>
+        <div className="flex h-7 items-center px-2">Action</div>
+      </div>
+
+      <div className="min-h-0">
+        {fileMatches.length > 0 ? (
+          <List
+            width={width}
+            height={bodyHeight}
+            rowCount={fileMatches.length}
+            rowHeight={FILE_MATCH_ROW_HEIGHT}
+            overscanRowCount={8}
+            rowRenderer={({ index, key, style }: ListRowProps) => {
+              const { match, matchedLines } = fileMatches[index];
+              const isSelected = selectedPath === match.path;
+
+              return (
+                <div
+                  key={key}
+                  style={style}
+                  className={cn(
+                    "grid cursor-default grid-cols-[minmax(0,52%)_18%_15%_15%] border-b text-xs",
+                    isSelected && "bg-muted",
+                  )}
+                  onClick={() => onSelectMatch(match)}
+                  onDoubleClick={() => onSelectMatch(match)}
+                >
+                  <div className="min-w-0 px-2 py-1">
+                    <div className="flex min-w-0 items-start gap-1.5">
+                      <FileCode2
+                        className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate">{match.file}</div>
+                        <div className="truncate font-mono text-[10px] text-muted-foreground">
+                          {match.path}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex min-w-0 items-center px-2 py-1">
+                    {matchedLines.size.toLocaleString()}{" "}
+                    {matchedLines.size === 1 ? "line" : "lines"}
+                  </div>
+                  <div className="flex min-w-0 items-center px-2 py-1">
+                    <Badge
+                      variant="outline"
+                      className="h-5 max-w-full rounded-none px-1 text-[10px]"
+                    >
+                      <span className="truncate">{match.kind}</span>
+                    </Badge>
+                  </div>
+                  <div className="flex min-w-0 items-center px-2 py-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      className="h-6 rounded-none px-1.5 text-[11px]"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSelectMatch(match);
+                      }}
+                    >
+                      Open
+                    </Button>
+                  </div>
+                </div>
+              );
+            }}
+          />
+        ) : (
+          <div className="flex h-24 items-center justify-center px-2 text-center text-xs text-muted-foreground">
+            {isSearching ? "Searching..." : "Run search to show matches."}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function formatElapsedTime(milliseconds: number | null) {
   if (milliseconds === null) {
     return "-";
@@ -266,10 +383,15 @@ export function SearchPage() {
   const [binaryFiles, setBinaryFiles] = useState(
     savedSearchSettings.binaryFiles,
   );
-  const [matches, setMatches] = useState<SearchMatch[]>([]);
+  const [fileMatchVersion, setFileMatchVersion] = useState(0);
+  const [matchCount, setMatchCount] = useState(0);
+  const [matchedLineCount, setMatchedLineCount] = useState(0);
   const [selectedMatch, setSelectedMatch] = useState<SearchMatch | null>(null);
   const [activePreviewMatch, setActivePreviewMatch] =
     useState<SearchMatch | null>(null);
+  const [currentPreviewLineMatches, setCurrentPreviewLineMatches] = useState<
+    SearchMatch[]
+  >([]);
   const [textPreview, setTextPreview] = useState<string[]>([]);
   const [hexPreview, setHexPreview] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -285,11 +407,24 @@ export function SearchPage() {
   const [wasCancelled, setWasCancelled] = useState(false);
   const [completedAt, setCompletedAt] = useState<Date | null>(null);
   const [activeSearchId, setActiveSearchId] = useState<string | null>(null);
+  const [previewTab, setPreviewTab] = useState("text");
   const [dataSources, setDataSources] = useState<DataSourceRecord[]>([]);
   const [dataSourceError, setDataSourceError] = useState<string | null>(null);
   const [selectedScopeId, setSelectedScopeId] = useState("");
   const progressOffset = useRef({ scannedFiles: 0, totalFiles: 0 });
   const latestSearchId = useRef<string | null>(null);
+  const cancelRequested = useRef(false);
+  const firstStreamedMatch = useRef<SearchMatch | null>(null);
+  const pendingStreamedSummaries = useRef<SearchFileSummary[]>([]);
+  const fileMatchRows = useRef<FileMatch[]>([]);
+  const fileMatchesByPath = useRef<Map<string, FileMatch>>(new Map());
+  const lineMatchesByPath = useRef<Map<string, Map<number, SearchMatch>>>(
+    new Map(),
+  );
+  const selectedMatchPath = useRef<string | null>(null);
+  const matchCountRef = useRef(0);
+  const matchedLineCountRef = useRef(0);
+  const matchFlushTimer = useRef<number | null>(null);
   const searchScopes = useMemo<SearchScope[]>(() => {
     const scopes: SearchScope[] = dataSources.map((dataSource) => ({
       id: `datasource:${dataSource.id}`,
@@ -316,59 +451,26 @@ export function SearchPage() {
     searchScopes.find((scope) => scope.id === selectedScopeId) ??
     searchScopes[0] ??
     null;
+  const fileMatches = fileMatchRows.current;
   const selectedTextLineIndex = activePreviewMatch
     ? Math.min(
         Math.max(activePreviewMatch.line - 1, 0),
         Math.max(textPreview.length - 1, 0),
       )
     : 0;
-  const fileMatches = Array.from(
-    matches
-      .reduce((fileMatchMap, match) => {
-        const existingMatch = fileMatchMap.get(match.path);
-
-        if (existingMatch) {
-          existingMatch.matchedLines.add(match.line);
-
-          if (
-            match.line < existingMatch.match.line ||
-            (match.line === existingMatch.match.line &&
-              match.column < existingMatch.match.column)
-          ) {
-            existingMatch.match = match;
-          }
-        } else {
-          fileMatchMap.set(match.path, {
-            match,
-            matchedLines: new Set([match.line]),
-          });
-        }
-
-        return fileMatchMap;
-      }, new Map<string, FileMatch>())
-      .values(),
+  const reportFiles = useMemo(
+    () =>
+      fileMatches.map(({ match, matchCount }) => ({
+        file: match.file,
+        hits: matchCount,
+        kind: match.kind,
+        path: match.path,
+      })),
+    [fileMatchVersion],
   );
-  const matchedLineCount = fileMatches.reduce(
-    (total, fileMatch) => total + fileMatch.matchedLines.size,
-    0,
-  );
-  const currentPreviewLineMatches = selectedMatch
-    ? Array.from(
-        matches
-          .filter((match) => match.path === selectedMatch.path)
-          .sort((first, second) => first.line - second.line || first.column - second.column)
-          .reduce((lineMatches, match) => {
-            if (!lineMatches.has(match.line)) {
-              lineMatches.set(match.line, match);
-            }
-
-            return lineMatches;
-          }, new Map<number, SearchMatch>())
-          .values(),
-      )
-    : [];
-  const currentPreviewMatchLines = new Set(
-    currentPreviewLineMatches.map((match) => match.line),
+  const currentPreviewMatchLines = useMemo(
+    () => new Set(currentPreviewLineMatches.map((match) => match.line)),
+    [currentPreviewLineMatches],
   );
   const selectedPreviewLineIndex = activePreviewMatch
     ? currentPreviewLineMatches.findIndex(
@@ -384,20 +486,41 @@ export function SearchPage() {
       : elapsedMs === null
         ? "idle"
         : "completed";
-  const reportText = buildSearchReport({
+  const reportRootPath = selectedScope
+    ? selectedScope.paths.length === 1
+      ? selectedScope.paths[0]
+      : `${selectedScope.name} (${selectedScope.paths.length} paths)`
+    : null;
+  const reportText = useMemo(() => {
+    if (previewTab !== "report") {
+      return "";
+    }
+
+    return buildSearchReport({
+      completedAt,
+      elapsedMs: isSearching ? liveElapsedMs : elapsedMs,
+      files: reportFiles,
+      hitCount: matchCount,
+      query,
+      rootPath: reportRootPath,
+      scannedFiles,
+      status: reportStatus,
+      totalFiles,
+    });
+  }, [
     completedAt,
-    elapsedMs: isSearching ? liveElapsedMs : elapsedMs,
-    matches,
+    elapsedMs,
+    isSearching,
+    liveElapsedMs,
+    matchCount,
+    previewTab,
     query,
-    rootPath: selectedScope
-      ? selectedScope.paths.length === 1
-        ? selectedScope.paths[0]
-        : `${selectedScope.name} (${selectedScope.paths.length} paths)`
-      : null,
+    reportFiles,
+    reportRootPath,
+    reportStatus,
     scannedFiles,
-    status: reportStatus,
     totalFiles,
-  });
+  ]);
   const commandPreview = selectedScope
     ? `grep crate ${regex ? "regex" : "fixed"} ${
         caseSensitive ? "case-sensitive" : "ignore-case"
@@ -405,6 +528,201 @@ export function SearchPage() {
         query || "<query>"
       }" ${selectedScope.paths.join(", ")}`
     : "Add a datasource or open an evidence directory before searching";
+
+  function cancelPendingMatchFlush() {
+    if (matchFlushTimer.current !== null) {
+      window.clearTimeout(matchFlushTimer.current);
+      matchFlushTimer.current = null;
+    }
+
+    pendingStreamedSummaries.current = [];
+  }
+
+  function getPreviewLineMatches(path: string | null) {
+    if (!path) {
+      return [];
+    }
+
+    return Array.from(lineMatchesByPath.current.get(path)?.values() ?? []).sort(
+      (first, second) => first.line - second.line || first.column - second.column,
+    );
+  }
+
+  function resetStreamedMatches() {
+    cancelPendingMatchFlush();
+    firstStreamedMatch.current = null;
+    fileMatchRows.current = [];
+    fileMatchesByPath.current.clear();
+    lineMatchesByPath.current.clear();
+    selectedMatchPath.current = null;
+    matchCountRef.current = 0;
+    matchedLineCountRef.current = 0;
+    setFileMatchVersion((version) => version + 1);
+    setMatchCount(0);
+    setMatchedLineCount(0);
+    setCurrentPreviewLineMatches([]);
+  }
+
+  function flushStreamedMatches(searchId: string) {
+    if (matchFlushTimer.current !== null) {
+      window.clearTimeout(matchFlushTimer.current);
+      matchFlushTimer.current = null;
+    }
+
+    if (latestSearchId.current !== searchId) {
+      pendingStreamedSummaries.current = [];
+      return;
+    }
+
+    const nextSummaries = pendingStreamedSummaries.current;
+
+    if (nextSummaries.length === 0) {
+      return;
+    }
+
+    pendingStreamedSummaries.current = [];
+    const shouldSelectFirstMatch = firstStreamedMatch.current === null;
+    const firstMatch = nextSummaries[0]?.firstMatch ?? null;
+    const selectedPath = selectedMatchPath.current;
+    let didUpdateSelectedPath = false;
+
+    if (shouldSelectFirstMatch && firstMatch) {
+      firstStreamedMatch.current = firstMatch;
+    }
+
+    for (const summary of nextSummaries) {
+      matchCountRef.current += summary.matchCount;
+      let lineMatches = lineMatchesByPath.current.get(summary.path);
+
+      if (!lineMatches) {
+        lineMatches = new Map();
+        lineMatchesByPath.current.set(summary.path, lineMatches);
+      }
+
+      for (const line of summary.matchedLines) {
+        const isNewLine = !lineMatches.has(line);
+
+        if (isNewLine) {
+          lineMatches.set(line, {
+            ...summary.firstMatch,
+            id: `${summary.path}:${line}:summary`,
+            line,
+          });
+          matchedLineCountRef.current += 1;
+        }
+      }
+
+      let fileMatch = fileMatchesByPath.current.get(summary.path);
+
+      if (fileMatch) {
+        fileMatch.matchCount += summary.matchCount;
+
+        for (const line of summary.matchedLines) {
+          fileMatch.matchedLines.add(line);
+        }
+
+        if (
+          summary.firstMatch.line < fileMatch.match.line ||
+          (summary.firstMatch.line === fileMatch.match.line &&
+            summary.firstMatch.column < fileMatch.match.column)
+        ) {
+          fileMatch.match = summary.firstMatch;
+        }
+      } else {
+        fileMatch = {
+          match: summary.firstMatch,
+          matchCount: summary.matchCount,
+          matchedLines: new Set(summary.matchedLines),
+        };
+        fileMatchesByPath.current.set(summary.path, fileMatch);
+        fileMatchRows.current.push(fileMatch);
+      }
+
+      didUpdateSelectedPath =
+        didUpdateSelectedPath || selectedPath === summary.path;
+    }
+
+    setMatchCount(matchCountRef.current);
+    setMatchedLineCount(matchedLineCountRef.current);
+    setFileMatchVersion((version) => version + 1);
+
+    if (shouldSelectFirstMatch && firstMatch) {
+      selectedMatchPath.current = firstMatch.path;
+      setSelectedMatch((currentMatch) => currentMatch ?? firstMatch);
+      setActivePreviewMatch((currentMatch) => currentMatch ?? firstMatch);
+      setCurrentPreviewLineMatches(getPreviewLineMatches(firstMatch.path));
+    } else if (didUpdateSelectedPath) {
+      setCurrentPreviewLineMatches(getPreviewLineMatches(selectedPath));
+    }
+  }
+
+  function queueStreamedSummaries(
+    searchId: string,
+    nextSummaries: SearchFileSummary[],
+  ) {
+    if (nextSummaries.length === 0 || latestSearchId.current !== searchId) {
+      return;
+    }
+
+    pendingStreamedSummaries.current.push(...nextSummaries);
+
+    if (matchFlushTimer.current !== null) {
+      return;
+    }
+
+    const flushDelay =
+      matchCountRef.current === 0 ? 0 : SEARCH_UI_MATCH_FLUSH_INTERVAL_MS;
+
+    matchFlushTimer.current = window.setTimeout(() => {
+      matchFlushTimer.current = null;
+      flushStreamedMatches(searchId);
+    }, flushDelay);
+  }
+
+  async function loadFinishedMatchDetails(path: string) {
+    const detailsQuery = query;
+    const detailsRegex = regex;
+    const detailsCaseSensitive = caseSensitive;
+    const detailsBinaryFiles = binaryFiles;
+
+    if (!detailsQuery.trim()) {
+      return;
+    }
+
+    try {
+      const detailedMatches = await invoke<SearchMatch[]>(
+        "read_search_match_details",
+        {
+          path,
+          query: detailsQuery,
+          regex: detailsRegex,
+          caseSensitive: detailsCaseSensitive,
+          binaryFiles: detailsBinaryFiles,
+        },
+      );
+
+      if (selectedMatchPath.current !== path || detailedMatches.length === 0) {
+        return;
+      }
+
+      const lineMatches = new Map<number, SearchMatch>();
+
+      for (const match of detailedMatches) {
+        if (!lineMatches.has(match.line)) {
+          lineMatches.set(match.line, match);
+        }
+      }
+
+      lineMatchesByPath.current.set(path, lineMatches);
+      setCurrentPreviewLineMatches(getPreviewLineMatches(path));
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : String(caughtError),
+      );
+    }
+  }
 
   async function runSearch() {
     if (!selectedScope || !query.trim()) {
@@ -419,6 +737,8 @@ export function SearchPage() {
     setIsSearching(true);
     setActiveSearchId(searchId);
     latestSearchId.current = searchId;
+    cancelRequested.current = false;
+    resetStreamedMatches();
     setError(null);
     setElapsedMs(null);
     setScannedFiles(null);
@@ -427,17 +747,23 @@ export function SearchPage() {
     setLiveElapsedMs(0);
     setWasCancelled(false);
     setCompletedAt(null);
+    setSelectedMatch(null);
+    setActivePreviewMatch(null);
     progressOffset.current = { scannedFiles: 0, totalFiles: 0 };
     const searchStartedAt = performance.now();
 
     try {
-      const nextMatches: SearchMatch[] = [];
       let nextScannedFiles = 0;
       let nextTotalFiles = 0;
       let nextTotalComplete = true;
       let nextWasCancelled = false;
 
       for (const rootPath of selectedScope.paths) {
+        if (cancelRequested.current) {
+          nextWasCancelled = true;
+          break;
+        }
+
         progressOffset.current = {
           scannedFiles: nextScannedFiles,
           totalFiles: nextTotalFiles,
@@ -454,25 +780,45 @@ export function SearchPage() {
           },
         });
 
-        nextMatches.push(...result.matches);
+        if (latestSearchId.current !== searchId) {
+          return;
+        }
+
+        flushStreamedMatches(searchId);
         nextScannedFiles += result.scannedFiles;
         nextTotalFiles += result.totalFiles;
         nextTotalComplete = nextTotalComplete && result.totalComplete;
-        nextWasCancelled = nextWasCancelled || result.cancelled;
+        nextWasCancelled =
+          nextWasCancelled || result.cancelled || cancelRequested.current;
 
-        setMatches([...nextMatches]);
         setScannedFiles(nextScannedFiles);
         setTotalFiles(nextTotalFiles);
         setIsTotalFileCountComplete(nextTotalComplete);
 
-        if (result.cancelled) {
+        if (result.cancelled || cancelRequested.current) {
           break;
         }
       }
 
-      setMatches(nextMatches);
-      setSelectedMatch(nextMatches[0] ?? null);
-      setActivePreviewMatch(nextMatches[0] ?? null);
+      flushStreamedMatches(searchId);
+      const firstSearchMatch = firstStreamedMatch.current;
+
+      if (!selectedMatchPath.current && firstSearchMatch) {
+        selectedMatchPath.current = firstSearchMatch.path;
+        setCurrentPreviewLineMatches(
+          getPreviewLineMatches(firstSearchMatch.path),
+        );
+      }
+
+      setSelectedMatch((currentMatch) => currentMatch ?? firstSearchMatch);
+      setActivePreviewMatch(
+        (currentMatch) => currentMatch ?? firstSearchMatch,
+      );
+
+      if (firstSearchMatch) {
+        void loadFinishedMatchDetails(firstSearchMatch.path);
+      }
+
       setElapsedMs(Math.round(performance.now() - searchStartedAt));
       setScannedFiles(nextScannedFiles);
       setTotalFiles(nextTotalFiles);
@@ -485,7 +831,7 @@ export function SearchPage() {
           ? caughtError.message
           : String(caughtError),
       );
-      setMatches([]);
+      resetStreamedMatches();
       setSelectedMatch(null);
       setActivePreviewMatch(null);
       setScannedFiles(null);
@@ -494,10 +840,12 @@ export function SearchPage() {
       setElapsedMs(Math.round(performance.now() - searchStartedAt));
       setCompletedAt(new Date());
     } finally {
-      setIsSearching(false);
-      setIsCancelling(false);
-      setActiveSearchId(null);
-      latestSearchId.current = null;
+      if (latestSearchId.current === searchId) {
+        setIsSearching(false);
+        setIsCancelling(false);
+        setActiveSearchId(null);
+        cancelRequested.current = false;
+      }
     }
   }
 
@@ -506,12 +854,20 @@ export function SearchPage() {
       return;
     }
 
+    const searchId = activeSearchId;
+    cancelRequested.current = true;
     setIsCancelling(true);
     setError(null);
 
     try {
-      await invoke<boolean>("cancel_search", { searchId: activeSearchId });
+      const didCancel = await invoke<boolean>("cancel_search", { searchId });
+
+      if (!didCancel) {
+        cancelRequested.current = false;
+        setIsCancelling(false);
+      }
     } catch (caughtError) {
+      cancelRequested.current = false;
       setError(
         caughtError instanceof Error
           ? caughtError.message
@@ -522,8 +878,11 @@ export function SearchPage() {
   }
 
   function selectMatch(match: SearchMatch) {
+    selectedMatchPath.current = match.path;
     setSelectedMatch(match);
     setActivePreviewMatch(match);
+    setCurrentPreviewLineMatches(getPreviewLineMatches(match.path));
+    void loadFinishedMatchDetails(match.path);
   }
 
   function selectRelativePreviewLine(direction: -1 | 1) {
@@ -542,7 +901,7 @@ export function SearchPage() {
 
   useEffect(() => {
     let isDisposed = false;
-    let unlisten: (() => void) | undefined;
+    const unlistenCallbacks: Array<() => void> = [];
 
     void listen<SearchProgress>("search-progress", (event) => {
       if (event.payload.searchId !== latestSearchId.current) {
@@ -562,12 +921,30 @@ export function SearchPage() {
         return;
       }
 
-      unlisten = nextUnlisten;
+      unlistenCallbacks.push(nextUnlisten);
+    });
+
+    void listen<SearchSummaries>("search-summaries", (event) => {
+      if (event.payload.searchId !== latestSearchId.current) {
+        return;
+      }
+
+      queueStreamedSummaries(event.payload.searchId, event.payload.files);
+    }).then((nextUnlisten) => {
+      if (isDisposed) {
+        nextUnlisten();
+        return;
+      }
+
+      unlistenCallbacks.push(nextUnlisten);
     });
 
     return () => {
       isDisposed = true;
-      unlisten?.();
+      cancelPendingMatchFlush();
+      unlistenCallbacks.forEach((unlisten) => {
+        unlisten();
+      });
     };
   }, []);
 
@@ -885,93 +1262,18 @@ export function SearchPage() {
             className="h-full min-h-0 min-w-0 overflow-hidden border-r"
             aria-label="Search matches"
           >
-            <div className="h-full min-w-0 overflow-auto text-xs" tabIndex={0}>
-              <Table
-                containerClassName="contents"
-                className="w-full min-w-[420px] table-fixed caption-bottom text-xs"
-              >
-                <TableHeader className="sticky top-0 z-10 bg-muted">
-                  <TableRow className="h-7">
-                    <TableHead className="h-7 w-[52%] px-2 text-[11px]">
-                      File
-                    </TableHead>
-                    <TableHead className="h-7 w-[18%] px-2 text-[11px]">
-                      Lines
-                    </TableHead>
-                    <TableHead className="h-7 w-[15%] px-2 text-[11px]">
-                      Type
-                    </TableHead>
-                    <TableHead className="h-7 w-[15%] px-2 text-[11px]">
-                      Action
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {fileMatches.map(({ match, matchedLines }) => (
-                    <TableRow
-                      key={match.path}
-                      data-state={
-                        selectedMatch?.path === match.path ? "selected" : undefined
-                      }
-                      className="h-8 cursor-default"
-                      onClick={() => selectMatch(match)}
-                      onDoubleClick={() => selectMatch(match)}
-                    >
-                      <TableCell className="px-2 py-1">
-                        <div className="flex min-w-0 items-start gap-1.5">
-                          <FileCode2
-                            className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-                            aria-hidden="true"
-                          />
-                          <div className="min-w-0">
-                            <div className="truncate">{match.file}</div>
-                            <div className="truncate font-mono text-[10px] text-muted-foreground">
-                              {match.path}
-                            </div>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="px-2 py-1">
-                        {matchedLines.size.toLocaleString()}{" "}
-                        {matchedLines.size === 1 ? "line" : "lines"}
-                      </TableCell>
-                      <TableCell className="px-2 py-1">
-                        <Badge
-                          variant="outline"
-                          className="h-5 rounded-none px-1 text-[10px]"
-                        >
-                          {match.kind}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="px-2 py-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="xs"
-                          className="h-6 rounded-none px-1.5 text-[11px]"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            selectMatch(match);
-                          }}
-                        >
-                          Open
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {fileMatches.length === 0 && (
-                    <TableRow>
-                      <TableCell
-                        colSpan={4}
-                        className="h-24 px-2 text-center text-xs text-muted-foreground"
-                      >
-                      {isSearching ? "Searching..." : "Run search to show matches."}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+            <AutoSizer>
+              {({ height, width }) => (
+                <SearchFileMatchList
+                  fileMatches={fileMatches}
+                  height={height}
+                  isSearching={isSearching}
+                  onSelectMatch={selectMatch}
+                  selectedPath={selectedMatch?.path ?? null}
+                  width={width}
+                />
+              )}
+            </AutoSizer>
           </section>
         </ResizablePanel>
 
@@ -983,7 +1285,8 @@ export function SearchPage() {
             aria-label="File preview"
           >
             <Tabs
-              defaultValue="text"
+              value={previewTab}
+              onValueChange={setPreviewTab}
               className="flex h-full min-h-0 min-w-0 flex-col gap-0"
             >
             <div className="flex h-8 items-center justify-between border-b px-2">

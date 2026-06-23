@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { openPath } from "@tauri-apps/plugin-opener";
 import {
   ArrowDown,
   ArrowLeft,
@@ -12,6 +13,12 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   Table,
   TableBody,
@@ -325,6 +332,33 @@ function StatusBadge({ row }: { row: FileRow }) {
   );
 }
 
+function getContainingFolderPath(entry: EvidenceDirectoryEntry) {
+  if (entry.kind === "directory") {
+    return entry.path;
+  }
+
+  const normalizedPath = entry.path.replace(/\\/g, "/");
+  const lastSeparatorIndex = normalizedPath.lastIndexOf("/");
+
+  if (lastSeparatorIndex <= 0) {
+    return entry.path;
+  }
+
+  if (/^[A-Za-z]:\//.test(normalizedPath) && lastSeparatorIndex === 2) {
+    return entry.path.slice(0, 3);
+  }
+
+  return entry.path.slice(0, lastSeparatorIndex);
+}
+
+async function openContainingFolder(entry: EvidenceDirectoryEntry) {
+  try {
+    await openPath(getContainingFolderPath(entry));
+  } catch (caughtError) {
+    console.error("Failed to open containing folder", caughtError);
+  }
+}
+
 export function FileListViewer({
   entries,
   isLoading,
@@ -397,37 +431,56 @@ export function FileListViewer({
         </TableHeader>
         <TableBody>
           {sortedRows.map((row) => (
-            <TableRow
-              key={row.id}
-              data-state={selectedEntry?.id === row.id ? "selected" : undefined}
-              className="h-8 cursor-default"
-              onClick={() => {
-                onSelectEntry(row.entry);
-              }}
-              onDoubleClick={() => {
-                if (row.entry.kind === "directory") {
-                  onOpenFolder(row.entry);
-                }
-              }}
-            >
-              <TableCell className="h-8 px-2 py-0">
-                <FileNameCell row={row} />
-              </TableCell>
-              <TableCell className="h-8 truncate px-2 py-0 text-muted-foreground">
-                {row.path}
-              </TableCell>
-              <TableCell className="h-8 px-2 py-0">{row.type}</TableCell>
-              <TableCell className="h-8 px-2 py-0">{row.sizeLabel}</TableCell>
-              <TableCell className="h-8 px-2 py-0">
-                {row.modifiedLabel}
-              </TableCell>
-              <TableCell className="h-8 truncate px-2 py-0 text-muted-foreground">
-                {row.plugin}
-              </TableCell>
-              <TableCell className="h-8 px-2 py-0">
-                <StatusBadge row={row} />
-              </TableCell>
-            </TableRow>
+            <ContextMenu key={row.id}>
+              <ContextMenuTrigger asChild>
+                <TableRow
+                  data-state={
+                    selectedEntry?.id === row.id ? "selected" : undefined
+                  }
+                  className="h-8 cursor-default"
+                  onClick={() => {
+                    onSelectEntry(row.entry);
+                  }}
+                  onContextMenu={() => {
+                    onSelectEntry(row.entry);
+                  }}
+                  onDoubleClick={() => {
+                    if (row.entry.kind === "directory") {
+                      onOpenFolder(row.entry);
+                    }
+                  }}
+                >
+                  <TableCell className="h-8 p-0">
+                    <FileNameCell row={row} />
+                  </TableCell>
+                  <TableCell className="h-8 truncate p-0 text-muted-foreground">
+                    {row.path}
+                  </TableCell>
+                  <TableCell className="h-8 p-0">{row.type}</TableCell>
+                  <TableCell className="h-8 p-0">{row.sizeLabel}</TableCell>
+                  <TableCell className="h-8 p-0">
+                    {row.modifiedLabel}
+                  </TableCell>
+                  <TableCell className="h-8 truncate p-0 text-muted-foreground">
+                    {row.plugin}
+                  </TableCell>
+                  <TableCell className="h-8 p-0">
+                    <StatusBadge row={row} />
+                  </TableCell>
+                </TableRow>
+              </ContextMenuTrigger>
+              <ContextMenuContent className="w-48">
+                <ContextMenuItem
+                  className="text-xs"
+                  onSelect={() => {
+                    void openContainingFolder(row.entry);
+                  }}
+                >
+                  <FolderOpen className="size-3.5" aria-hidden="true" />
+                  Open Containing Folder
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
           ))}
           {sortedRows.length === 0 && (
             <TableRow>

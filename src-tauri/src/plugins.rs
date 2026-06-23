@@ -256,6 +256,77 @@ fn create_artifact<'py>(
 }
 
 #[cfg(feature = "python-plugins")]
+#[pyfunction(signature = (name, category, headers, label=None, **fields))]
+fn create_table_artifact<'py>(
+    py: Python<'py>,
+    name: String,
+    category: String,
+    headers: &Bound<'py, PyAny>,
+    label: Option<String>,
+    fields: Option<&Bound<'py, PyDict>>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let artifact = PyDict::new(py);
+    let table = PyDict::new(py);
+    let rows = PyList::empty(py);
+
+    if let Some(fields) = fields {
+        for (key, value) in fields.iter() {
+            artifact.set_item(key, value)?;
+        }
+    }
+
+    table.set_item("name", name.as_str())?;
+    table.set_item("columns", build_table_columns(py, headers)?)?;
+    table.set_item("rows", rows)?;
+
+    artifact.set_item("kind", "custom_table")?;
+    artifact.set_item("category", normalize_custom_category(&category))?;
+    artifact.set_item("label", label.unwrap_or_else(|| name.clone()))?;
+    artifact.set_item("table", table)?;
+
+    Ok(artifact)
+}
+
+#[cfg(feature = "python-plugins")]
+#[pyfunction(signature = (table, values=None, **fields))]
+fn add_table_row<'py>(
+    py: Python<'py>,
+    table: &Bound<'py, PyDict>,
+    values: Option<&Bound<'py, PyDict>>,
+    fields: Option<&Bound<'py, PyDict>>,
+) -> PyResult<()> {
+    let table_payload = table
+        .get_item("table")?
+        .ok_or_else(|| PyRuntimeError::new_err("Table artifact is missing the 'table' object."))?;
+    let table_payload = table_payload
+        .cast::<PyDict>()
+        .map_err(|_| PyRuntimeError::new_err("Table artifact 'table' value must be a dict."))?;
+    let rows = table_payload
+        .get_item("rows")?
+        .ok_or_else(|| PyRuntimeError::new_err("Table artifact is missing table rows."))?;
+    let rows = rows
+        .cast::<PyList>()
+        .map_err(|_| PyRuntimeError::new_err("Table artifact rows must be a list."))?;
+    let row = PyDict::new(py);
+
+    if let Some(values) = values {
+        for (key, value) in values.iter() {
+            row.set_item(key, value)?;
+        }
+    }
+
+    if let Some(fields) = fields {
+        for (key, value) in fields.iter() {
+            row.set_item(key, value)?;
+        }
+    }
+
+    rows.append(row)?;
+
+    Ok(())
+}
+
+#[cfg(feature = "python-plugins")]
 #[pyfunction(signature = (artifact, file_path=None))]
 fn add_artifact(artifact: &Bound<'_, PyAny>, file_path: Option<String>) -> PyResult<()> {
     let payload = py_any_to_json(artifact)?;
@@ -904,6 +975,8 @@ fn install_cultivator_api(py: Python<'_>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(sha256, &module)?)?;
     module.add_function(wrap_pyfunction!(log, &module)?)?;
     module.add_function(wrap_pyfunction!(create_artifact, &module)?)?;
+    module.add_function(wrap_pyfunction!(create_table_artifact, &module)?)?;
+    module.add_function(wrap_pyfunction!(add_table_row, &module)?)?;
     module.add_function(wrap_pyfunction!(add_artifact, &module)?)?;
     module.add_function(wrap_pyfunction!(account, &module)?)?;
     module.add_function(wrap_pyfunction!(application, &module)?)?;
@@ -1051,6 +1124,7 @@ fn artifact_category_for_kind(kind: &str) -> Option<&'static str> {
         "note" => Some("notes"),
         "system" => Some("system"),
         "timeline_event" => Some("timeline"),
+        "custom_table" => Some("other"),
         "record" => Some("other"),
         _ => None,
     }
@@ -1097,6 +1171,122 @@ fn build_artifact_dict<'py>(
     }
 
     Ok(artifact)
+}
+
+#[cfg(feature = "python-plugins")]
+fn build_table_columns<'py>(
+    py: Python<'py>,
+    headers: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyList>> {
+    let headers = headers
+        .cast::<PyList>()
+        .map_err(|_| PyRuntimeError::new_err("Table headers must be a list."))?;
+    let columns = PyList::empty(py);
+    let mut keys = Vec::new();
+
+    for header in headers.iter() {
+        let column = PyDict::new(py);
+        let (key, label) = if let Ok(header_label) = header.extract::<String>() {
+            (table_header_key(&header_label, &mut keys), header_label)
+        } else if let Ok(header_dict) = header.cast::<PyDict>() {
+            let label = header_dict
+                .get_item("label")?
+                .and_then(|value| value.extract::<String>().ok())
+                .or_else(|| {
+                    header_dict
+                        .get_item("key")
+                        .ok()
+                        .flatten()
+                        .and_then(|value| value.extract::<String>().ok())
+                })
+                .ok_or_else(|| {
+                    PyRuntimeError::new_err("Table header dictionaries require 'label' or 'key'.")
+                })?;
+            let explicit_key = header_dict
+                .get_item("key")?
+                .and_then(|value| value.extract::<String>().ok())
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            let key = if let Some(key) = explicit_key {
+                keys.push(key.clone());
+                key
+            } else {
+                table_header_key(&label, &mut keys)
+            };
+
+            (key, label)
+        } else {
+            return Err(PyRuntimeError::new_err(
+                "Table headers must be strings or dictionaries.",
+            ));
+        };
+
+        column.set_item("key", key)?;
+        column.set_item("label", label)?;
+        columns.append(column)?;
+    }
+
+    Ok(columns)
+}
+
+#[cfg(feature = "python-plugins")]
+fn table_header_key(label: &str, existing_keys: &mut Vec<String>) -> String {
+    let mut key = String::new();
+    let mut last_was_separator = false;
+
+    for character in label.trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            key.push(character.to_ascii_lowercase());
+            last_was_separator = false;
+        } else if !last_was_separator && !key.is_empty() {
+            key.push('_');
+            last_was_separator = true;
+        }
+    }
+
+    let base_key = key.trim_matches('_');
+    let base_key = if base_key.is_empty() {
+        "column".to_string()
+    } else {
+        base_key.to_string()
+    };
+    let mut key = base_key.clone();
+    let mut suffix = 2;
+
+    while existing_keys
+        .iter()
+        .any(|existing_key| existing_key == &key)
+    {
+        key = format!("{base_key}_{suffix}");
+        suffix += 1;
+    }
+
+    existing_keys.push(key.clone());
+    key
+}
+
+#[cfg(feature = "python-plugins")]
+fn normalize_custom_category(category: &str) -> String {
+    let mut normalized = String::new();
+    let mut last_was_separator = false;
+
+    for character in category.trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character.to_ascii_lowercase());
+            last_was_separator = false;
+        } else if !last_was_separator && !normalized.is_empty() {
+            normalized.push('_');
+            last_was_separator = true;
+        }
+    }
+
+    let normalized = normalized.trim_matches('_');
+
+    if normalized.is_empty() {
+        "other".to_string()
+    } else {
+        normalized.to_string()
+    }
 }
 
 #[cfg(feature = "python-plugins")]
@@ -1568,7 +1758,7 @@ class SearchMatch(TypedDict):
     context: str
 
 # ArtifactCategory is used by UI filters and reports. Known model helpers fill
-# this automatically, so plugin authors usually only set model-specific fields.
+# this automatically. Custom table artifacts may use any lowercase category slug.
 ArtifactCategory = Literal[
     "accounts",
     "applications",
@@ -1758,6 +1948,21 @@ class GenericArtifact(BaseArtifact, total=False):
     category: Literal["other"]
     fields: dict[str, Any]
 
+class CustomTableColumn(TypedDict):
+    key: str
+    label: str
+
+class CustomTablePayload(TypedDict):
+    name: str
+    columns: list[CustomTableColumn]
+    rows: list[dict[str, Any]]
+
+class CustomTableArtifact(BaseArtifact, total=False):
+    """Plugin-defined table with custom columns and rows."""
+    kind: Literal["custom_table"]
+    category: str
+    table: CustomTablePayload
+
 Artifact = (
     AccountArtifact
     | ApplicationArtifact
@@ -1773,9 +1978,24 @@ Artifact = (
     | SystemArtifact
     | TimelineArtifact
     | GenericArtifact
+    | CustomTableArtifact
 )
 
 def create_artifact(kind: str, label: str, **fields: Any) -> dict[str, Any]: ...
+
+def create_table_artifact(
+    name: str,
+    category: str,
+    headers: list[str | CustomTableColumn],
+    label: Optional[str] = None,
+    **fields: Any,
+) -> CustomTableArtifact: ...
+
+def add_table_row(
+    table: CustomTableArtifact,
+    values: Optional[dict[str, Any]] = None,
+    **fields: Any,
+) -> None: ...
 
 def add_artifact(artifact: Artifact | dict[str, Any], file_path: Optional[str] = None) -> None: ...
 
@@ -1994,6 +2214,8 @@ context["file"]["size"]</code></pre>
           <tr><td><code>sha256(path)</code></td><td><code>str</code></td><td>Returns the SHA-256 hex digest.</td></tr>
           <tr><td><code>log(level, message)</code></td><td><code>None</code></td><td>Adds a plugin job log entry.</td></tr>
           <tr><td><code>create_artifact(kind, label, **fields)</code></td><td><code>dict</code></td><td>Creates an artifact payload dictionary for any supported or custom kind.</td></tr>
+          <tr><td><code>create_table_artifact(name, category, headers, label=None, **fields)</code></td><td><code>dict</code></td><td>Creates a custom table artifact payload with plugin-defined columns.</td></tr>
+          <tr><td><code>add_table_row(table, values=None, **fields)</code></td><td><code>None</code></td><td>Appends a row to a custom table artifact before it is added or returned.</td></tr>
           <tr><td><code>add_artifact(artifact, file_path=None)</code></td><td><code>None</code></td><td>Adds an artifact to the current plugin job results without returning it from <code>run</code>.</td></tr>
           <tr><td><code>contact(label, **fields)</code> and other model helpers</td><td><code>dict</code></td><td>Creates a typed artifact payload with <code>kind</code>, <code>category</code>, and <code>label</code>.</td></tr>
           <tr><td><code>search(query, regex=False, case_sensitive=False, binary_files=False, max_matches=None)</code></td><td><code>list[SearchMatch]</code></td><td>Searches the current datasource paths.</td></tr>
@@ -2069,6 +2291,28 @@ def run(context):
     )
 
     cultivator_api.add_artifact(artifact)
+    return None</code></pre>
+
+      <h2>Custom Table Artifacts</h2>
+      <p>Use <code>create_table_artifact</code> when a plugin needs its own table under a custom or existing category.</p>
+      <pre><code>import cultivator_api
+
+def run(context):
+    table = cultivator_api.create_table_artifact(
+        name="Parsed Chats",
+        category="messages",
+        headers=["Sender", "Recipient", "Body", "Sent At"],
+    )
+
+    cultivator_api.add_table_row(
+        table,
+        sender="Ada",
+        recipient="Grace",
+        body="hello",
+        sent_at="2026-06-23T12:00:00Z",
+    )
+
+    cultivator_api.add_artifact(table)
     return None</code></pre>
 
       <h2>Return Values</h2>

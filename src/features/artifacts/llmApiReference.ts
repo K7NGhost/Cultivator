@@ -94,6 +94,18 @@ cultivator_api.search_files(
 ) -> list[SearchMatch]
 
 cultivator_api.create_artifact(kind: str, label: str, **fields) -> dict
+cultivator_api.create_table_artifact(
+    name: str,
+    category: str,
+    headers: list[str | {"key": str, "label": str}],
+    label: str | None = None,
+    **fields,
+) -> dict
+cultivator_api.add_table_row(
+    table: dict,
+    values: dict | None = None,
+    **fields,
+) -> None
 cultivator_api.add_artifact(artifact: dict, file_path: str | None = None) -> None
 \`\`\`
 
@@ -116,6 +128,26 @@ cultivator_api.timeline_event(label, **fields)
 \`\`\`
 
 Plugins can either return one artifact dictionary, return a list of artifact dictionaries, or call add_artifact() and return None.
+
+Custom table artifacts store plugin-defined rows in one artifact. Header strings are converted to snake_case row keys; dictionary headers can provide explicit keys.
+
+\`\`\`python
+table = cultivator_api.create_table_artifact(
+    name="Parsed Chats",
+    category="messages",
+    headers=["Sender", "Recipient", "Body", "Sent At"],
+)
+
+cultivator_api.add_table_row(
+    table,
+    sender="Ada",
+    recipient="Grace",
+    body="hello",
+    sent_at="2026-06-23T12:00:00Z",
+)
+
+cultivator_api.add_artifact(table)
+\`\`\`
 
 ## Example
 
