@@ -494,12 +494,18 @@ async fn list_plugin_artifacts(
 }
 
 #[tauri::command]
+async fn list_media_gallery(case_database_path: String) -> Result<plugins::MediaGallery, String> {
+    plugins::list_media_gallery(case_database_path).await
+}
+
+#[tauri::command]
 async fn run_datasource_plugins(
     app_handle: tauri::AppHandle,
     case_database_path: String,
     case_folder_path: String,
     datasource_id: String,
     plugin_ids: Option<Vec<String>>,
+    run_id: Option<String>,
 ) -> Result<plugins::PluginRunSummary, String> {
     plugins::run_datasource_plugins(
         app_handle,
@@ -507,8 +513,14 @@ async fn run_datasource_plugins(
         case_folder_path,
         datasource_id,
         plugin_ids,
+        run_id,
     )
     .await
+}
+
+#[tauri::command]
+fn cancel_plugin_run(run_id: String) -> Result<bool, String> {
+    plugins::cancel_plugin_run(run_id)
 }
 
 #[tauri::command]
@@ -2056,7 +2068,9 @@ pub fn run() {
             delete_python_plugin,
             list_plugin_jobs,
             list_plugin_artifacts,
+            list_media_gallery,
             run_datasource_plugins,
+            cancel_plugin_run,
             create_case_workspace,
             search_files,
             cancel_search,

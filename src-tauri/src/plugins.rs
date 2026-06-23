@@ -31,25 +31,30 @@ use sqlx::{
 #[cfg(feature = "python-plugins")]
 use std::io;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
     sync::atomic::{AtomicU64, Ordering},
+    sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 #[cfg(feature = "python-plugins")]
 use std::{
     hash::{Hash, Hasher},
-    sync::{Mutex, OnceLock},
     thread::ThreadId,
 };
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
+mod builtin;
+
+pub use builtin::MediaGallery;
+
 const PYTHON_PLUGIN_RELATIVE_PATH: &[&str] = &["plugins", "python"];
 
 static NEXT_ID_SUFFIX: AtomicU64 = AtomicU64::new(1);
+static PLUGIN_CANCELLATIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 #[cfg(feature = "python-plugins")]
 static PYTHON_LOGS: OnceLock<Mutex<HashMap<u64, Vec<PendingPluginLog>>>> = OnceLock::new();
 #[cfg(feature = "python-plugins")]
@@ -552,10 +557,17 @@ fn search<'py>(
 }
 
 pub fn list_python_plugins(app_handle: AppHandle) -> Result<Vec<PythonPluginManifest>, String> {
-    Ok(load_python_plugins(&app_handle)?
-        .into_iter()
-        .map(|plugin| plugin.manifest)
-        .collect())
+    let mut plugins = vec![builtin::image_metadata_manifest()];
+
+    plugins.extend(
+        load_python_plugins(&app_handle)?
+            .into_iter()
+            .map(|plugin| plugin.manifest),
+    );
+
+    plugins.sort_by(|left, right| left.name.cmp(&right.name));
+
+    Ok(plugins)
 }
 
 pub fn python_plugin_directory(app_handle: AppHandle) -> Result<String, String> {
@@ -736,10 +748,12 @@ pub async fn list_plugin_artifacts(
             payload,
             created_at
           FROM plugin_results
+          WHERE plugin_id != $1
           ORDER BY created_at DESC
           LIMIT 5000
         "#,
     )
+    .bind(builtin::IMAGE_METADATA_PLUGIN_ID)
     .fetch_all(&pool)
     .await
     .map_err(|error| format!("Failed to list plugin artifacts: {error}"))?;
@@ -766,12 +780,61 @@ pub async fn list_plugin_artifacts(
     Ok(artifacts)
 }
 
+pub async fn list_media_gallery(
+    case_database_path: String,
+) -> Result<builtin::MediaGallery, String> {
+    let pool = open_case_database(&case_database_path).await?;
+    ensure_plugin_tables(&pool).await?;
+    let rows = sqlx::query(
+        r#"
+          SELECT payload
+          FROM media_gallery_items
+          ORDER BY media_type ASC, name ASC, path ASC
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|error| format!("Failed to list media gallery: {error}"))?;
+    let mut photos = Vec::new();
+    let mut videos = Vec::new();
+
+    for row in rows {
+        let payload_text: String = row.get("payload");
+        let item = serde_json::from_str::<builtin::MediaItem>(&payload_text)
+            .map_err(|error| format!("Failed to read media gallery item: {error}"))?;
+
+        match item.media_type {
+            builtin::MediaType::Image => photos.push(item),
+            builtin::MediaType::Video => videos.push(item),
+        }
+    }
+
+    Ok(builtin::MediaGallery {
+        photos,
+        videos,
+        scanned_files: 0,
+    })
+}
+
+pub fn cancel_plugin_run(run_id: String) -> Result<bool, String> {
+    let run_id = run_id.trim();
+
+    if run_id.is_empty() {
+        return Err("Plugin run id is required.".to_string());
+    }
+
+    request_plugin_run_cancellation(run_id)?;
+
+    Ok(true)
+}
+
 pub async fn run_datasource_plugins(
     app_handle: AppHandle,
     case_database_path: String,
     case_folder_path: String,
     datasource_id: String,
     plugin_ids: Option<Vec<String>>,
+    run_id: Option<String>,
 ) -> Result<PluginRunSummary, String> {
     let pool = open_case_database(&case_database_path).await?;
 
@@ -786,6 +849,54 @@ pub async fn run_datasource_plugins(
     let mut jobs = Vec::new();
 
     for plugin_id in &requested_plugin_ids {
+        if is_plugin_run_cancelled(run_id.as_deref())? {
+            break;
+        }
+
+        if plugin_id == builtin::IMAGE_METADATA_PLUGIN_ID {
+            let job =
+                create_plugin_job(&pool, &datasource, builtin::IMAGE_METADATA_PLUGIN_ID).await?;
+            let execution_paths = datasource.paths.clone();
+
+            let output = tauri::async_runtime::spawn_blocking(move || {
+                builtin::execute_image_metadata(execution_paths)
+            })
+            .await
+            .map_err(|error| format!("Built-in plugin worker failed: {error}"))?;
+
+            match output {
+                Ok(gallery) => {
+                    if is_plugin_run_cancelled(run_id.as_deref())? {
+                        fail_plugin_job(&pool, &job.id, "Plugin run cancelled.").await?;
+                        jobs.push(load_plugin_job(&pool, &job.id).await?);
+                        continue;
+                    }
+
+                    let mut logs = Vec::new();
+                    let matched_files = (gallery.photos.len() + gallery.videos.len()) as u64;
+
+                    logs.push(PendingPluginLog {
+                        level: "info".to_string(),
+                        message: format!(
+                            "Scanned {} files and found {} media files.",
+                            gallery.scanned_files, matched_files
+                        ),
+                    });
+
+                    insert_plugin_logs(&pool, &job.id, builtin::IMAGE_METADATA_PLUGIN_ID, &logs)
+                        .await?;
+                    replace_media_gallery_items(&pool, &job.id, &datasource.id, &gallery).await?;
+                    complete_plugin_job(&pool, &job.id).await?;
+                }
+                Err(message) => {
+                    fail_plugin_job(&pool, &job.id, &message).await?;
+                }
+            }
+
+            jobs.push(load_plugin_job(&pool, &job.id).await?);
+            continue;
+        }
+
         let Some(plugin) = plugin_map.get(plugin_id).cloned() else {
             let job = create_plugin_job(&pool, &datasource, plugin_id).await?;
             let message = format!("Plugin '{plugin_id}' was selected but is not installed.");
@@ -800,6 +911,7 @@ pub async fn run_datasource_plugins(
         let execution_datasource = datasource.clone();
         let execution_case_database_path = case_database_path.clone();
         let execution_case_folder_path = case_folder_path.clone();
+        let execution_run_id = run_id.clone();
 
         let output = tauri::async_runtime::spawn_blocking(move || {
             execute_python_plugin(
@@ -807,6 +919,7 @@ pub async fn run_datasource_plugins(
                 &execution_datasource,
                 &execution_case_database_path,
                 &execution_case_folder_path,
+                execution_run_id.as_deref(),
             )
         })
         .await
@@ -843,6 +956,8 @@ pub async fn run_datasource_plugins(
         jobs.push(load_plugin_job(&pool, &job.id).await?);
     }
 
+    clear_plugin_run_cancellation(run_id.as_deref())?;
+
     Ok(PluginRunSummary {
         datasource_id,
         jobs,
@@ -855,6 +970,7 @@ fn execute_python_plugin(
     datasource: &DatasourceForPlugins,
     case_database_path: &str,
     case_folder_path: &str,
+    run_id: Option<&str>,
 ) -> Result<PluginExecutionOutput, String> {
     let target_files = enumerate_plugin_target_files(plugin, datasource)?;
     let matched_files = target_files.len() as u64;
@@ -873,6 +989,10 @@ fn execute_python_plugin(
         let function = module.getattr(plugin.manifest.function.as_str())?;
 
         for target_file in &target_files {
+            if is_plugin_run_cancelled(run_id).map_err(PyRuntimeError::new_err)? {
+                return Err(PyRuntimeError::new_err("Plugin run cancelled."));
+            }
+
             let context = build_plugin_context(
                 py,
                 case_database_path,
@@ -883,6 +1003,10 @@ fn execute_python_plugin(
             )?;
             let result = function.call1((context,))?;
             records.extend(normalize_python_result(&result, &target_file.path)?);
+
+            if is_plugin_run_cancelled(run_id).map_err(PyRuntimeError::new_err)? {
+                return Err(PyRuntimeError::new_err("Plugin run cancelled."));
+            }
         }
 
         Ok(())
@@ -914,6 +1038,7 @@ fn execute_python_plugin(
     _datasource: &DatasourceForPlugins,
     _case_database_path: &str,
     _case_folder_path: &str,
+    _run_id: Option<&str>,
 ) -> Result<PluginExecutionOutput, String> {
     Err(
         "Python plugin runtime is not enabled in this build. Run Tauri with the Cargo feature `python-plugins`, for example `bun run tauri:python`."
@@ -2577,6 +2702,27 @@ async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
     .await
     .map_err(|error| format!("Failed to create plugin_logs table: {error}"))?;
 
+    sqlx::query(
+        r#"
+          CREATE TABLE IF NOT EXISTS media_gallery_items (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            datasource_id TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            path TEXT NOT NULL,
+            name TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(datasource_id, path),
+            FOREIGN KEY (job_id) REFERENCES plugin_jobs (id)
+              ON DELETE CASCADE
+          )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| format!("Failed to create media_gallery_items table: {error}"))?;
+
     Ok(())
 }
 
@@ -2803,6 +2949,111 @@ async fn insert_plugin_results(
         .await
         .map_err(|error| format!("Failed to insert plugin result: {error}"))?;
     }
+
+    Ok(())
+}
+
+async fn replace_media_gallery_items(
+    pool: &SqlitePool,
+    job_id: &str,
+    datasource_id: &str,
+    gallery: &builtin::MediaGallery,
+) -> Result<(), String> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| format!("Failed to start media gallery update: {error}"))?;
+
+    sqlx::query(
+        r#"
+          DELETE FROM media_gallery_items
+          WHERE datasource_id = $1
+        "#,
+    )
+    .bind(datasource_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to clear media gallery items: {error}"))?;
+
+    let updated_at = now_iso_like();
+
+    for item in gallery.photos.iter().chain(gallery.videos.iter()) {
+        let media_type = match item.media_type {
+            builtin::MediaType::Image => "image",
+            builtin::MediaType::Video => "video",
+        };
+        let payload = serde_json::to_string(item)
+            .map_err(|error| format!("Failed to serialize media gallery item: {error}"))?;
+
+        sqlx::query(
+            r#"
+              INSERT INTO media_gallery_items (
+                id,
+                job_id,
+                datasource_id,
+                media_type,
+                path,
+                name,
+                payload,
+                updated_at
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(create_id("media-item"))
+        .bind(job_id)
+        .bind(datasource_id)
+        .bind(media_type)
+        .bind(&item.path)
+        .bind(&item.name)
+        .bind(payload)
+        .bind(&updated_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("Failed to insert media gallery item: {error}"))?;
+    }
+
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Failed to finish media gallery update: {error}"))?;
+
+    Ok(())
+}
+
+fn request_plugin_run_cancellation(run_id: &str) -> Result<(), String> {
+    let cancellations = PLUGIN_CANCELLATIONS.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut cancellations = cancellations
+        .lock()
+        .map_err(|_| "Plugin cancellation registry is poisoned.".to_string())?;
+
+    cancellations.insert(run_id.to_string());
+
+    Ok(())
+}
+
+fn is_plugin_run_cancelled(run_id: Option<&str>) -> Result<bool, String> {
+    let Some(run_id) = run_id else {
+        return Ok(false);
+    };
+    let cancellations = PLUGIN_CANCELLATIONS.get_or_init(|| Mutex::new(HashSet::new()));
+    let cancellations = cancellations
+        .lock()
+        .map_err(|_| "Plugin cancellation registry is poisoned.".to_string())?;
+
+    Ok(cancellations.contains(run_id))
+}
+
+fn clear_plugin_run_cancellation(run_id: Option<&str>) -> Result<(), String> {
+    let Some(run_id) = run_id else {
+        return Ok(());
+    };
+    let cancellations = PLUGIN_CANCELLATIONS.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut cancellations = cancellations
+        .lock()
+        .map_err(|_| "Plugin cancellation registry is poisoned.".to_string())?;
+
+    cancellations.remove(run_id);
 
     Ok(())
 }

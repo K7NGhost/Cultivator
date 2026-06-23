@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { CheckCircle2, Files, FolderOpen, X } from "lucide-react";
+import { CheckCircle2, Files, FolderOpen, Play, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -30,11 +30,23 @@ import { Separator } from "@/components/ui/separator";
 import type { CaseRecord } from "@/features/cases/types";
 import { createDataSource } from "@/features/datasources/dataSourceRepository";
 import type {
+  DataSourceRecord,
   DataSourcePlugin,
   DataSourcePluginType,
   DataSourceType,
 } from "@/features/datasources/types";
-import { listPythonPlugins } from "@/features/plugins/pluginRepository";
+import {
+  cancelDatasourcePluginRun,
+  listPythonPlugins,
+  runDatasourcePlugins,
+} from "@/features/plugins/pluginRepository";
+import {
+  createPluginRunId,
+  showPluginRunFailedToast,
+  showPluginRunFinishedToasts,
+  showPluginRunStartedToast,
+} from "@/features/plugins/pluginToasts";
+import type { PythonPlugin } from "@/features/plugins/types";
 import { cn } from "@/lib/utils";
 
 type DataSourceWizardDialogProps = {
@@ -114,6 +126,46 @@ function getPluginTypeLabel(type: DataSourcePluginType) {
   );
 }
 
+function runDatasourcePluginsInBackground(input: {
+  activeCase: CaseRecord;
+  datasource: DataSourceRecord;
+  pluginMap: Map<string, PythonPlugin>;
+}) {
+  const runId = createPluginRunId();
+  const toastId = showPluginRunStartedToast({
+    datasourceName: input.datasource.name,
+    onCancel: async () => {
+      await cancelDatasourcePluginRun(runId);
+    },
+    pluginCount: input.datasource.pluginIds.length,
+    runId,
+  });
+
+  void runDatasourcePlugins({
+    caseDatabasePath: input.activeCase.databasePath,
+    caseFolderPath: input.activeCase.folderPath,
+    datasourceId: input.datasource.id,
+    runId,
+  })
+    .then((summary) => {
+      showPluginRunFinishedToasts({
+        datasourceName: input.datasource.name,
+        pluginMap: input.pluginMap,
+        runId,
+        summary,
+        toastId,
+      });
+    })
+    .catch((caughtError: unknown) => {
+      showPluginRunFailedToast({
+        datasourceName: input.datasource.name,
+        error: caughtError,
+        runId,
+        toastId,
+      });
+    });
+}
+
 export function DataSourceWizardDialog({
   activeCase,
   open: isOpen,
@@ -165,6 +217,10 @@ export function DataSourceWizardDialog({
     availablePlugins.find((plugin) => plugin.id === activePluginId) ??
     visiblePlugins[0] ??
     null;
+  const pluginMap = useMemo(
+    () => new Map(availablePlugins.map((plugin) => [plugin.id, plugin])),
+    [availablePlugins],
+  );
   const canContinue =
     (step === 1 && name.trim().length > 0) ||
     step === 2 ||
@@ -312,7 +368,7 @@ export function DataSourceWizardDialog({
     setIsSaving(true);
 
     try {
-      await createDataSource({
+      const createdDatasource = await createDataSource({
         caseDatabasePath: activeCase.databasePath,
         caseId: activeCase.id,
         name,
@@ -320,8 +376,19 @@ export function DataSourceWizardDialog({
         paths,
         plugins: selectedPlugins,
       });
+      const activeCaseSnapshot = activeCase;
+      const pluginMapSnapshot = new Map(pluginMap);
+
       resetWizard();
       onOpenChange(false);
+
+      if (createdDatasource.pluginIds.length > 0) {
+        runDatasourcePluginsInBackground({
+          activeCase: activeCaseSnapshot,
+          datasource: createdDatasource,
+          pluginMap: pluginMapSnapshot,
+        });
+      }
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -720,8 +787,16 @@ export function DataSourceWizardDialog({
                 void finishWizard();
               }}
             >
-              <CheckCircle2 className="size-3.5" aria-hidden="true" />
-              {isSaving ? "Adding..." : "Finish"}
+              {selectedPlugins.length > 0 ? (
+                <Play className="size-3.5" aria-hidden="true" />
+              ) : (
+                <CheckCircle2 className="size-3.5" aria-hidden="true" />
+              )}
+              {isSaving
+                ? "Adding..."
+                : selectedPlugins.length > 0
+                  ? "Add & run plugins"
+                  : "Add datasource"}
             </Button>
           )}
         </DialogFooter>

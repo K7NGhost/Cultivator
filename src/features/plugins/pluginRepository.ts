@@ -50,6 +50,11 @@ export async function runDatasourcePlugins(input: {
   caseFolderPath: string;
   datasourceId: string;
   pluginIds?: string[];
+  runId?: string;
 }): Promise<PluginRunSummary> {
   return invoke<PluginRunSummary>("run_datasource_plugins", input);
+}
+
+export async function cancelDatasourcePluginRun(runId: string): Promise<boolean> {
+  return invoke<boolean>("cancel_plugin_run", { runId });
 }

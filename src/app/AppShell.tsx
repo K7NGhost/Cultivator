@@ -16,6 +16,7 @@ import { CasePage } from "@/features/cases/CasePage";
 import { CaseProvider, useCases } from "@/features/cases/case-provider";
 import { EvidenceProvider } from "@/features/evidence/evidence-provider";
 import { FilesPage } from "@/features/files/FilesPage";
+import { MediaPage } from "@/features/media/MediaPage";
 import { PluginsPage } from "@/features/plugins/PluginsPage";
 import { SearchPage } from "@/features/search/SearchPage";
 import { PlaceholderPage } from "@/features/workspace/PlaceholderPage";
@@ -32,6 +33,10 @@ const workspaceRoutes = [
   {
     path: "/search",
     element: <SearchPage />,
+  },
+  {
+    path: "/media",
+    element: <MediaPage />,
   },
   {
     path: "/plugins",

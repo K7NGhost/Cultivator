@@ -42,10 +42,12 @@ import {
 } from "@/features/files/components/FilePreviewViewer";
 import { FileTreeViewer } from "@/features/files/components/FileTreeViewer";
 import {
+  cancelDatasourcePluginRun,
   listPythonPlugins,
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
 import {
+  createPluginRunId,
   showPluginRunFailedToast,
   showPluginRunFinishedToasts,
   showPluginRunStartedToast,
@@ -508,9 +510,14 @@ export function FilesPage() {
 
     setIsRunningPlugins(true);
     setDataSourceError(null);
+    const runId = createPluginRunId();
     const toastId = showPluginRunStartedToast({
       datasourceName: pluginRunDataSource.name,
+      onCancel: async () => {
+        await cancelDatasourcePluginRun(runId);
+      },
       pluginCount: selectedRunPluginIds.length,
+      runId,
     });
 
     try {
@@ -519,10 +526,12 @@ export function FilesPage() {
         caseFolderPath: activeCase.folderPath,
         datasourceId: pluginRunDataSource.id,
         pluginIds: selectedRunPluginIds,
+        runId,
       });
       showPluginRunFinishedToasts({
         datasourceName: pluginRunDataSource.name,
         pluginMap,
+        runId,
         summary,
         toastId,
       });
@@ -531,6 +540,7 @@ export function FilesPage() {
       showPluginRunFailedToast({
         datasourceName: pluginRunDataSource.name,
         error: caughtError,
+        runId,
         toastId,
       });
       setDataSourceError(

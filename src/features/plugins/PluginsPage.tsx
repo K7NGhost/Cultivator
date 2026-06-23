@@ -34,6 +34,7 @@ import { useCases } from "@/features/cases/case-provider";
 import { listDataSources } from "@/features/datasources/dataSourceRepository";
 import type { DataSourceRecord } from "@/features/datasources/types";
 import {
+  cancelDatasourcePluginRun,
   createPythonPlugin,
   deletePythonPlugin,
   listPluginJobs,
@@ -42,6 +43,7 @@ import {
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
 import {
+  createPluginRunId,
   showPluginRunFailedToast,
   showPluginRunFinishedToasts,
   showPluginRunStartedToast,
@@ -159,9 +161,14 @@ export function PluginsPage() {
 
     setRunningDatasourceId(datasource.id);
     setLoadState((currentState) => ({ ...currentState, error: null }));
+    const runId = createPluginRunId();
     const toastId = showPluginRunStartedToast({
       datasourceName: datasource.name,
+      onCancel: async () => {
+        await cancelDatasourcePluginRun(runId);
+      },
       pluginCount: datasource.pluginIds.length,
+      runId,
     });
 
     try {
@@ -169,10 +176,12 @@ export function PluginsPage() {
         caseDatabasePath: activeCase.databasePath,
         caseFolderPath: activeCase.folderPath,
         datasourceId: datasource.id,
+        runId,
       });
       showPluginRunFinishedToasts({
         datasourceName: datasource.name,
         pluginMap,
+        runId,
         summary,
         toastId,
       });
@@ -181,6 +190,7 @@ export function PluginsPage() {
       showPluginRunFailedToast({
         datasourceName: datasource.name,
         error: caughtError,
+        runId,
         toastId,
       });
       setLoadState({
@@ -369,6 +379,7 @@ export function PluginsPage() {
             <TableBody>
               {plugins.map((plugin) => {
                 const isDeleting = deletingPluginId === plugin.id;
+                const isBuiltIn = plugin.entry.startsWith("builtin:");
 
                 return (
                   <TableRow key={plugin.id} className="h-8">
@@ -400,13 +411,13 @@ export function PluginsPage() {
                         variant="ghost"
                         size="xs"
                         className="h-7 rounded-sm px-2 text-xs text-destructive hover:text-destructive"
-                        disabled={isDeleting}
+                        disabled={isDeleting || isBuiltIn}
                         onClick={() => {
                           void deletePlugin(plugin);
                         }}
                       >
                         <Trash2 className="size-3.5" aria-hidden="true" />
-                        {isDeleting ? "Deleting" : "Delete"}
+                        {isBuiltIn ? "Built-in" : isDeleting ? "Deleting" : "Delete"}
                       </Button>
                     </TableCell>
                   </TableRow>
