@@ -135,16 +135,15 @@ type TextPreviewListProps = {
 
 type SearchFileMatchListProps = {
   fileMatches: FileMatch[];
-  height: number;
   isSearching: boolean;
   onSelectMatch: (match: SearchMatch) => void;
   selectedPath: string | null;
-  width: number;
 };
 
 const SEARCH_UI_MATCH_FLUSH_INTERVAL_MS = 100;
 const FILE_MATCH_HEADER_HEIGHT = 28;
 const FILE_MATCH_ROW_HEIGHT = 32;
+const FILE_MATCH_GRID_COLUMNS = "minmax(0,1fr) 4.75rem 4.25rem 4.5rem";
 
 function parsePreviewLine(line: string): ParsedPreviewLine {
   const match = line.match(/^(\s*\d+)(?::|\s)(.*)$/s);
@@ -243,43 +242,44 @@ function TextPreviewList({
 
 function SearchFileMatchList({
   fileMatches,
-  height,
   isSearching,
   onSelectMatch,
   selectedPath,
-  width,
 }: SearchFileMatchListProps) {
-  const bodyHeight = Math.max(height - FILE_MATCH_HEADER_HEIGHT, 0);
-
   return (
-    <div className="grid h-full min-h-0 grid-rows-[28px_minmax(0,1fr)] text-xs">
-      <div className="grid grid-cols-[minmax(0,52%)_18%_15%_15%] border-b bg-muted text-[11px] font-medium text-muted-foreground">
-        <div className="flex h-7 items-center px-2">File</div>
-        <div className="flex h-7 items-center px-2">Lines</div>
-        <div className="flex h-7 items-center px-2">Type</div>
-        <div className="flex h-7 items-center px-2">Action</div>
+    <div
+      className="grid h-full min-h-0 w-full overflow-hidden text-xs"
+      style={{
+        gridTemplateRows: `${FILE_MATCH_HEADER_HEIGHT}px minmax(0, 1fr)`,
+      }}
+    >
+      <div
+        className="grid w-full border-b bg-muted text-[11px] font-medium text-muted-foreground"
+        style={{ gridTemplateColumns: FILE_MATCH_GRID_COLUMNS }}
+      >
+        <div className="flex h-7 min-w-0 items-center px-2">File</div>
+        <div className="flex h-7 min-w-0 items-center px-2">Lines</div>
+        <div className="flex h-7 min-w-0 items-center px-2">Type</div>
+        <div className="flex h-7 min-w-0 items-center px-2">Action</div>
       </div>
 
-      <div className="min-h-0">
+      <div className="min-h-0 w-full overflow-auto">
         {fileMatches.length > 0 ? (
-          <List
-            width={width}
-            height={bodyHeight}
-            rowCount={fileMatches.length}
-            rowHeight={FILE_MATCH_ROW_HEIGHT}
-            overscanRowCount={8}
-            rowRenderer={({ index, key, style }: ListRowProps) => {
-              const { match, matchedLines } = fileMatches[index];
+          <div className="min-w-full">
+            {fileMatches.map(({ match, matchedLines }) => {
               const isSelected = selectedPath === match.path;
 
               return (
                 <div
-                  key={key}
-                  style={style}
+                  key={match.path}
                   className={cn(
-                    "grid cursor-default grid-cols-[minmax(0,52%)_18%_15%_15%] border-b text-xs",
+                    "grid cursor-default border-b text-xs",
                     isSelected && "bg-muted",
                   )}
+                  style={{
+                    gridTemplateColumns: FILE_MATCH_GRID_COLUMNS,
+                    minHeight: FILE_MATCH_ROW_HEIGHT,
+                  }}
                   onClick={() => onSelectMatch(match)}
                   onDoubleClick={() => onSelectMatch(match)}
                 >
@@ -325,8 +325,8 @@ function SearchFileMatchList({
                   </div>
                 </div>
               );
-            }}
-          />
+            })}
+          </div>
         ) : (
           <div className="flex h-24 items-center justify-center px-2 text-center text-xs text-muted-foreground">
             {isSearching ? "Searching..." : "Run search to show matches."}
@@ -398,6 +398,7 @@ export function SearchPage() {
   const [isSearching, setIsSearching] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isPaneResizing, setIsPaneResizing] = useState(false);
   const [elapsedMs, setElapsedMs] = useState<number | null>(null);
   const [scannedFiles, setScannedFiles] = useState<number | null>(null);
   const [totalFiles, setTotalFiles] = useState<number | null>(null);
@@ -425,6 +426,7 @@ export function SearchPage() {
   const matchCountRef = useRef(0);
   const matchedLineCountRef = useRef(0);
   const matchFlushTimer = useRef<number | null>(null);
+  const paneResizeEndTimer = useRef<number | null>(null);
   const searchScopes = useMemo<SearchScope[]>(() => {
     const scopes: SearchScope[] = dataSources.map((dataSource) => ({
       id: `datasource:${dataSource.id}`,
@@ -536,6 +538,37 @@ export function SearchPage() {
     }
 
     pendingStreamedSummaries.current = [];
+  }
+
+  function endPaneResizeSoon() {
+    if (paneResizeEndTimer.current !== null) {
+      window.clearTimeout(paneResizeEndTimer.current);
+    }
+
+    paneResizeEndTimer.current = window.setTimeout(() => {
+      paneResizeEndTimer.current = null;
+      setIsPaneResizing(false);
+    }, 80);
+  }
+
+  function beginPaneResize() {
+    if (paneResizeEndTimer.current !== null) {
+      window.clearTimeout(paneResizeEndTimer.current);
+      paneResizeEndTimer.current = null;
+    }
+
+    setIsPaneResizing(true);
+
+    const finishResize = () => {
+      window.removeEventListener("pointerup", finishResize);
+      window.removeEventListener("pointercancel", finishResize);
+      window.removeEventListener("blur", finishResize);
+      endPaneResizeSoon();
+    };
+
+    window.addEventListener("pointerup", finishResize);
+    window.addEventListener("pointercancel", finishResize);
+    window.addEventListener("blur", finishResize);
   }
 
   function getPreviewLineMatches(path: string | null) {
@@ -1045,6 +1078,14 @@ export function SearchPage() {
   }, [isSearching]);
 
   useEffect(() => {
+    return () => {
+      if (paneResizeEndTimer.current !== null) {
+        window.clearTimeout(paneResizeEndTimer.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!selectedMatch) {
       setTextPreview([]);
       setHexPreview([]);
@@ -1256,39 +1297,45 @@ export function SearchPage() {
       <ResizablePanelGroup
         orientation="horizontal"
         className="min-h-0 min-w-0 flex-1"
+        onLayoutChanged={endPaneResizeSoon}
       >
         <ResizablePanel defaultSize="36%" minSize="22%">
           <section
             className="h-full min-h-0 min-w-0 overflow-hidden border-r"
             aria-label="Search matches"
           >
-            <AutoSizer>
-              {({ height, width }) => (
-                <SearchFileMatchList
-                  fileMatches={fileMatches}
-                  height={height}
-                  isSearching={isSearching}
-                  onSelectMatch={selectMatch}
-                  selectedPath={selectedMatch?.path ?? null}
-                  width={width}
-                />
-              )}
-            </AutoSizer>
+            {isPaneResizing ? (
+              <div className="flex h-full items-center justify-center px-2 text-xs text-muted-foreground">
+                {fileMatches.length.toLocaleString()} matched files
+              </div>
+            ) : (
+              <SearchFileMatchList
+                fileMatches={fileMatches}
+                isSearching={isSearching}
+                onSelectMatch={selectMatch}
+                selectedPath={selectedMatch?.path ?? null}
+              />
+            )}
           </section>
         </ResizablePanel>
 
-        <ResizableHandle withHandle />
+        <ResizableHandle withHandle onPointerDown={beginPaneResize} />
 
         <ResizablePanel defaultSize="64%" minSize="34%">
           <section
             className="h-full min-h-0 min-w-0 overflow-hidden"
             aria-label="File preview"
           >
-            <Tabs
-              value={previewTab}
-              onValueChange={setPreviewTab}
-              className="flex h-full min-h-0 min-w-0 flex-col gap-0"
-            >
+            {isPaneResizing ? (
+              <div className="flex h-full items-center justify-center px-2 text-xs text-muted-foreground">
+                Preview paused while resizing
+              </div>
+            ) : (
+              <Tabs
+                value={previewTab}
+                onValueChange={setPreviewTab}
+                className="flex h-full min-h-0 min-w-0 flex-col gap-0"
+              >
             <div className="flex h-8 items-center justify-between border-b px-2">
               <div className="flex min-w-0 items-center gap-2 text-xs">
                 <span className="font-medium">Preview: </span>
@@ -1411,6 +1458,7 @@ export function SearchPage() {
               </ScrollArea>
             </TabsContent>
           </Tabs>
+            )}
         </section>
         </ResizablePanel>
       </ResizablePanelGroup>
