@@ -14,7 +14,7 @@ export type DataSourcePlugin = {
   description: string;
   type: DataSourcePluginType;
   mode: "each_file" | "path_glob" | "path_regex";
-  pathGlob?: string;
+  pathGlob?: string | string[];
   pathRegex?: string;
   entry: string;
   function: string;

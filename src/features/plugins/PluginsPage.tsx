@@ -20,6 +20,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { Separator } from "@/components/ui/separator";
 import {
   Table,
@@ -38,22 +43,29 @@ import {
   createPythonPlugin,
   deletePythonPlugin,
   listPluginJobs,
+  listPluginLogs,
   listPythonPlugins,
   openPythonPluginFolder,
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
-import {
-  createPluginRunId,
-  showPluginRunFailedToast,
-  showPluginRunFinishedToasts,
-  showPluginRunStartedToast,
-} from "@/features/plugins/pluginToasts";
-import type { PluginJobRecord, PythonPlugin } from "@/features/plugins/types";
+import { createPluginRunId } from "@/features/plugins/pluginToasts";
+import type {
+  PluginJobRecord,
+  PluginLogRecord,
+  PythonPlugin,
+} from "@/features/plugins/types";
 import { cn } from "@/lib/utils";
 
 type LoadState = {
   error: string | null;
   isLoading: boolean;
+};
+
+type ActivePluginRun = {
+  datasourceId: string;
+  pluginIds: string[];
+  runId: string;
+  status: "running" | "cancelling";
 };
 
 function getErrorMessage(caughtError: unknown) {
@@ -99,8 +111,35 @@ function getLatestDatasourceJob(
   return jobs.find((job) => job.datasourceId === datasourceId) ?? null;
 }
 
+function getLatestPluginJob(
+  jobs: PluginJobRecord[],
+  datasourceId: string,
+  pluginId: string,
+) {
+  return (
+    jobs.find(
+      (job) => job.datasourceId === datasourceId && job.pluginId === pluginId,
+    ) ?? null
+  );
+}
+
 function getPluginLabel(pluginMap: Map<string, PythonPlugin>, pluginId: string) {
   return pluginMap.get(pluginId)?.name ?? pluginId;
+}
+
+function mergePluginJobs(
+  currentJobs: PluginJobRecord[],
+  nextJobs: PluginJobRecord[],
+) {
+  const jobsById = new Map(currentJobs.map((job) => [job.id, job]));
+
+  for (const job of nextJobs) {
+    jobsById.set(job.id, job);
+  }
+
+  return Array.from(jobsById.values()).sort((firstJob, secondJob) =>
+    secondJob.startedAt.localeCompare(firstJob.startedAt),
+  );
 }
 
 export function PluginsPage() {
@@ -108,9 +147,8 @@ export function PluginsPage() {
   const [datasources, setDatasources] = useState<DataSourceRecord[]>([]);
   const [plugins, setPlugins] = useState<PythonPlugin[]>([]);
   const [jobs, setJobs] = useState<PluginJobRecord[]>([]);
-  const [runningDatasourceId, setRunningDatasourceId] = useState<string | null>(
-    null,
-  );
+  const [logs, setLogs] = useState<PluginLogRecord[]>([]);
+  const [activeRuns, setActiveRuns] = useState<ActivePluginRun[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [newPluginName, setNewPluginName] = useState("");
   const [creatingPlugin, setCreatingPlugin] = useState(false);
@@ -123,28 +161,71 @@ export function PluginsPage() {
   const pluginMap = useMemo(() => {
     return new Map(plugins.map((plugin) => [plugin.id, plugin]));
   }, [plugins]);
+  const datasourceMap = useMemo(() => {
+    return new Map(datasources.map((datasource) => [datasource.id, datasource]));
+  }, [datasources]);
+  const runningPluginRows = useMemo(() => {
+    const activeRows = activeRuns.flatMap((run) =>
+      run.pluginIds.map((pluginId) => {
+        const job = getLatestPluginJob(jobs, run.datasourceId, pluginId);
 
-  async function refreshPluginsPage() {
+        return {
+          datasource: datasourceMap.get(run.datasourceId) ?? null,
+          job,
+          pluginId,
+          run,
+        };
+      }),
+    );
+    const activeJobIds = new Set(
+      activeRows
+        .map((row) => row.job?.id)
+        .filter((jobId): jobId is string => Boolean(jobId)),
+    );
+    const backendRows = jobs
+      .filter((job) => job.status === "running" && !activeJobIds.has(job.id))
+      .map((job) => ({
+        datasource: datasourceMap.get(job.datasourceId) ?? null,
+        job,
+        pluginId: job.pluginId,
+        run: activeRuns.find(
+          (activeRun) =>
+            activeRun.datasourceId === job.datasourceId &&
+            activeRun.pluginIds.includes(job.pluginId),
+        ) ?? null,
+      }));
+
+    return [...activeRows, ...backendRows];
+  }, [activeRuns, datasourceMap, jobs]);
+
+  async function refreshPluginsPage(options: { showLoading?: boolean } = {}) {
+    const showLoading = options.showLoading ?? true;
+
     if (!activeCase) {
       setDatasources([]);
       setPlugins([]);
       setJobs([]);
+      setLogs([]);
       setLoadState({ error: null, isLoading: false });
       return;
     }
 
-    setLoadState({ error: null, isLoading: true });
+    if (showLoading) {
+      setLoadState({ error: null, isLoading: true });
+    }
 
     try {
-      const [nextDatasources, nextPlugins, nextJobs] = await Promise.all([
+      const [nextDatasources, nextPlugins, nextJobs, nextLogs] = await Promise.all([
         listDataSources(activeCase.databasePath, activeCase.id),
         listPythonPlugins(),
         listPluginJobs(activeCase.databasePath),
+        listPluginLogs(activeCase.databasePath),
       ]);
 
       setDatasources(nextDatasources);
       setPlugins(nextPlugins);
       setJobs(nextJobs);
+      setLogs(nextLogs);
       setLoadState({ error: null, isLoading: false });
     } catch (caughtError) {
       setLoadState({
@@ -159,17 +240,16 @@ export function PluginsPage() {
       return;
     }
 
-    setRunningDatasourceId(datasource.id);
     setLoadState((currentState) => ({ ...currentState, error: null }));
     const runId = createPluginRunId();
-    const toastId = showPluginRunStartedToast({
-      datasourceName: datasource.name,
-      onCancel: async () => {
-        await cancelDatasourcePluginRun(runId);
-      },
-      pluginCount: datasource.pluginIds.length,
+    const activeRun: ActivePluginRun = {
+      datasourceId: datasource.id,
+      pluginIds: datasource.pluginIds,
       runId,
-    });
+      status: "running",
+    };
+
+    setActiveRuns((currentRuns) => [...currentRuns, activeRun]);
 
     try {
       const summary = await runDatasourcePlugins({
@@ -178,27 +258,39 @@ export function PluginsPage() {
         datasourceId: datasource.id,
         runId,
       });
-      showPluginRunFinishedToasts({
-        datasourceName: datasource.name,
-        pluginMap,
-        runId,
-        summary,
-        toastId,
-      });
+      setJobs((currentJobs) => mergePluginJobs(currentJobs, summary.jobs));
       await refreshPluginsPage();
     } catch (caughtError) {
-      showPluginRunFailedToast({
-        datasourceName: datasource.name,
-        error: caughtError,
-        runId,
-        toastId,
-      });
       setLoadState({
         error: getErrorMessage(caughtError),
         isLoading: false,
       });
     } finally {
-      setRunningDatasourceId(null);
+      setActiveRuns((currentRuns) =>
+        currentRuns.filter((currentRun) => currentRun.runId !== runId),
+      );
+    }
+  }
+
+  async function cancelPluginRun(runId: string) {
+    setActiveRuns((currentRuns) =>
+      currentRuns.map((run) =>
+        run.runId === runId ? { ...run, status: "cancelling" } : run,
+      ),
+    );
+
+    try {
+      await cancelDatasourcePluginRun(runId);
+    } catch (caughtError) {
+      setLoadState({
+        error: getErrorMessage(caughtError),
+        isLoading: false,
+      });
+      setActiveRuns((currentRuns) =>
+        currentRuns.map((run) =>
+          run.runId === runId ? { ...run, status: "running" } : run,
+        ),
+      );
     }
   }
 
@@ -285,6 +377,18 @@ export function PluginsPage() {
     void refreshPluginsPage();
   }, [activeCase?.id]);
 
+  useEffect(() => {
+    if (!activeCase) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshPluginsPage({ showLoading: false });
+    }, 2000);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeCase?.id]);
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <section className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
@@ -352,230 +456,393 @@ export function PluginsPage() {
         </section>
       )}
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem]">
-        <section className="flex min-h-0 min-w-0 flex-col border-r">
-          <div className="flex h-8 shrink-0 items-center justify-between border-b px-2">
-            <div className="text-xs font-medium uppercase text-muted-foreground">
-              Installed Plugins
-            </div>
-            <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
-              {plugins.length}
-            </Badge>
-          </div>
-
-          <Table
-            containerClassName="max-h-56 shrink-0 overflow-auto border-b"
-            className="min-w-[760px] table-fixed text-xs"
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 min-w-0 flex-1"
+      >
+        <ResizablePanel
+          defaultSize="50%"
+          minSize="24%"
+          className="min-h-0 min-w-0 overflow-hidden"
+        >
+          <ResizablePanelGroup
+            orientation="vertical"
+            className="h-full min-h-0 min-w-0"
           >
-            <TableHeader className="sticky top-0 z-10 bg-muted">
-              <TableRow className="hover:bg-muted">
-                <TableHead className="h-7 w-[190px] px-2">Plugin</TableHead>
-                <TableHead className="h-7 w-[110px] px-2">Mode</TableHead>
-                <TableHead className="h-7 w-[260px] px-2">Description</TableHead>
-                <TableHead className="h-7 w-[110px] px-2">Entry</TableHead>
-                <TableHead className="h-7 w-[90px] px-2">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {plugins.map((plugin) => {
-                const isDeleting = deletingPluginId === plugin.id;
-                const isBuiltIn = plugin.entry.startsWith("builtin:");
-
-                return (
-                  <TableRow key={plugin.id} className="h-8">
-                    <TableCell className="h-8 px-2 py-0">
-                      <div className="min-w-0">
-                        <div className="truncate font-medium">{plugin.name}</div>
-                        <div className="truncate font-mono text-[10px] text-muted-foreground">
-                          {plugin.id}
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="h-8 px-2 py-0">
-                      <Badge
-                        variant="outline"
-                        className="h-5 rounded-sm px-1 text-[10px]"
-                      >
-                        {plugin.mode}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="h-8 truncate px-2 py-0 text-muted-foreground">
-                      {plugin.description || "-"}
-                    </TableCell>
-                    <TableCell className="h-8 truncate px-2 py-0 font-mono text-[11px] text-muted-foreground">
-                      {plugin.entry}:{plugin.function}
-                    </TableCell>
-                    <TableCell className="h-8 px-2 py-0">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        className="h-7 rounded-sm px-2 text-xs text-destructive hover:text-destructive"
-                        disabled={isDeleting || isBuiltIn}
-                        onClick={() => {
-                          void deletePlugin(plugin);
-                        }}
-                      >
-                        <Trash2 className="size-3.5" aria-hidden="true" />
-                        {isBuiltIn ? "Built-in" : isDeleting ? "Deleting" : "Delete"}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {plugins.length === 0 && (
-                <TableRow>
-                  <TableCell
-                    colSpan={5}
-                    className="h-16 text-center text-xs text-muted-foreground"
-                  >
-                    No Python plugins are installed.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-
-          <div className="flex h-8 items-center justify-between border-b px-2">
-            <div className="text-xs font-medium uppercase text-muted-foreground">
-              Datasource Jobs
-            </div>
-            <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
-              {loadState.isLoading ? "Loading" : "Ready"}
-            </Badge>
-          </div>
-
-          <Table
-            containerClassName="min-h-0 flex-1 overflow-auto"
-            className="min-w-[920px] table-fixed text-xs"
-          >
-            <TableHeader className="sticky top-0 z-10 bg-muted">
-              <TableRow className="hover:bg-muted">
-                <TableHead className="h-7 w-[220px] px-2">Datasource</TableHead>
-                <TableHead className="h-7 w-[90px] px-2">Sources</TableHead>
-                <TableHead className="h-7 w-[260px] px-2">Selected Plugins</TableHead>
-                <TableHead className="h-7 w-[110px] px-2">Last Status</TableHead>
-                <TableHead className="h-7 w-[160px] px-2">Last Run</TableHead>
-                <TableHead className="h-7 w-[180px] px-2">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {datasources.map((datasource) => {
-                const latestJob = getLatestDatasourceJob(jobs, datasource.id);
-                const isRunning = runningDatasourceId === datasource.id;
-
-                return (
-                  <TableRow key={datasource.id} className="h-8">
-                    <TableCell className="h-8 truncate px-2 py-0 font-medium">
-                      {datasource.name}
-                    </TableCell>
-                    <TableCell className="h-8 px-2 py-0">
-                      {datasource.paths.length}
-                    </TableCell>
-                    <TableCell className="h-8 truncate px-2 py-0 text-muted-foreground">
-                      {datasource.pluginIds.length > 0
-                        ? datasource.pluginIds
-                            .map((pluginId) => getPluginLabel(pluginMap, pluginId))
-                            .join(", ")
-                        : "None selected"}
-                    </TableCell>
-                    <TableCell className="h-8 px-2 py-0">
-                      {latestJob ? (
-                        <Badge
-                          variant="secondary"
-                          className={cn(
-                            "h-5 rounded-sm text-[11px]",
-                            getStatusBadgeClassName(latestJob.status),
-                          )}
-                        >
-                          {latestJob.status}
-                        </Badge>
-                      ) : (
-                        "-"
-                      )}
-                    </TableCell>
-                    <TableCell className="h-8 px-2 py-0 text-muted-foreground">
-                      {formatJobTime(latestJob?.startedAt ?? null)}
-                    </TableCell>
-                    <TableCell className="h-8 px-2 py-0">
-                      <Button
-                        type="button"
-                        size="xs"
-                        className="h-7 rounded-sm px-2 text-xs"
-                        disabled={
-                          !activeCase ||
-                          datasource.pluginIds.length === 0 ||
-                          isRunning
-                        }
-                        onClick={() => {
-                          void runPlugins(datasource);
-                        }}
-                      >
-                        <Play className="size-3.5" aria-hidden="true" />
-                        {isRunning ? "Running" : "Run plugins"}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-              {datasources.length === 0 && (
-                <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    className="h-20 text-center text-xs text-muted-foreground"
-                  >
-                    {activeCase
-                      ? "No datasources have been added to this case."
-                      : "Create or select a case before running plugins."}
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </section>
-
-        <aside className="min-h-0 min-w-0">
-          <div className="flex h-8 items-center border-b px-2 text-xs font-medium uppercase text-muted-foreground">
-            Recent Jobs
-          </div>
-          <div className="h-[calc(100%-2rem)] overflow-auto">
-            {jobs.length > 0 ? (
-              <div className="divide-y">
-                {jobs.slice(0, 25).map((job) => (
-                  <div key={job.id} className="space-y-1 px-2 py-1.5 text-xs">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Badge
-                        variant="secondary"
-                        className={cn(
-                          "h-5 rounded-sm text-[11px]",
-                          getStatusBadgeClassName(job.status),
-                        )}
-                      >
-                        {job.status}
-                      </Badge>
-                      <span className="min-w-0 truncate font-medium">
-                        {getPluginLabel(pluginMap, job.pluginId)}
-                      </span>
-                    </div>
-                    <div className="truncate text-[11px] text-muted-foreground">
-                      {formatJobTime(job.startedAt)}
-                    </div>
-                    {job.error && (
-                      <div className="line-clamp-2 text-[11px] text-destructive">
-                        {job.error}
-                      </div>
-                    )}
+            <ResizablePanel
+              defaultSize="50%"
+              minSize="24%"
+              className="min-h-0 min-w-0 overflow-hidden"
+            >
+              <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-b">
+                <div className="flex h-8 shrink-0 items-center justify-between border-b px-2">
+                  <div className="text-xs font-medium uppercase text-muted-foreground">
+                    Installed Plugins
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
-                No plugin jobs have been run.
-              </div>
-            )}
-          </div>
-        </aside>
-      </div>
+                  <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
+                    {plugins.length}
+                  </Badge>
+                </div>
+
+                <Table
+                  containerClassName="min-h-0 flex-1 overflow-auto"
+                  className="min-w-[760px] table-fixed text-xs"
+                >
+                  <TableHeader className="sticky top-0 z-10 bg-muted">
+                    <TableRow className="hover:bg-muted">
+                      <TableHead className="h-7 w-[190px] px-2">Plugin</TableHead>
+                      <TableHead className="h-7 w-[110px] px-2">Mode</TableHead>
+                      <TableHead className="h-7 w-[260px] px-2">Description</TableHead>
+                      <TableHead className="h-7 w-[110px] px-2">Entry</TableHead>
+                      <TableHead className="h-7 w-[90px] px-2">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {plugins.map((plugin) => {
+                      const isDeleting = deletingPluginId === plugin.id;
+                      const isBuiltIn = plugin.entry.startsWith("builtin:");
+
+                      return (
+                        <TableRow key={plugin.id} className="h-8">
+                          <TableCell className="h-8 px-2 py-0">
+                            <div className="min-w-0">
+                              <div className="truncate font-medium">{plugin.name}</div>
+                              <div className="truncate font-mono text-[10px] text-muted-foreground">
+                                {plugin.id}
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell className="h-8 px-2 py-0">
+                            <Badge
+                              variant="outline"
+                              className="h-5 rounded-sm px-1 text-[10px]"
+                            >
+                              {plugin.mode}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="h-8 truncate px-2 py-0 text-muted-foreground">
+                            {plugin.description || "-"}
+                          </TableCell>
+                          <TableCell className="h-8 truncate px-2 py-0 font-mono text-[11px] text-muted-foreground">
+                            {plugin.entry}:{plugin.function}
+                          </TableCell>
+                          <TableCell className="h-8 px-2 py-0">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="xs"
+                              className="h-7 rounded-sm px-2 text-xs text-destructive hover:text-destructive"
+                              disabled={isDeleting || isBuiltIn}
+                              onClick={() => {
+                                void deletePlugin(plugin);
+                              }}
+                            >
+                              <Trash2 className="size-3.5" aria-hidden="true" />
+                              {isBuiltIn ? "Built-in" : isDeleting ? "Deleting" : "Delete"}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    {plugins.length === 0 && (
+                      <TableRow>
+                        <TableCell
+                          colSpan={5}
+                          className="h-16 text-center text-xs text-muted-foreground"
+                        >
+                          No Python plugins are installed.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </section>
+            </ResizablePanel>
+
+            <ResizableHandle withHandle />
+
+            <ResizablePanel
+              defaultSize="50%"
+              minSize="24%"
+              className="min-h-0 min-w-0 overflow-hidden"
+            >
+              <section className="flex h-full min-h-0 min-w-0 flex-col border-r">
+                <div className="flex h-8 shrink-0 items-center justify-between border-b px-2">
+                  <div className="text-xs font-medium uppercase text-muted-foreground">
+                    Datasource Jobs
+                  </div>
+                  <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
+                    {loadState.isLoading ? "Loading" : "Ready"}
+                  </Badge>
+                </div>
+
+                <Table
+                  containerClassName="min-h-0 flex-1 overflow-auto"
+                  className="min-w-[920px] table-fixed text-xs"
+                >
+                  <TableHeader className="sticky top-0 z-10 bg-muted">
+                    <TableRow className="hover:bg-muted">
+                      <TableHead className="h-7 w-[220px] px-2">Datasource</TableHead>
+                      <TableHead className="h-7 w-[90px] px-2">Sources</TableHead>
+                      <TableHead className="h-7 w-[260px] px-2">Selected Plugins</TableHead>
+                      <TableHead className="h-7 w-[110px] px-2">Last Status</TableHead>
+                      <TableHead className="h-7 w-[160px] px-2">Last Run</TableHead>
+                      <TableHead className="h-7 w-[180px] px-2">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {datasources.map((datasource) => {
+                      const latestJob = getLatestDatasourceJob(jobs, datasource.id);
+                      const activeRun = activeRuns.find(
+                        (run) => run.datasourceId === datasource.id,
+                      );
+                      const isRunning = Boolean(activeRun);
+
+                      return (
+                        <TableRow key={datasource.id} className="h-8">
+                          <TableCell className="h-8 truncate px-2 py-0 font-medium">
+                            {datasource.name}
+                          </TableCell>
+                          <TableCell className="h-8 px-2 py-0">
+                            {datasource.paths.length}
+                          </TableCell>
+                          <TableCell className="h-8 truncate px-2 py-0 text-muted-foreground">
+                            {datasource.pluginIds.length > 0
+                              ? datasource.pluginIds
+                                  .map((pluginId) => getPluginLabel(pluginMap, pluginId))
+                                  .join(", ")
+                              : "None selected"}
+                          </TableCell>
+                          <TableCell className="h-8 px-2 py-0">
+                            {latestJob ? (
+                              <Badge
+                                variant="secondary"
+                                className={cn(
+                                  "h-5 rounded-sm text-[11px]",
+                                  getStatusBadgeClassName(latestJob.status),
+                                )}
+                              >
+                                {latestJob.status}
+                              </Badge>
+                            ) : (
+                              "-"
+                            )}
+                          </TableCell>
+                          <TableCell className="h-8 px-2 py-0 text-muted-foreground">
+                            {formatJobTime(latestJob?.startedAt ?? null)}
+                          </TableCell>
+                          <TableCell className="h-8 px-2 py-0">
+                            {activeRun ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="xs"
+                                className="h-7 rounded-sm px-2 text-xs"
+                                disabled={activeRun.status === "cancelling"}
+                                onClick={() => {
+                                  void cancelPluginRun(activeRun.runId);
+                                }}
+                              >
+                                {activeRun.status === "cancelling"
+                                  ? "Cancelling"
+                                  : "Cancel"}
+                              </Button>
+                            ) : (
+                              <Button
+                                type="button"
+                                size="xs"
+                                className="h-7 rounded-sm px-2 text-xs"
+                                disabled={
+                                  !activeCase ||
+                                  datasource.pluginIds.length === 0 ||
+                                  isRunning
+                                }
+                                onClick={() => {
+                                  void runPlugins(datasource);
+                                }}
+                              >
+                                <Play className="size-3.5" aria-hidden="true" />
+                                Run plugins
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    {datasources.length === 0 && (
+                      <TableRow>
+                        <TableCell
+                          colSpan={6}
+                          className="h-20 text-center text-xs text-muted-foreground"
+                        >
+                          {activeCase
+                            ? "No datasources have been added to this case."
+                            : "Create or select a case before running plugins."}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </section>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle />
+
+        <ResizablePanel
+          defaultSize="50%"
+          minSize="24%"
+          className="min-h-0 min-w-0 overflow-hidden"
+        >
+          <ResizablePanelGroup
+            orientation="vertical"
+            className="h-full min-h-0 min-w-0"
+          >
+            <ResizablePanel
+              defaultSize="50%"
+              minSize="24%"
+              className="min-h-0 min-w-0 overflow-hidden"
+            >
+              <section className="flex h-full min-h-0 min-w-0 flex-col border-b">
+                <div className="flex h-8 shrink-0 items-center justify-between border-b px-2">
+                  <div className="text-xs font-medium uppercase text-muted-foreground">
+                    Running Plugins
+                  </div>
+                  <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
+                    {runningPluginRows.length}
+                  </Badge>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto">
+                  {runningPluginRows.length > 0 ? (
+                    <div className="divide-y">
+                      {runningPluginRows.map(({ datasource, job, pluginId, run }) => {
+                        const status =
+                          run?.status === "cancelling"
+                            ? "cancelling"
+                            : job?.status ?? "queued";
+                        const datasourceLabel =
+                          datasource?.name ??
+                          job?.datasourceId ??
+                          run?.datasourceId ??
+                          "Unknown datasource";
+
+                        return (
+                          <div
+                            key={job?.id ?? `${run?.runId ?? "queued"}:${pluginId}`}
+                            className="space-y-1 px-2 py-1.5 text-xs"
+                          >
+                            <div className="flex min-w-0 items-center gap-2">
+                              <Badge
+                                variant="secondary"
+                                className={cn(
+                                  "h-5 rounded-sm text-[11px]",
+                                  job ? getStatusBadgeClassName(job.status) : undefined,
+                                )}
+                              >
+                                {status}
+                              </Badge>
+                              <span className="min-w-0 truncate font-medium">
+                                {getPluginLabel(pluginMap, pluginId)}
+                              </span>
+                            </div>
+                            <div className="truncate text-[11px] text-muted-foreground">
+                              {datasourceLabel}
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-[11px] text-muted-foreground">
+                                {job ? formatJobTime(job.startedAt) : "Waiting to start"}
+                              </span>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="xs"
+                                className="h-6 rounded-sm px-2 text-[11px]"
+                                disabled={!run || run.status === "cancelling"}
+                                onClick={() => {
+                                  if (run) {
+                                    void cancelPluginRun(run.runId);
+                                  }
+                                }}
+                              >
+                                {run?.status === "cancelling"
+                                  ? "Cancelling"
+                                  : run
+                                    ? "Cancel"
+                                    : "No run id"}
+                              </Button>
+                            </div>
+                            {job?.error && (
+                              <div className="line-clamp-2 text-[11px] text-destructive">
+                                {job.error}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
+                      No plugins are currently running.
+                    </div>
+                  )}
+                </div>
+              </section>
+            </ResizablePanel>
+
+            <ResizableHandle withHandle />
+
+            <ResizablePanel
+              defaultSize="50%"
+              minSize="24%"
+              className="min-h-0 min-w-0 overflow-hidden"
+            >
+              <section className="flex h-full min-h-0 min-w-0 flex-col">
+                <div className="flex h-8 shrink-0 items-center justify-between border-b px-2">
+                  <div className="text-xs font-medium uppercase text-muted-foreground">
+                    Plugin Logs
+                  </div>
+                  <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
+                    {logs.length}
+                  </Badge>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto bg-muted/20 font-mono text-[11px]">
+                  {logs.length > 0 ? (
+                    <div className="divide-y">
+                      {logs.map((log) => (
+                        <div key={log.id} className="px-2 py-1">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span
+                              className={cn(
+                                "shrink-0 uppercase",
+                                log.level === "error"
+                                  ? "text-destructive"
+                                  : "text-muted-foreground",
+                              )}
+                            >
+                              {log.level}
+                            </span>
+                            <span className="truncate text-muted-foreground">
+                              {formatJobTime(log.createdAt)}
+                            </span>
+                          </div>
+                          <div className="whitespace-pre-wrap break-words">
+                            [{getPluginLabel(pluginMap, log.pluginId)}] {log.message}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="grid h-full place-items-center px-3 text-center font-sans text-xs text-muted-foreground">
+                      No plugin logs have been written yet.
+                    </div>
+                  )}
+                </div>
+              </section>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
         <DialogContent className="max-w-md rounded-sm p-0">

@@ -122,7 +122,7 @@ pub fn manifest() -> PythonPluginManifest {
         description: "Built-in Rust analyzer for image and video gallery metadata.".to_string(),
         plugin_type: "other".to_string(),
         mode: PythonPluginMode::PathRegex,
-        path_glob: None,
+        path_glob: Vec::new(),
         path_regex: Some(
             "(?i).*\\.(jpg|jpeg|png|gif|bmp|webp|tif|tiff|heic|heif|avif|mp4|mov|m4v|avi|webm|mkv|3gp)$"
                 .to_string(),

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   FixedSizeGrid,
@@ -20,6 +20,8 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCases } from "@/features/cases/case-provider";
+import { listDataSources } from "@/features/datasources/dataSourceRepository";
+import type { DataSourceRecord } from "@/features/datasources/types";
 import { listMediaGallery } from "@/features/media/mediaRepository";
 import type { MediaGalleryResult, MediaItem } from "@/features/media/types";
 import { cn } from "@/lib/utils";
@@ -61,9 +63,63 @@ export function MediaPage() {
     videos: [],
   });
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
+  const [dataSources, setDataSources] = useState<DataSourceRecord[]>([]);
+  const [selectedDataSourceId, setSelectedDataSourceId] = useState<string | null>(
+    null,
+  );
   const [isLoading, setIsLoading] = useState(false);
+  const [isDataSourcesLoading, setIsDataSourcesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (!activeCase) {
+      setDataSources([]);
+      setSelectedDataSourceId(null);
+      return;
+    }
+
+    let isCurrent = true;
+
+    setIsDataSourcesLoading(true);
+
+    listDataSources(activeCase.databasePath, activeCase.id)
+      .then((nextDataSources) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setDataSources(nextDataSources);
+        setSelectedDataSourceId((currentId) => {
+          if (
+            currentId &&
+            nextDataSources.some((dataSource) => dataSource.id === currentId)
+          ) {
+            return currentId;
+          }
+
+          return nextDataSources[0]?.id ?? null;
+        });
+      })
+      .catch((caughtError) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setError(getErrorMessage(caughtError));
+        setDataSources([]);
+        setSelectedDataSourceId(null);
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsDataSourcesLoading(false);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeCase]);
 
   useEffect(() => {
     if (!activeCase) {
@@ -73,12 +129,20 @@ export function MediaPage() {
       return;
     }
 
+    if (!selectedDataSourceId) {
+      setGallery({ photos: [], videos: [] });
+      setSelectedItem(null);
+      setError(null);
+      setIsLoading(false);
+      return;
+    }
+
     let isCurrent = true;
 
     setIsLoading(true);
     setError(null);
 
-    listMediaGallery(activeCase.databasePath)
+    listMediaGallery(activeCase.databasePath, selectedDataSourceId)
       .then((nextGallery) => {
         if (!isCurrent) {
           return;
@@ -118,9 +182,15 @@ export function MediaPage() {
     return () => {
       isCurrent = false;
     };
-  }, [activeCase, refreshKey]);
+  }, [activeCase, refreshKey, selectedDataSourceId]);
 
   const totalMedia = gallery.photos.length + gallery.videos.length;
+  const selectedDataSource = useMemo(() => {
+    return (
+      dataSources.find((dataSource) => dataSource.id === selectedDataSourceId) ??
+      null
+    );
+  }, [dataSources, selectedDataSourceId]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -137,6 +207,35 @@ export function MediaPage() {
           <span>Photos: {gallery.photos.length.toLocaleString()}</span>
           <span>Videos: {gallery.videos.length.toLocaleString()}</span>
           <span>Items: {totalMedia.toLocaleString()}</span>
+        </div>
+        <Separator orientation="vertical" className="h-5" />
+        <div className="flex min-w-0 items-center gap-1">
+          <span className="shrink-0 text-[11px] text-muted-foreground">
+            Datasource
+          </span>
+          <div className="flex min-w-0 items-center gap-1 overflow-hidden">
+            {dataSources.map((dataSource) => (
+              <Button
+                key={dataSource.id}
+                type="button"
+                variant={
+                  dataSource.id === selectedDataSourceId ? "secondary" : "ghost"
+                }
+                size="xs"
+                className="h-7 max-w-40 rounded-sm px-2 text-xs"
+                disabled={isLoading}
+                title={dataSource.name}
+                onClick={() => setSelectedDataSourceId(dataSource.id)}
+              >
+                <span className="truncate">{dataSource.name}</span>
+              </Button>
+            ))}
+            {dataSources.length === 0 && (
+              <span className="text-[11px] text-muted-foreground">
+                {isDataSourcesLoading ? "Loading" : "None"}
+              </span>
+            )}
+          </div>
         </div>
         <Button
           type="button"
@@ -181,7 +280,9 @@ export function MediaPage() {
             {activeCase
               ? isLoading
                 ? "Loading media gallery..."
-                : `${totalMedia.toLocaleString()} media files`
+                : `${totalMedia.toLocaleString()} media files${
+                    selectedDataSource ? ` in ${selectedDataSource.name}` : ""
+                  }`
               : "Open or create a case to view media"}
           </div>
         </section>

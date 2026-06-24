@@ -8,10 +8,16 @@ import type {
 
 type ActiveIngestRun = {
   datasourceName: string;
+  jobs: ActiveIngestJob[];
   pluginCount: number;
   runId: string;
   status: "running" | "cancelling";
   onCancel?: () => Promise<void>;
+};
+
+type ActiveIngestJob = {
+  pluginId: string;
+  pluginName: string;
 };
 
 const activeRuns = new Map<string, ActiveIngestRun>();
@@ -28,16 +34,25 @@ export function createPluginRunId() {
 
 export function showPluginRunStartedToast(input: {
   datasourceName: string;
+  jobs?: ActiveIngestJob[];
   onCancel?: () => Promise<void>;
   pluginCount: number;
   runId?: string;
 }) {
   const runId = input.runId ?? createPluginRunId();
+  const jobs =
+    input.jobs && input.jobs.length > 0
+      ? input.jobs
+      : Array.from({ length: input.pluginCount }, (_, index) => ({
+          pluginId: `${runId}:${index}`,
+          pluginName: `Plugin ${index + 1}`,
+        }));
 
   activeRuns.set(runId, {
     datasourceName: input.datasourceName,
+    jobs,
     onCancel: input.onCancel,
-    pluginCount: input.pluginCount,
+    pluginCount: jobs.length,
     runId,
     status: "running",
   });
@@ -64,7 +79,10 @@ export function showPluginRunFinishedToasts(input: {
   if (input.runId) {
     activeRuns.delete(input.runId);
     renderIngestToast();
-  } else if (input.toastId) {
+    return;
+  }
+
+  if (input.toastId) {
     toast.update(input.toastId, {
       render: `Finished plugin run on ${input.datasourceName}`,
       type: failedJobs.length > 0 ? "warning" : "success",
@@ -73,32 +91,13 @@ export function showPluginRunFinishedToasts(input: {
       closeButton: true,
       closeOnClick: false,
     });
+    return;
   }
 
-  for (const job of completedJobs) {
-    toast.success(
-      `${getPluginLabel(input.pluginMap, job.pluginId)} completed on ${
-        input.datasourceName
-      }`,
-      { autoClose: false, closeButton: true, closeOnClick: false },
-    );
-  }
-
-  for (const job of failedJobs) {
-    toast.error(
-      `${getPluginLabel(input.pluginMap, job.pluginId)} failed: ${
-        job.error ?? "Unknown error"
-      }`,
-      { autoClose: false, closeButton: true, closeOnClick: false },
-    );
-  }
-
-  for (const job of runningJobs) {
-    toast.info(
-      `${getPluginLabel(input.pluginMap, job.pluginId)} is still marked running.`,
-      { autoClose: false, closeButton: true, closeOnClick: false },
-    );
-  }
+  void completedJobs;
+  void failedJobs;
+  void runningJobs;
+  void input.pluginMap;
 }
 
 export function showPluginRunFailedToast(input: {
@@ -133,7 +132,6 @@ export function showPluginRunFailedToast(input: {
 }
 
 function IngestRunsToast() {
-  const [isExpanded, setIsExpanded] = useState(false);
   const [runs, setRuns] = useState(() => Array.from(activeRuns.values()));
 
   useEffect(() => {
@@ -148,85 +146,97 @@ function IngestRunsToast() {
     };
   }, []);
 
-  const activeCount = runs.length;
-  const pluginCount = runs.reduce((count, run) => count + run.pluginCount, 0);
+  const ingestJobs = runs.flatMap((run) =>
+    run.jobs.map((job) => ({
+      job,
+      run,
+    })),
+  );
+  const activeCount = ingestJobs.length;
+  const runCount = runs.length;
 
   return createElement(
     "div",
-    { className: "min-w-72 text-xs" },
+    { className: "w-[min(22rem,calc(100vw-3rem))] text-xs" },
     createElement(
-      "button",
-      {
-        className:
-          "flex w-full items-center justify-between gap-3 rounded-sm text-left font-medium",
-        onClick: () => setIsExpanded((currentValue) => !currentValue),
-        type: "button",
-      },
+      "div",
+      { className: "flex items-center justify-between gap-3 font-medium" },
       createElement(
         "span",
         null,
         activeCount > 0
-          ? `${activeCount} ingest module${activeCount === 1 ? "" : "s"} running`
-          : "No ingest modules running",
+          ? `${activeCount} ingest job${activeCount === 1 ? "" : "s"} running`
+          : "No ingest jobs running",
       ),
-      createElement("span", { className: "text-[11px] opacity-80" }, isExpanded ? "Hide" : "Show"),
+      createElement(
+        "span",
+        { className: "shrink-0 text-[11px] opacity-80" },
+        `${runCount.toLocaleString()} run${runCount === 1 ? "" : "s"}`,
+      ),
     ),
     createElement(
       "div",
       { className: "mt-1 text-[11px] opacity-85" },
-      `${pluginCount.toLocaleString()} plugin${pluginCount === 1 ? "" : "s"} active`,
+      "Closing this toast does not cancel running jobs.",
     ),
-    isExpanded
-      ? createElement(
+    createElement(
+      "div",
+      { className: "mt-2 grid max-h-48 gap-1.5 overflow-y-auto overflow-x-hidden pr-1" },
+      ingestJobs.map(({ job, run }) =>
+        createElement(
           "div",
-          { className: "mt-2 grid gap-1.5" },
-          runs.map((run) =>
+          {
+            className:
+              "grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-sm border border-white/25 px-2 py-1",
+            key: `${run.runId}:${job.pluginId}`,
+          },
+          createElement(
+            "div",
+            { className: "min-w-0" },
             createElement(
               "div",
-              {
-                className:
-                  "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-sm border border-white/25 px-2 py-1",
-                key: run.runId,
-              },
-              createElement(
-                "div",
-                { className: "min-w-0" },
-                createElement(
-                  "div",
-                  { className: "truncate font-medium" },
-                  run.datasourceName,
-                ),
-                createElement(
-                  "div",
-                  { className: "text-[11px] opacity-80" },
-                  `${run.pluginCount.toLocaleString()} plugin${
-                    run.pluginCount === 1 ? "" : "s"
-                  } - ${run.status === "cancelling" ? "Cancelling" : "Running"}`,
-                ),
-              ),
-              createElement(
+              { className: "truncate font-medium" },
+              job.pluginName,
+            ),
+            createElement(
+              "div",
+              { className: "text-[11px] opacity-80" },
+              `${run.datasourceName} - ${
+                run.status === "cancelling" ? "Cancelling" : "Running"
+              }`,
+            ),
+          ),
+          run.onCancel
+            ? createElement(
                 "button",
                 {
                   className:
-                    "h-6 rounded-sm border border-white/30 px-2 text-[11px] disabled:opacity-50",
-                  disabled: run.status === "cancelling" || !run.onCancel,
-                  onClick: () => {
-                    activeRuns.set(run.runId, { ...run, status: "cancelling" });
-                    notifyIngestToastSubscribers();
-                    void run.onCancel?.().catch(() => {
-                      activeRuns.set(run.runId, { ...run, status: "running" });
-                      notifyIngestToastSubscribers();
-                    });
-                  },
+                    "h-6 max-w-20 rounded-sm border border-white/30 px-2 text-[11px] disabled:opacity-50",
+                  disabled: run.status === "cancelling",
+                  onClick: () => cancelIngestRun(run),
                   type: "button",
                 },
                 run.status === "cancelling" ? "Cancelling" : "Cancel",
+              )
+            : createElement(
+                "span",
+                { className: "text-[11px] opacity-70" },
+                "No cancel",
               ),
-            ),
-          ),
-        )
-      : null,
+        ),
+      ),
+    ),
   );
+}
+
+function cancelIngestRun(run: ActiveIngestRun) {
+  activeRuns.set(run.runId, { ...run, status: "cancelling" });
+  notifyIngestToastSubscribers();
+
+  void run.onCancel?.().catch(() => {
+    activeRuns.set(run.runId, { ...run, status: "running" });
+    notifyIngestToastSubscribers();
+  });
 }
 
 function renderIngestToast() {
@@ -258,6 +268,11 @@ function renderIngestToast() {
     ingestToastId = toast.loading(createElement(IngestRunsToast), {
       closeButton: true,
       closeOnClick: false,
+      onClose: () => {
+        if (activeRuns.size > 0) {
+          ingestToastId = null;
+        }
+      },
     });
     return;
   }
@@ -275,8 +290,4 @@ function notifyIngestToastSubscribers() {
   for (const listener of listeners) {
     listener();
   }
-}
-
-function getPluginLabel(pluginMap: Map<string, PythonPlugin>, pluginId: string) {
-  return pluginMap.get(pluginId)?.name ?? pluginId;
 }

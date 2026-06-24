@@ -503,7 +503,10 @@ export function FilesPage() {
       return;
     }
 
-    if (selectedRunPluginIds.length === 0) {
+    const runDataSource = pluginRunDataSource;
+    const runPluginIds = selectedRunPluginIds;
+
+    if (runPluginIds.length === 0) {
       setDataSourceError("Select at least one plugin to run.");
       return;
     }
@@ -512,33 +515,37 @@ export function FilesPage() {
     setDataSourceError(null);
     const runId = createPluginRunId();
     const toastId = showPluginRunStartedToast({
-      datasourceName: pluginRunDataSource.name,
+      datasourceName: runDataSource.name,
+      jobs: runPluginIds.map((pluginId) => ({
+        pluginId,
+        pluginName: pluginMap.get(pluginId)?.name ?? pluginId,
+      })),
       onCancel: async () => {
         await cancelDatasourcePluginRun(runId);
       },
-      pluginCount: selectedRunPluginIds.length,
+      pluginCount: runPluginIds.length,
       runId,
     });
+    setPluginRunDataSource(null);
 
     try {
       const summary = await runDatasourcePlugins({
         caseDatabasePath: activeCase.databasePath,
         caseFolderPath: activeCase.folderPath,
-        datasourceId: pluginRunDataSource.id,
-        pluginIds: selectedRunPluginIds,
+        datasourceId: runDataSource.id,
+        pluginIds: runPluginIds,
         runId,
       });
       showPluginRunFinishedToasts({
-        datasourceName: pluginRunDataSource.name,
+        datasourceName: runDataSource.name,
         pluginMap,
         runId,
         summary,
         toastId,
       });
-      setPluginRunDataSource(null);
     } catch (caughtError) {
       showPluginRunFailedToast({
-        datasourceName: pluginRunDataSource.name,
+        datasourceName: runDataSource.name,
         error: caughtError,
         runId,
         toastId,
@@ -724,12 +731,12 @@ export function FilesPage() {
       <Dialog
         open={Boolean(pluginRunDataSource)}
         onOpenChange={(isOpen) => {
-          if (!isOpen && !isRunningPlugins) {
+          if (!isOpen) {
             setPluginRunDataSource(null);
           }
         }}
       >
-        <DialogContent className="max-w-4xl rounded-sm p-0">
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-7xl rounded-sm p-0 sm:max-w-7xl">
           <DialogHeader className="border-b px-3 py-2">
             <DialogTitle className="text-sm">Run Datasource Plugins</DialogTitle>
             <DialogDescription className="text-xs">
@@ -738,22 +745,50 @@ export function FilesPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid h-[28rem] min-h-0 grid-cols-[minmax(0,1fr)_18rem] gap-2 p-2">
+          <div className="grid h-[min(40rem,calc(100vh-10rem))] min-h-[30rem] grid-cols-[minmax(22rem,1fr)_minmax(20rem,0.8fr)] gap-2 p-2">
             <div className="flex min-h-0 min-w-0 flex-col gap-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-xs font-medium uppercase text-muted-foreground">
-                  Plugins
+              <div className="rounded-sm border">
+                <div className="flex h-8 items-center justify-between border-b px-2">
+                  <div className="text-xs font-medium uppercase text-muted-foreground">
+                    Plugins
+                  </div>
+                  <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
+                    {selectedRunPluginIds.length} selected
+                  </Badge>
                 </div>
-                <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
-                  {selectedRunPluginIds.length} selected
-                </Badge>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-1 p-2">
+                  <Input
+                    className="h-8 rounded-sm text-xs"
+                    value={pluginFilter}
+                    placeholder="Filter plugins"
+                    onChange={(event) => setPluginFilter(event.target.value)}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="h-7 rounded-sm px-2 text-xs"
+                    disabled={availablePlugins.length === 0}
+                    onClick={() =>
+                      setSelectedRunPluginIds(
+                        availablePlugins.map((plugin) => plugin.id),
+                      )
+                    }
+                  >
+                    Select All
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="h-7 rounded-sm px-2 text-xs"
+                    disabled={selectedRunPluginIds.length === 0}
+                    onClick={() => setSelectedRunPluginIds([])}
+                  >
+                    Unselect All
+                  </Button>
+                </div>
               </div>
-              <Input
-                className="h-8 rounded-sm text-xs"
-                value={pluginFilter}
-                placeholder="Filter plugins"
-                onChange={(event) => setPluginFilter(event.target.value)}
-              />
               <div className="min-h-0 flex-1 overflow-auto rounded-sm border">
                 {visiblePlugins.length > 0 ? (
                   <div className="divide-y">
@@ -767,7 +802,7 @@ export function FilesPage() {
                         <label
                           key={plugin.id}
                           className={cn(
-                            "grid cursor-pointer grid-cols-[auto_1fr] items-start gap-2 px-2 py-1.5 text-xs hover:bg-accent",
+                            "grid cursor-pointer grid-cols-[1rem_minmax(0,1fr)] items-start gap-2 px-2 py-2 text-xs hover:bg-accent",
                             isActive && "bg-accent",
                           )}
                           onClick={() => setActiveRunPluginId(plugin.id)}
@@ -778,18 +813,18 @@ export function FilesPage() {
                               toggleRunPlugin(plugin, checked === true);
                             }}
                           />
-                          <span className="min-w-0">
-                            <span className="block truncate font-medium">
+                          <span className="min-w-0 space-y-1">
+                            <span className="block truncate text-xs font-medium leading-none">
                               {plugin.name}
                             </span>
-                            <span className="flex min-w-0 items-center gap-1">
+                            <span className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-1 text-[11px] leading-tight">
                               <Badge
                                 variant="secondary"
                                 className="h-4 shrink-0 rounded-sm px-1 text-[10px]"
                               >
                                 {plugin.type}
                               </Badge>
-                              <span className="block truncate text-[11px] text-muted-foreground">
+                              <span className="block truncate text-muted-foreground">
                                 {plugin.description}
                               </span>
                             </span>
@@ -807,7 +842,7 @@ export function FilesPage() {
             </div>
 
             <div className="flex min-h-0 min-w-0 flex-col rounded-sm border">
-              <div className="border-b px-2 py-1.5">
+              <div className="flex h-8 items-center border-b px-2">
                 <div className="text-xs font-medium uppercase text-muted-foreground">
                   Options
                 </div>
@@ -869,10 +904,9 @@ export function FilesPage() {
               variant="outline"
               size="xs"
               className="h-7 rounded-sm px-2 text-xs"
-              disabled={isRunningPlugins}
               onClick={() => setPluginRunDataSource(null)}
             >
-              Cancel
+              Close
             </Button>
             <Button
               type="button"

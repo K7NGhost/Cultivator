@@ -104,6 +104,7 @@ export function createPythonRuntimeEnv(baseEnv = process.env) {
     ...cleanBaseEnv,
     PYO3_PYTHON: paths.pythonExecutable,
     PYTHONHOME: paths.pythonHome,
+    PYTHONDONTWRITEBYTECODE: "1",
     [pathKey]: [paths.runtimeDir, ...paths.libraryDirs, cleanBaseEnv[pathKey]]
       .filter(Boolean)
       .join(separator),

@@ -17,7 +17,7 @@ use pyo3::{
 };
 #[cfg(feature = "python-plugins")]
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 #[cfg(not(feature = "python-plugins"))]
 use serde_json::Value as JsonValue;
 #[cfg(feature = "python-plugins")]
@@ -79,14 +79,43 @@ pub struct PythonPluginManifest {
     #[serde(rename = "type")]
     pub plugin_type: String,
     pub mode: PythonPluginMode,
-    #[serde(default, alias = "path_glob")]
-    pub path_glob: Option<String>,
+    #[serde(
+        default,
+        alias = "path_glob",
+        alias = "path_globs",
+        deserialize_with = "deserialize_path_globs"
+    )]
+    pub path_glob: Vec<String>,
     #[serde(default, alias = "path_regex")]
     pub path_regex: Option<String>,
     #[serde(default = "default_plugin_entry")]
     pub entry: String,
     #[serde(default = "default_plugin_function")]
     pub function: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PathGlobManifestValue {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+fn deserialize_path_globs<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<PathGlobManifestValue>::deserialize(deserializer)?;
+    let patterns = match value {
+        Some(PathGlobManifestValue::Single(pattern)) => vec![pattern],
+        Some(PathGlobManifestValue::Multiple(patterns)) => patterns,
+        None => Vec::new(),
+    };
+
+    Ok(patterns
+        .into_iter()
+        .filter(|pattern| !pattern.trim().is_empty())
+        .collect())
 }
 
 #[derive(Deserialize)]
@@ -138,6 +167,29 @@ struct TargetFile {
 }
 
 #[derive(Clone)]
+#[cfg(feature = "python-plugins")]
+struct PluginExecutionTask {
+    plugin_id: String,
+    file_path: String,
+    datasource_id: String,
+    case_id: String,
+    target_file: TargetFile,
+}
+
+#[cfg(feature = "python-plugins")]
+struct PluginExecutionPlan {
+    scanned_files: u64,
+    tasks: Vec<PluginExecutionTask>,
+}
+
+#[cfg(feature = "python-plugins")]
+enum PluginTargetMatcher {
+    EachFile,
+    PathGlob(Vec<GlobMatcher>),
+    PathRegex(Regex),
+}
+
+#[derive(Clone)]
 struct PendingPluginLog {
     level: String,
     message: String,
@@ -168,6 +220,17 @@ pub struct PluginJobRecord {
     pub started_at: String,
     pub finished_at: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginLogRecord {
+    pub id: String,
+    pub job_id: String,
+    pub plugin_id: String,
+    pub level: String,
+    pub message: String,
+    pub created_at: String,
 }
 
 #[derive(Serialize)]
@@ -730,6 +793,44 @@ pub async fn list_plugin_jobs(case_database_path: String) -> Result<Vec<PluginJo
         .collect())
 }
 
+pub async fn list_plugin_logs(
+    case_database_path: String,
+    limit: Option<i64>,
+) -> Result<Vec<PluginLogRecord>, String> {
+    let pool = open_case_database(&case_database_path).await?;
+    ensure_plugin_tables(&pool).await?;
+    let rows = sqlx::query(
+        r#"
+          SELECT
+            id,
+            job_id,
+            plugin_id,
+            level,
+            message,
+            created_at
+          FROM plugin_logs
+          ORDER BY created_at DESC
+          LIMIT $1
+        "#,
+    )
+    .bind(limit.unwrap_or(200).clamp(1, 1000))
+    .fetch_all(&pool)
+    .await
+    .map_err(|error| format!("Failed to list plugin logs: {error}"))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| PluginLogRecord {
+            id: row.get("id"),
+            job_id: row.get("job_id"),
+            plugin_id: row.get("plugin_id"),
+            level: row.get("level"),
+            message: row.get("message"),
+            created_at: row.get("created_at"),
+        })
+        .collect())
+}
+
 pub async fn list_plugin_artifacts(
     case_database_path: String,
 ) -> Result<Vec<PluginArtifactRecord>, String> {
@@ -826,6 +927,7 @@ pub async fn delete_plugin_artifacts(
 
 pub async fn list_media_gallery(
     case_database_path: String,
+    datasource_id: Option<String>,
 ) -> Result<builtin::MediaGallery, String> {
     let pool = open_case_database(&case_database_path).await?;
     ensure_plugin_tables(&pool).await?;
@@ -833,9 +935,11 @@ pub async fn list_media_gallery(
         r#"
           SELECT payload
           FROM media_gallery_items
+          WHERE ($1 IS NULL OR datasource_id = $1)
           ORDER BY media_type ASC, name ASC, path ASC
         "#,
     )
+    .bind(datasource_id)
     .fetch_all(&pool)
     .await
     .map_err(|error| format!("Failed to list media gallery: {error}"))?;
@@ -1016,15 +1120,16 @@ fn execute_python_plugin(
     case_folder_path: &str,
     run_id: Option<&str>,
 ) -> Result<PluginExecutionOutput, String> {
-    let target_files = enumerate_plugin_target_files(plugin, datasource)?;
-    let matched_files = target_files.len() as u64;
-    let scanned_files = count_files_in_datasource(datasource)?;
+    let plan = build_plugin_execution_plan(plugin, datasource)?;
+    let matched_files = plan.tasks.len() as u64;
+    let scanned_files = plan.scanned_files;
     let mut records = Vec::new();
 
     reset_thread_logs()?;
     reset_thread_artifacts()?;
 
     let python_result = Python::attach(|py| -> PyResult<()> {
+        PyModule::import(py, "sys")?.setattr("dont_write_bytecode", true)?;
         install_cultivator_api(py)?;
         set_thread_search_roots(datasource.paths.clone())
             .map_err(|message| PyRuntimeError::new_err(message))?;
@@ -1032,7 +1137,7 @@ fn execute_python_plugin(
         let module = load_plugin_module(py, plugin)?;
         let function = module.getattr(plugin.manifest.function.as_str())?;
 
-        for target_file in &target_files {
+        for task in &plan.tasks {
             if is_plugin_run_cancelled(run_id).map_err(PyRuntimeError::new_err)? {
                 return Err(PyRuntimeError::new_err("Plugin run cancelled."));
             }
@@ -1043,10 +1148,10 @@ fn execute_python_plugin(
                 case_folder_path,
                 datasource,
                 &plugin.manifest,
-                target_file,
+                task,
             )?;
             let result = function.call1((context,))?;
-            records.extend(normalize_python_result(&result, &target_file.path)?);
+            records.extend(normalize_python_result(&result, &task.file_path)?);
 
             if is_plugin_run_cancelled(run_id).map_err(PyRuntimeError::new_err)? {
                 return Err(PyRuntimeError::new_err("Plugin run cancelled."));
@@ -1097,13 +1202,14 @@ fn build_plugin_context<'py>(
     case_folder_path: &str,
     datasource: &DatasourceForPlugins,
     plugin: &PythonPluginManifest,
-    target_file: &TargetFile,
+    task: &PluginExecutionTask,
 ) -> PyResult<Bound<'py, PyDict>> {
     let context = PyDict::new(py);
     let case = PyDict::new(py);
     let datasource_dict = PyDict::new(py);
     let plugin_dict = PyDict::new(py);
     let file = PyDict::new(py);
+    let task_dict = PyDict::new(py);
     let artifacts_path = PathBuf::from(case_folder_path).join("artifacts");
 
     case.set_item("id", datasource.case_id.as_str())?;
@@ -1122,15 +1228,21 @@ fn build_plugin_context<'py>(
     plugin_dict.set_item("name", plugin.name.as_str())?;
     plugin_dict.set_item("mode", plugin_mode_label(&plugin.mode))?;
 
-    file.set_item("path", target_file.path.as_str())?;
-    file.set_item("name", target_file.name.as_str())?;
-    file.set_item("extension", target_file.extension.as_str())?;
-    file.set_item("size", target_file.size)?;
+    file.set_item("path", task.target_file.path.as_str())?;
+    file.set_item("name", task.target_file.name.as_str())?;
+    file.set_item("extension", task.target_file.extension.as_str())?;
+    file.set_item("size", task.target_file.size)?;
+
+    task_dict.set_item("plugin_id", task.plugin_id.as_str())?;
+    task_dict.set_item("file_path", task.file_path.as_str())?;
+    task_dict.set_item("datasource_id", task.datasource_id.as_str())?;
+    task_dict.set_item("case_id", task.case_id.as_str())?;
 
     context.set_item("case", case)?;
     context.set_item("datasource", datasource_dict)?;
     context.set_item("plugin", plugin_dict)?;
     context.set_item("file", file)?;
+    context.set_item("task", task_dict)?;
 
     Ok(context)
 }
@@ -1515,28 +1627,53 @@ fn py_dict_to_json_map(dict: &Bound<'_, PyDict>) -> PyResult<JsonMap<String, Jso
 }
 
 #[cfg(feature = "python-plugins")]
-fn enumerate_plugin_target_files(
+fn build_plugin_execution_plan(
     plugin: &LoadedPythonPlugin,
     datasource: &DatasourceForPlugins,
-) -> Result<Vec<TargetFile>, String> {
+) -> Result<PluginExecutionPlan, String> {
     let all_files = enumerate_datasource_files(datasource)?;
+    let scanned_files = all_files.len() as u64;
+    let matcher = build_plugin_target_matcher(plugin)?;
+    let mut tasks = Vec::new();
 
+    for target_file in all_files {
+        if plugin_matches_target_file(&matcher, &target_file) {
+            tasks.push(PluginExecutionTask {
+                plugin_id: plugin.manifest.id.clone(),
+                file_path: target_file.path.clone(),
+                datasource_id: datasource.id.clone(),
+                case_id: datasource.case_id.clone(),
+                target_file,
+            });
+        }
+    }
+
+    Ok(PluginExecutionPlan {
+        scanned_files,
+        tasks,
+    })
+}
+
+#[cfg(feature = "python-plugins")]
+fn build_plugin_target_matcher(plugin: &LoadedPythonPlugin) -> Result<PluginTargetMatcher, String> {
     match plugin.manifest.mode {
-        PythonPluginMode::EachFile => Ok(all_files),
+        PythonPluginMode::EachFile => Ok(PluginTargetMatcher::EachFile),
         PythonPluginMode::PathGlob => {
-            let pattern = manifest_path_glob(&plugin.manifest)
+            let patterns = manifest_path_globs(&plugin.manifest)
                 .ok_or_else(|| format!("Plugin '{}' requires path_glob.", plugin.manifest.id))?;
-            let matcher = build_path_glob_matcher(pattern).map_err(|error| {
-                format!(
-                    "Plugin '{}' has invalid path_glob: {error}",
-                    plugin.manifest.id
-                )
-            })?;
+            let matchers = patterns
+                .iter()
+                .map(|pattern| {
+                    build_path_glob_matcher(pattern).map_err(|error| {
+                        format!(
+                            "Plugin '{}' has invalid path_glob '{}': {error}",
+                            plugin.manifest.id, pattern
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
-            Ok(all_files
-                .into_iter()
-                .filter(|file| path_glob_matches(&matcher, file))
-                .collect())
+            Ok(PluginTargetMatcher::PathGlob(matchers))
         }
         PythonPluginMode::PathRegex => {
             let pattern =
@@ -1550,10 +1687,18 @@ fn enumerate_plugin_target_files(
                 )
             })?;
 
-            Ok(all_files
-                .into_iter()
-                .filter(|file| matcher.is_match(&file.path) || matcher.is_match(&file.name))
-                .collect())
+            Ok(PluginTargetMatcher::PathRegex(matcher))
+        }
+    }
+}
+
+#[cfg(feature = "python-plugins")]
+fn plugin_matches_target_file(matcher: &PluginTargetMatcher, file: &TargetFile) -> bool {
+    match matcher {
+        PluginTargetMatcher::EachFile => true,
+        PluginTargetMatcher::PathGlob(matchers) => path_globs_match(matchers, file),
+        PluginTargetMatcher::PathRegex(matcher) => {
+            matcher.is_match(&file.path) || matcher.is_match(&file.name)
         }
     }
 }
@@ -1598,11 +1743,6 @@ fn enumerate_datasource_files(
     files.sort_by(|left, right| left.path.cmp(&right.path));
 
     Ok(files)
-}
-
-#[cfg(feature = "python-plugins")]
-fn count_files_in_datasource(datasource: &DatasourceForPlugins) -> Result<u64, String> {
-    Ok(enumerate_datasource_files(datasource)?.len() as u64)
 }
 
 #[cfg(feature = "python-plugins")]
@@ -2320,7 +2460,7 @@ name = "Phonebook Parser"
 description = "Extract phonebook records from ASR context files."
 type = "contacts"
 mode = "path_glob"
-path_glob = "*/voice/asr/context/phonebook/*.txt"
+path_glob = ["*/recents_storage", "*/favorites_storage"]
 entry = "plugin.py"
 function = "run"</code></pre>
 
@@ -2334,13 +2474,18 @@ function = "run"</code></pre>
           <tr><td><code>description</code></td><td>Short explanation of what the plugin extracts.</td></tr>
           <tr><td><code>type</code></td><td>Artifact category label, such as <code>contacts</code>, <code>messages</code>, or <code>other</code>.</td></tr>
           <tr><td><code>mode</code></td><td><code>each_file</code> runs on every datasource file. <code>path_glob</code> runs only on matching paths.</td></tr>
-          <tr><td><code>path_glob</code></td><td>Required for <code>path_glob</code>. Matched case-insensitively against normalized full file path and file name.</td></tr>
+          <tr><td><code>path_glob</code></td><td>Required for <code>path_glob</code>. Accepts one glob string or a list of glob strings. <code>path_globs</code> is also accepted as a list alias. Matched case-insensitively against normalized full file path and file name.</td></tr>
           <tr><td><code>entry</code></td><td>Python file to load. Defaults to <code>plugin.py</code>.</td></tr>
           <tr><td><code>function</code></td><td>Function to call. Defaults to <code>run</code>.</td></tr>
         </tbody>
       </table>
 
       <h2>Context</h2>
+      <p>
+        Cultivator indexes case files, matches plugins by <code>path_glob</code>
+        or <code>path_regex</code>, creates one task per matched file, and calls
+        your plugin function once per task.
+      </p>
       <p>Your plugin function receives one <code>context</code> dictionary.</p>
       <pre><code>def run(context):
     file = context["file"]
@@ -2363,6 +2508,11 @@ context["datasource"]["paths"]
 context["plugin"]["id"]
 context["plugin"]["name"]
 context["plugin"]["mode"]
+
+context["task"]["plugin_id"]
+context["task"]["file_path"]
+context["task"]["datasource_id"]
+context["task"]["case_id"]
 
 context["file"]["path"]
 context["file"]["name"]
@@ -2500,7 +2650,7 @@ def run(context):
       <h2>Path Filtering</h2>
       <p>Use <code>path_glob</code> when the plugin should only run on specific paths.</p>
       <pre><code>mode = "path_glob"
-path_glob = "*/voice/asr/context/phonebook/*.txt"</code></pre>
+path_glob = ["*/recents_storage", "*/favorites_storage"]</code></pre>
     </main>
   </body>
 </html>
@@ -2652,10 +2802,9 @@ fn validate_manifest(manifest: &PythonPluginManifest, plugin_dir: &Path) -> Resu
     }
 
     if matches!(manifest.mode, PythonPluginMode::PathGlob)
-        && manifest_path_glob(manifest)
-            .unwrap_or_default()
-            .trim()
-            .is_empty()
+        && manifest_path_globs(manifest)
+            .map(|patterns| patterns.is_empty())
+            .unwrap_or(true)
     {
         return Err(format!(
             "Python plugin '{}' requires path_glob for path_glob mode.",
@@ -3236,11 +3385,12 @@ fn default_plugin_function() -> String {
     "run".to_string()
 }
 
-fn manifest_path_glob(manifest: &PythonPluginManifest) -> Option<&str> {
-    manifest
-        .path_glob
-        .as_deref()
-        .or(manifest.path_regex.as_deref())
+fn manifest_path_globs(manifest: &PythonPluginManifest) -> Option<&[String]> {
+    if manifest.path_glob.is_empty() {
+        return None;
+    }
+
+    Some(&manifest.path_glob)
 }
 
 #[cfg(feature = "python-plugins")]
@@ -3249,6 +3399,13 @@ fn build_path_glob_matcher(pattern: &str) -> Result<GlobMatcher, globset::Error>
         .case_insensitive(true)
         .build()
         .map(|glob| glob.compile_matcher())
+}
+
+#[cfg(feature = "python-plugins")]
+fn path_globs_match(matchers: &[GlobMatcher], file: &TargetFile) -> bool {
+    matchers
+        .iter()
+        .any(|matcher| path_glob_matches(matcher, file))
 }
 
 #[cfg(feature = "python-plugins")]

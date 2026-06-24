@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   CreatedPythonPlugin,
   PluginJobRecord,
+  PluginLogRecord,
   PluginRunSummary,
   PythonPlugin,
 } from "@/features/plugins/types";
@@ -53,6 +54,16 @@ export async function runDatasourcePlugins(input: {
   runId?: string;
 }): Promise<PluginRunSummary> {
   return invoke<PluginRunSummary>("run_datasource_plugins", input);
+}
+
+export async function listPluginLogs(
+  caseDatabasePath: string,
+  limit = 200,
+): Promise<PluginLogRecord[]> {
+  return invoke<PluginLogRecord[]>("list_plugin_logs", {
+    caseDatabasePath,
+    limit,
+  });
 }
 
 export async function cancelDatasourcePluginRun(runId: string): Promise<boolean> {

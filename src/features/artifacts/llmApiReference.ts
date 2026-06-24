@@ -36,7 +36,7 @@ name = "Example Plugin"
 description = "Extracts artifacts from logical files."
 type = "contacts"
 mode = "path_glob"
-path_glob = "*/voice/asr/context/phonebook/*.txt"
+path_glob = ["*/recents_storage", "*/favorites_storage"]
 entry = "plugin.py"
 function = "run"
 \`\`\`
@@ -48,6 +48,8 @@ def run(context):
     file_path = context["file"]["path"]
     return None
 \`\`\`
+
+Cultivator indexes case files, matches plugins by path_glob/path_regex, and calls run(context) once per matched file task.
 
 ## Context
 
@@ -61,6 +63,10 @@ def run(context):
 - context["plugin"]["id"]: str
 - context["plugin"]["name"]: str
 - context["plugin"]["mode"]: "each_file" | "path_glob" | "path_regex"
+- context["task"]["plugin_id"]: str
+- context["task"]["file_path"]: str
+- context["task"]["datasource_id"]: str
+- context["task"]["case_id"]: str
 - context["file"]["path"]: str
 - context["file"]["name"]: str
 - context["file"]["extension"]: str

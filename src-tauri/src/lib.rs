@@ -487,6 +487,14 @@ async fn list_plugin_jobs(
 }
 
 #[tauri::command]
+async fn list_plugin_logs(
+    case_database_path: String,
+    limit: Option<i64>,
+) -> Result<Vec<plugins::PluginLogRecord>, String> {
+    plugins::list_plugin_logs(case_database_path, limit).await
+}
+
+#[tauri::command]
 async fn list_plugin_artifacts(
     case_database_path: String,
 ) -> Result<Vec<plugins::PluginArtifactRecord>, String> {
@@ -510,8 +518,11 @@ async fn delete_plugin_artifacts(
 }
 
 #[tauri::command]
-async fn list_media_gallery(case_database_path: String) -> Result<plugins::MediaGallery, String> {
-    plugins::list_media_gallery(case_database_path).await
+async fn list_media_gallery(
+    case_database_path: String,
+    datasource_id: Option<String>,
+) -> Result<plugins::MediaGallery, String> {
+    plugins::list_media_gallery(case_database_path, datasource_id).await
 }
 
 #[tauri::command]
@@ -2083,6 +2094,7 @@ pub fn run() {
             create_python_plugin,
             delete_python_plugin,
             list_plugin_jobs,
+            list_plugin_logs,
             list_plugin_artifacts,
             delete_plugin_artifact,
             delete_plugin_artifacts,

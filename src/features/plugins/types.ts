@@ -21,6 +21,15 @@ export type PluginJobRecord = {
   error: string | null;
 };
 
+export type PluginLogRecord = {
+  id: string;
+  jobId: string;
+  pluginId: string;
+  level: string;
+  message: string;
+  createdAt: string;
+};
+
 export type PluginRunSummary = {
   datasourceId: string;
   jobs: PluginJobRecord[];

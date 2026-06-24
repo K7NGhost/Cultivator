@@ -134,6 +134,10 @@ function runDatasourcePluginsInBackground(input: {
   const runId = createPluginRunId();
   const toastId = showPluginRunStartedToast({
     datasourceName: input.datasource.name,
+    jobs: input.datasource.pluginIds.map((pluginId) => ({
+      pluginId,
+      pluginName: input.pluginMap.get(pluginId)?.name ?? pluginId,
+    })),
     onCancel: async () => {
       await cancelDatasourcePluginRun(runId);
     },
