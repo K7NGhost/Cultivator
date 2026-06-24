@@ -9,3 +9,23 @@ export async function listArtifacts(
     caseDatabasePath,
   });
 }
+
+export async function deleteArtifact(
+  caseDatabasePath: string,
+  artifactId: string,
+): Promise<void> {
+  return invoke("delete_plugin_artifact", {
+    caseDatabasePath,
+    artifactId,
+  });
+}
+
+export async function deleteArtifacts(
+  caseDatabasePath: string,
+  artifactIds: string[],
+): Promise<void> {
+  return invoke("delete_plugin_artifacts", {
+    caseDatabasePath,
+    artifactIds,
+  });
+}

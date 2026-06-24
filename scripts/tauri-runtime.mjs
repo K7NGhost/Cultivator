@@ -16,7 +16,7 @@ const shouldEnablePythonPlugins = args[0] === "dev" || isBuild;
 let env = process.env;
 let tauriArgs = shouldEnablePythonPlugins ? ensurePythonFeature(args) : args;
 
-if (isBuild) {
+if (shouldEnablePythonPlugins) {
   const { target, paths, assetName } = await setupPythonRuntime();
 
   console.log(`Using Python runtime for ${target.key}`);

@@ -494,6 +494,22 @@ async fn list_plugin_artifacts(
 }
 
 #[tauri::command]
+async fn delete_plugin_artifact(
+    case_database_path: String,
+    artifact_id: String,
+) -> Result<(), String> {
+    plugins::delete_plugin_artifact(case_database_path, artifact_id).await
+}
+
+#[tauri::command]
+async fn delete_plugin_artifacts(
+    case_database_path: String,
+    artifact_ids: Vec<String>,
+) -> Result<(), String> {
+    plugins::delete_plugin_artifacts(case_database_path, artifact_ids).await
+}
+
+#[tauri::command]
 async fn list_media_gallery(case_database_path: String) -> Result<plugins::MediaGallery, String> {
     plugins::list_media_gallery(case_database_path).await
 }
@@ -2068,6 +2084,8 @@ pub fn run() {
             delete_python_plugin,
             list_plugin_jobs,
             list_plugin_artifacts,
+            delete_plugin_artifact,
+            delete_plugin_artifacts,
             list_media_gallery,
             run_datasource_plugins,
             cancel_plugin_run,

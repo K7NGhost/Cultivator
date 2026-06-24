@@ -6,15 +6,16 @@ Cultivator is a Tauri, React, and TypeScript forensics application.
 
 Python plugins are compiled behind the Tauri Cargo feature `python-plugins`.
 
-For local Windows development, install a normal CPython 3.9+ runtime and run:
+For local development, run:
 
 ```powershell
-bun run tauri:python
+bun run tauri dev
 ```
 
-PyO3 dynamically links to the local CPython runtime in this mode. For release
-packaging, vendor a redistributable Python runtime for the current build
-platform and build with the Python feature enabled:
+The Tauri wrapper enables the `python-plugins` Cargo feature, installs or
+refreshes the redistributable CPython runtime under `src-tauri/python-runtime`,
+and configures `PYO3_PYTHON`, `PYTHONHOME`, and platform loader paths before
+starting Tauri. For release packaging, build with the Python feature enabled:
 
 ```powershell
 bun run tauri build

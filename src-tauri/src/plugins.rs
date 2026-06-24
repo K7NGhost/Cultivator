@@ -780,6 +780,50 @@ pub async fn list_plugin_artifacts(
     Ok(artifacts)
 }
 
+pub async fn delete_plugin_artifact(
+    case_database_path: String,
+    artifact_id: String,
+) -> Result<(), String> {
+    delete_plugin_artifacts(case_database_path, vec![artifact_id]).await
+}
+
+pub async fn delete_plugin_artifacts(
+    case_database_path: String,
+    artifact_ids: Vec<String>,
+) -> Result<(), String> {
+    if artifact_ids.is_empty() {
+        return Ok(());
+    }
+
+    let pool = open_case_database(&case_database_path).await?;
+    ensure_plugin_tables(&pool).await?;
+
+    let mut removed_count = 0;
+
+    for artifact_id in &artifact_ids {
+        let result = sqlx::query(
+            r#"
+              DELETE FROM plugin_results
+              WHERE id = $1
+                AND plugin_id != $2
+            "#,
+        )
+        .bind(artifact_id)
+        .bind(builtin::IMAGE_METADATA_PLUGIN_ID)
+        .execute(&pool)
+        .await
+        .map_err(|error| format!("Failed to delete plugin artifact: {error}"))?;
+
+        removed_count += result.rows_affected();
+    }
+
+    if removed_count != artifact_ids.len() as u64 {
+        return Err("One or more artifacts were not found or cannot be removed.".to_string());
+    }
+
+    Ok(())
+}
+
 pub async fn list_media_gallery(
     case_database_path: String,
 ) -> Result<builtin::MediaGallery, String> {

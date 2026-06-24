@@ -6,6 +6,7 @@ import {
   FileText,
   FolderOpen,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import {
   Tree,
@@ -15,6 +16,20 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -35,7 +50,11 @@ import { useCases } from "@/features/cases/case-provider";
 import { listDataSources } from "@/features/datasources/dataSourceRepository";
 import type { DataSourceRecord } from "@/features/datasources/types";
 import { artifactModelsByKind } from "@/features/artifacts/artifactModels";
-import { listArtifacts } from "@/features/artifacts/artifactRepository";
+import {
+  deleteArtifact,
+  deleteArtifacts,
+  listArtifacts,
+} from "@/features/artifacts/artifactRepository";
 import type {
   ArtifactModelDefinition,
   StoredArtifactRecord,
@@ -52,9 +71,10 @@ type LoadState = {
 type ArtifactTreeNode = {
   id: string;
   name: string;
-  kind: "category" | "kind" | "artifact";
+  kind: "category" | "artifact";
   count: number;
   artifact?: StoredArtifactRecord;
+  artifacts?: StoredArtifactRecord[];
   children?: ArtifactTreeNode[];
 };
 
@@ -68,6 +88,18 @@ type CustomTableData = {
   columns: CustomTableColumn[];
   rows: Record<string, unknown>[];
 };
+
+type ArtifactRemovalTarget =
+  | {
+      kind: "artifact";
+      name: string;
+      artifacts: StoredArtifactRecord[];
+    }
+  | {
+      kind: "category";
+      category: string;
+      artifacts: StoredArtifactRecord[];
+    };
 
 function useElementSize<TElement extends HTMLElement>() {
   const ref = useRef<TElement | null>(null);
@@ -248,48 +280,140 @@ function formatTableCell(value: unknown) {
   }
 }
 
+function formatArtifactFileLabel(artifact: StoredArtifactRecord) {
+  if (!artifact.filePath) {
+    return artifact.label || artifact.resultKind;
+  }
+
+  const normalizedPath = artifact.filePath.replace(/\\/g, "/");
+  const pathParts = normalizedPath.split("/").filter(Boolean);
+
+  return pathParts[pathParts.length - 1] ?? artifact.filePath;
+}
+
 function buildArtifactTree(artifacts: StoredArtifactRecord[]): ArtifactTreeNode[] {
   const categoryMap = new Map<string, Map<string, StoredArtifactRecord[]>>();
 
   for (const artifact of artifacts) {
     const category = getPayloadCategory(artifact);
-    const kindMap = categoryMap.get(category) ?? new Map<string, StoredArtifactRecord[]>();
-    const kindArtifacts = kindMap.get(artifact.resultKind) ?? [];
+    const groupMap = categoryMap.get(category) ?? new Map<string, StoredArtifactRecord[]>();
+    const groupKey = [
+      artifact.pluginId,
+      artifact.resultKind,
+    ].join(":");
+    const groupArtifacts = groupMap.get(groupKey) ?? [];
 
-    kindArtifacts.push(artifact);
-    kindMap.set(artifact.resultKind, kindArtifacts);
-    categoryMap.set(category, kindMap);
+    groupArtifacts.push(artifact);
+    groupMap.set(groupKey, groupArtifacts);
+    categoryMap.set(category, groupMap);
   }
 
   return Array.from(categoryMap.entries())
     .sort(([firstCategory], [secondCategory]) =>
       firstCategory.localeCompare(secondCategory),
     )
-    .map(([category, kindMap]) => {
-      const kindNodes = Array.from(kindMap.entries())
-        .sort(([firstKind], [secondKind]) => firstKind.localeCompare(secondKind))
-        .map(([kind, kindArtifacts]) => ({
-          id: `kind:${category}:${kind}`,
-          name: getArtifactModel(kind)?.label ?? kind,
-          kind: "kind" as const,
-          count: kindArtifacts.length,
-          children: kindArtifacts.map((artifact) => ({
-            id: artifact.id,
-            name: artifact.label || artifact.resultKind,
+    .map(([category, groupMap]) => {
+      const artifactNodes = Array.from(groupMap.entries())
+        .map(([groupKey, groupArtifacts]) => {
+          const [firstArtifact] = groupArtifacts;
+
+          return {
+            id: `artifact:${category}:${groupKey}`,
+            name: firstArtifact.label || firstArtifact.resultKind,
             kind: "artifact" as const,
-            count: 0,
-            artifact,
-          })),
-        }));
+            count: groupArtifacts.length,
+            artifact: firstArtifact,
+            artifacts: groupArtifacts,
+          };
+        })
+        .sort((firstNode, secondNode) =>
+          firstNode.name.localeCompare(secondNode.name),
+        );
 
       return {
         id: `category:${category}`,
         name: category,
         kind: "category" as const,
-        count: kindNodes.reduce((total, node) => total + node.count, 0),
-        children: kindNodes,
+        count: artifactNodes.reduce((total, node) => total + node.count, 0),
+        children: artifactNodes,
       };
     });
+}
+
+function collectTreeArtifacts(node: ArtifactTreeNode): StoredArtifactRecord[] {
+  if (node.artifacts) {
+    return node.artifacts;
+  }
+
+  return node.children?.flatMap(collectTreeArtifacts) ?? [];
+}
+
+function findFirstArtifactNode(nodes: ArtifactTreeNode[]): ArtifactTreeNode | null {
+  for (const node of nodes) {
+    if (node.kind === "artifact") {
+      return node;
+    }
+
+    const childArtifactNode = findFirstArtifactNode(node.children ?? []);
+
+    if (childArtifactNode) {
+      return childArtifactNode;
+    }
+  }
+
+  return null;
+}
+
+function findArtifactNodeById(
+  nodes: ArtifactTreeNode[],
+  nodeId: string | null,
+): ArtifactTreeNode | null {
+  if (!nodeId) {
+    return null;
+  }
+
+  for (const node of nodes) {
+    if (node.id === nodeId && node.kind === "artifact") {
+      return node;
+    }
+
+    const childArtifactNode = findArtifactNodeById(node.children ?? [], nodeId);
+
+    if (childArtifactNode) {
+      return childArtifactNode;
+    }
+  }
+
+  return null;
+}
+
+function findArtifactNodeContainingArtifact(
+  nodes: ArtifactTreeNode[],
+  artifactId: string | null,
+): ArtifactTreeNode | null {
+  if (!artifactId) {
+    return null;
+  }
+
+  for (const node of nodes) {
+    if (
+      node.kind === "artifact" &&
+      node.artifacts?.some((artifact) => artifact.id === artifactId)
+    ) {
+      return node;
+    }
+
+    const childArtifactNode = findArtifactNodeContainingArtifact(
+      node.children ?? [],
+      artifactId,
+    );
+
+    if (childArtifactNode) {
+      return childArtifactNode;
+    }
+  }
+
+  return null;
 }
 
 export function ArtifactsPage() {
@@ -300,7 +424,16 @@ export function ArtifactsPage() {
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(
     null,
   );
+  const [selectedArtifactNodeId, setSelectedArtifactNodeId] = useState<
+    string | null
+  >(null);
+  const [removalTarget, setRemovalTarget] =
+    useState<ArtifactRemovalTarget | null>(null);
   const [loadState, setLoadState] = useState<LoadState>({
+    error: null,
+    isLoading: false,
+  });
+  const [deleteState, setDeleteState] = useState<LoadState>({
     error: null,
     isLoading: false,
   });
@@ -310,10 +443,6 @@ export function ArtifactsPage() {
   const datasourceMap = useMemo(() => {
     return new Map(datasources.map((datasource) => [datasource.id, datasource]));
   }, [datasources]);
-  const selectedArtifact =
-    artifacts.find((artifact) => artifact.id === selectedArtifactId) ??
-    artifacts[0] ??
-    null;
   const categories = useMemo(() => {
     return artifacts.reduce((counts, artifact) => {
       const category = getPayloadCategory(artifact);
@@ -324,6 +453,15 @@ export function ArtifactsPage() {
     }, new Map<string, number>());
   }, [artifacts]);
   const artifactTree = useMemo(() => buildArtifactTree(artifacts), [artifacts]);
+  const selectedArtifactNode =
+    findArtifactNodeById(artifactTree, selectedArtifactNodeId) ??
+    findArtifactNodeContainingArtifact(artifactTree, selectedArtifactId) ??
+    findFirstArtifactNode(artifactTree);
+  const selectedArtifactOptions = selectedArtifactNode?.artifacts ?? [];
+  const selectedArtifact =
+    selectedArtifactOptions.find((artifact) => artifact.id === selectedArtifactId) ??
+    selectedArtifactOptions[0] ??
+    null;
 
   async function refreshArtifacts() {
     if (!activeCase) {
@@ -331,6 +469,7 @@ export function ArtifactsPage() {
       setPlugins([]);
       setDatasources([]);
       setSelectedArtifactId(null);
+      setSelectedArtifactNodeId(null);
       setLoadState({ error: null, isLoading: false });
       return;
     }
@@ -354,6 +493,7 @@ export function ArtifactsPage() {
 
         return nextArtifacts[0]?.id ?? null;
       });
+      setSelectedArtifactNodeId(null);
       setLoadState({ error: null, isLoading: false });
     } catch (caughtError) {
       setLoadState({
@@ -366,6 +506,56 @@ export function ArtifactsPage() {
   useEffect(() => {
     void refreshArtifacts();
   }, [activeCase?.id]);
+
+  async function removeArtifacts() {
+    if (!activeCase || !removalTarget) {
+      return;
+    }
+
+    const removedArtifactIds =
+      removalTarget.kind === "artifact"
+        ? removalTarget.artifacts.map((artifact) => artifact.id)
+        : removalTarget.artifacts.map((artifact) => artifact.id);
+    const removedArtifactIdSet = new Set(removedArtifactIds);
+
+    setDeleteState({ error: null, isLoading: true });
+
+    try {
+      if (removalTarget.kind === "artifact") {
+        if (removedArtifactIds.length === 1) {
+          await deleteArtifact(activeCase.databasePath, removedArtifactIds[0]);
+        } else {
+          await deleteArtifacts(activeCase.databasePath, removedArtifactIds);
+        }
+      } else {
+        await deleteArtifacts(activeCase.databasePath, removedArtifactIds);
+      }
+
+      setArtifacts((currentArtifacts) => {
+        const nextArtifacts = currentArtifacts.filter(
+          (artifact) => !removedArtifactIdSet.has(artifact.id),
+        );
+
+        setSelectedArtifactId((currentId) => {
+          if (!currentId || !removedArtifactIdSet.has(currentId)) {
+            return currentId;
+          }
+
+          return nextArtifacts[0]?.id ?? null;
+        });
+        setSelectedArtifactNodeId(null);
+
+        return nextArtifacts;
+      });
+      setRemovalTarget(null);
+      setDeleteState({ error: null, isLoading: false });
+    } catch (caughtError) {
+      setDeleteState({
+        error: getErrorMessage(caughtError),
+        isLoading: false,
+      });
+    }
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
@@ -409,13 +599,34 @@ export function ArtifactsPage() {
           <ArtifactTreeViewer
             artifacts={artifacts}
             treeData={artifactTree}
-            selectedArtifactId={selectedArtifact?.id ?? null}
+            selectedTreeNodeId={selectedArtifactNode?.id ?? null}
             emptyText={
               activeCase
                 ? "No artifacts have been created by plugins yet."
                 : "Create or select a case before viewing artifacts."
             }
-            onSelectArtifact={(artifact) => setSelectedArtifactId(artifact.id)}
+            onSelectArtifactNode={(artifactNode) => {
+              const firstArtifact = artifactNode.artifacts?.[0] ?? artifactNode.artifact;
+
+              setSelectedArtifactNodeId(artifactNode.id);
+              setSelectedArtifactId(firstArtifact?.id ?? null);
+            }}
+            onRequestRemoveArtifact={(artifactNode) => {
+              setDeleteState({ error: null, isLoading: false });
+              setRemovalTarget({
+                kind: "artifact",
+                name: artifactNode.name,
+                artifacts: collectTreeArtifacts(artifactNode),
+              });
+            }}
+            onRequestRemoveCategory={(categoryNode) => {
+              setDeleteState({ error: null, isLoading: false });
+              setRemovalTarget({
+                kind: "category",
+                category: categoryNode.name,
+                artifacts: collectTreeArtifacts(categoryNode),
+              });
+            }}
           />
         </ResizablePanel>
 
@@ -424,6 +635,8 @@ export function ArtifactsPage() {
         <ResizablePanel defaultSize="62%" minSize="34%">
           <ArtifactPropertiesPanel
             artifact={selectedArtifact}
+            artifactOptions={selectedArtifactOptions}
+            onSelectArtifact={(artifact) => setSelectedArtifactId(artifact.id)}
             datasourceName={
               selectedArtifact
                 ? datasourceMap.get(selectedArtifact.datasourceId)?.name
@@ -437,6 +650,92 @@ export function ArtifactsPage() {
           />
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      <Dialog
+        open={removalTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteState.isLoading) {
+            setRemovalTarget(null);
+            setDeleteState({ error: null, isLoading: false });
+          }
+        }}
+      >
+        <DialogContent className="max-w-md gap-0 rounded-sm p-0">
+          <DialogHeader className="border-b px-3 py-2">
+            <DialogTitle className="text-sm">
+              {removalTarget?.kind === "category"
+                ? "Remove category artifacts"
+                : "Remove artifact"}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {removalTarget?.kind === "category"
+                ? "This removes every artifact in the selected category from the case database."
+                : "This removes the selected artifact from the case database."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 px-3 py-3 text-xs">
+            <div>
+              {removalTarget?.kind === "category" ? (
+                <>
+                  Are you sure you want to remove all{" "}
+                  <span className="font-medium">
+                    {removalTarget.artifacts.length.toLocaleString()}
+                  </span>{" "}
+                  artifacts in{" "}
+                  <span className="font-medium">{removalTarget.category}</span>?
+                </>
+              ) : (
+                <>
+                  Are you sure you want to remove{" "}
+                  <span className="font-medium">
+                    {removalTarget?.name || "this artifact"}
+                  </span>
+                  {removalTarget && removalTarget.artifacts.length > 1
+                    ? ` across ${removalTarget.artifacts.length.toLocaleString()} files`
+                    : ""}
+                  ?
+                </>
+              )}
+            </div>
+            {deleteState.error && (
+              <div className="rounded-sm border border-destructive/40 bg-destructive/10 px-2 py-1 text-destructive">
+                {deleteState.error}
+              </div>
+            )}
+          </div>
+          <DialogFooter className="border-t px-3 py-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-sm px-2 text-xs"
+              disabled={deleteState.isLoading}
+              onClick={() => {
+                setRemovalTarget(null);
+                setDeleteState({ error: null, isLoading: false });
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              className="h-8 rounded-sm px-2 text-xs"
+              disabled={
+                deleteState.isLoading ||
+                (removalTarget?.kind === "category" &&
+                  removalTarget.artifacts.length === 0)
+              }
+              onClick={() => {
+                void removeArtifacts();
+              }}
+            >
+              Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -444,14 +743,18 @@ export function ArtifactsPage() {
 function ArtifactTreeViewer({
   artifacts,
   emptyText,
-  onSelectArtifact,
-  selectedArtifactId,
+  onSelectArtifactNode,
+  onRequestRemoveArtifact,
+  onRequestRemoveCategory,
+  selectedTreeNodeId,
   treeData,
 }: {
   artifacts: StoredArtifactRecord[];
   emptyText: string;
-  onSelectArtifact: (artifact: StoredArtifactRecord) => void;
-  selectedArtifactId: string | null;
+  onSelectArtifactNode: (artifactNode: ArtifactTreeNode) => void;
+  onRequestRemoveArtifact: (artifactNode: ArtifactTreeNode) => void;
+  onRequestRemoveCategory: (categoryNode: ArtifactTreeNode) => void;
+  selectedTreeNodeId: string | null;
   treeData: ArtifactTreeNode[];
 }) {
   const treePanel = useElementSize<HTMLDivElement>();
@@ -487,14 +790,16 @@ function ArtifactTreeViewer({
               openByDefault
               disableDrag
               disableDrop
-              selection={selectedArtifactId ?? treeData[0]?.id}
+              selection={selectedTreeNodeId ?? treeData[0]?.id}
               className="py-1"
-              aria-label="Artifacts grouped by category and kind"
+              aria-label="Artifacts grouped by category"
             >
               {(props) => (
                 <ArtifactTreeRow
                   {...props}
-                  onSelectArtifact={onSelectArtifact}
+                  onSelectArtifactNode={onSelectArtifactNode}
+                  onRequestRemoveArtifact={onRequestRemoveArtifact}
+                  onRequestRemoveCategory={onRequestRemoveCategory}
                 />
               )}
             </Tree>
@@ -507,10 +812,14 @@ function ArtifactTreeViewer({
 
 function ArtifactTreeRow({
   node,
-  onSelectArtifact,
+  onSelectArtifactNode,
+  onRequestRemoveArtifact,
+  onRequestRemoveCategory,
   style,
 }: NodeRendererProps<ArtifactTreeNode> & {
-  onSelectArtifact: (artifact: StoredArtifactRecord) => void;
+  onSelectArtifactNode: (artifactNode: ArtifactTreeNode) => void;
+  onRequestRemoveArtifact: (artifactNode: ArtifactTreeNode) => void;
+  onRequestRemoveCategory: (categoryNode: ArtifactTreeNode) => void;
 }) {
   const connectorWidth = node.level * 16;
   const Icon =
@@ -526,7 +835,7 @@ function ArtifactTreeRow({
         ? "text-primary"
         : "text-amber-600 dark:text-amber-400";
 
-  return (
+  const row = (
     <div style={style} className="px-1">
       <div
         className={cn(
@@ -564,8 +873,8 @@ function ArtifactTreeRow({
           onClick={() => {
             node.select();
 
-            if (node.data.artifact) {
-              onSelectArtifact(node.data.artifact);
+            if (node.data.kind === "artifact") {
+              onSelectArtifactNode(node.data);
             } else if (node.isInternal) {
               node.toggle();
             }
@@ -576,10 +885,16 @@ function ArtifactTreeRow({
             {node.data.name}
           </span>
           {node.data.kind === "artifact" && node.data.artifact ? (
-            <span className="max-w-32 truncate text-[10px] text-muted-foreground">
-              {getPayloadSummary(node.data.artifact) ||
-                formatDateTime(node.data.artifact.createdAt)}
-            </span>
+            node.data.count > 1 ? (
+              <Badge variant="outline" className="h-4 rounded-sm px-1 text-[10px]">
+                {node.data.count} files
+              </Badge>
+            ) : (
+              <span className="max-w-32 truncate text-[10px] text-muted-foreground">
+                {getPayloadSummary(node.data.artifact) ||
+                  formatDateTime(node.data.artifact.createdAt)}
+              </span>
+            )
           ) : (
             <Badge variant="outline" className="h-4 rounded-sm px-1 text-[10px]">
               {node.data.count}
@@ -589,15 +904,65 @@ function ArtifactTreeRow({
       </div>
     </div>
   );
+
+  const artifact = node.data.artifact;
+
+  if (node.data.kind === "category") {
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+        <ContextMenuContent className="min-w-48">
+          <ContextMenuItem
+            variant="destructive"
+            disabled={node.data.count === 0}
+            onSelect={() => {
+              node.select();
+              onRequestRemoveCategory(node.data);
+            }}
+          >
+            <Trash2 className="size-3.5" aria-hidden="true" />
+            Remove category artifacts
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+
+  if (!artifact) {
+    return row;
+  }
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent className="min-w-44">
+        <ContextMenuItem
+          variant="destructive"
+          onSelect={() => {
+            node.select();
+            onSelectArtifactNode(node.data);
+            onRequestRemoveArtifact(node.data);
+          }}
+        >
+          <Trash2 className="size-3.5" aria-hidden="true" />
+          Remove artifact
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 function ArtifactPropertiesPanel({
   artifact,
+  artifactOptions,
   datasourceName,
+  onSelectArtifact,
   pluginName,
 }: {
   artifact: StoredArtifactRecord | null;
+  artifactOptions: StoredArtifactRecord[];
   datasourceName?: string;
+  onSelectArtifact: (artifact: StoredArtifactRecord) => void;
   pluginName?: string;
 }) {
   if (!artifact) {
@@ -657,6 +1022,33 @@ function ArtifactPropertiesPanel({
             </TabsList>
           </div>
         </div>
+
+        {artifactOptions.length > 1 && (
+          <div className="flex h-10 shrink-0 items-center gap-1 border-b bg-muted/20 px-2">
+            <div className="mr-1 shrink-0 text-[11px] font-medium uppercase text-muted-foreground">
+              File
+            </div>
+            <ScrollArea className="min-w-0 flex-1">
+              <div className="flex min-w-max items-center gap-1">
+                {artifactOptions.map((option) => (
+                  <Button
+                    key={option.id}
+                    type="button"
+                    variant={option.id === artifact.id ? "secondary" : "ghost"}
+                    size="sm"
+                    className="h-7 max-w-56 rounded-sm px-2 text-xs"
+                    title={option.filePath || option.label || option.resultKind}
+                    onClick={() => onSelectArtifact(option)}
+                  >
+                    <span className="truncate font-mono text-[11px]">
+                      {formatArtifactFileLabel(option)}
+                    </span>
+                  </Button>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+        )}
 
         <TabsContent
           value="preview"
@@ -756,34 +1148,38 @@ function CustomTableArtifactPreview({ table }: { table: CustomTableData }) {
       <div className="min-h-0 flex-1 overflow-hidden p-2">
         <Table
           containerClassName="h-full overflow-auto rounded-sm border"
-          className="table-fixed text-xs"
+          className="w-max min-w-full table-auto text-xs"
         >
           <TableHeader className="sticky top-0 z-10 bg-background">
-            <TableRow className="h-7 hover:bg-transparent">
+            <TableRow className="hover:bg-transparent">
               {table.columns.map((column) => (
                 <TableHead
                   key={column.key}
-                  className="h-7 border-r px-2 py-1 text-[11px] last:border-r-0"
+                  className="border-r px-2 py-1 align-top text-[11px] last:border-r-0"
                   title={column.label}
                 >
-                  <span className="block truncate">{column.label}</span>
+                  <span className="block whitespace-nowrap">
+                    {column.label}
+                  </span>
                 </TableHead>
               ))}
             </TableRow>
           </TableHeader>
           <TableBody>
             {table.rows.map((row, rowIndex) => (
-              <TableRow key={rowIndex} className="h-7">
+              <TableRow key={rowIndex}>
                 {table.columns.map((column) => {
                   const value = formatTableCell(row[column.key]);
 
                   return (
                     <TableCell
                       key={column.key}
-                      className="border-r px-2 py-1 text-[11px] last:border-r-0"
+                      className="border-r px-2 py-1 align-top text-[11px] last:border-r-0"
                       title={value}
                     >
-                      <span className="block truncate">{value || "-"}</span>
+                      <span className="block whitespace-pre-wrap">
+                        {value || "-"}
+                      </span>
                     </TableCell>
                   );
                 })}
