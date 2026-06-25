@@ -32,7 +32,7 @@ import { createDataSource } from "@/features/datasources/dataSourceRepository";
 import type {
   DataSourceRecord,
   DataSourcePlugin,
-  DataSourcePluginType,
+  DataSourcePluginTarget,
   DataSourceType,
 } from "@/features/datasources/types";
 import {
@@ -69,17 +69,17 @@ const dataSourceTypes: Array<{
   },
 ];
 
-const pluginTypeFilters: Array<{
-  type: DataSourcePluginType | "all";
+const pluginTargetFilters: Array<{
+  target: DataSourcePluginTarget | "all";
   label: string;
 }> = [
-  { type: "all", label: "All" },
-  { type: "android", label: "Android" },
-  { type: "ios", label: "iOS" },
-  { type: "windows", label: "Windows" },
-  { type: "macos", label: "macOS" },
-  { type: "infotainment", label: "Infotainment" },
-  { type: "other", label: "Other" },
+  { target: "all", label: "All" },
+  { target: "android", label: "Android" },
+  { target: "ios", label: "iOS" },
+  { target: "windows", label: "Windows" },
+  { target: "macos", label: "macOS" },
+  { target: "infotainment", label: "Infotainment" },
+  { target: "other", label: "Other" },
 ];
 
 const steps: Array<{ step: WizardStep; title: string; description: string }> = [
@@ -103,9 +103,9 @@ function getPathName(path: string) {
   return pathParts[pathParts.length - 1] ?? normalizedPath;
 }
 
-function getPluginTypeLabel(type: DataSourcePluginType) {
+function getPluginTargetLabel(target: DataSourcePluginTarget) {
   return (
-    pluginTypeFilters.find((pluginTypeFilter) => pluginTypeFilter.type === type)
+    pluginTargetFilters.find((pluginTargetFilter) => pluginTargetFilter.target === target)
       ?.label ?? "Other"
   );
 }
@@ -164,8 +164,8 @@ export function DataSourceWizardDialog({
   const [type, setType] = useState<DataSourceType>("logicalFiles");
   const [paths, setPaths] = useState<string[]>([]);
   const [pluginFilter, setPluginFilter] = useState("");
-  const [pluginTypeFilter, setPluginTypeFilter] = useState<
-    DataSourcePluginType | "all"
+  const [pluginTargetFilter, setPluginTargetFilter] = useState<
+    DataSourcePluginTarget | "all"
   >("all");
   const [activePluginId, setActivePluginId] = useState("");
   const [availablePlugins, setAvailablePlugins] = useState<DataSourcePlugin[]>(
@@ -186,7 +186,7 @@ export function DataSourceWizardDialog({
     const normalizedFilter = pluginFilter.trim().toLowerCase();
 
     return availablePlugins.filter((plugin) => {
-      if (pluginTypeFilter !== "all" && plugin.type !== pluginTypeFilter) {
+      if (pluginTargetFilter !== "all" && plugin.target !== pluginTargetFilter) {
         return false;
       }
 
@@ -197,10 +197,10 @@ export function DataSourceWizardDialog({
       return (
         plugin.name.toLowerCase().includes(normalizedFilter) ||
         plugin.description.toLowerCase().includes(normalizedFilter) ||
-        getPluginTypeLabel(plugin.type).toLowerCase().includes(normalizedFilter)
+        getPluginTargetLabel(plugin.target).toLowerCase().includes(normalizedFilter)
       );
     });
-  }, [availablePlugins, pluginFilter, pluginTypeFilter]);
+  }, [availablePlugins, pluginFilter, pluginTargetFilter]);
   const activePlugin =
     availablePlugins.find((plugin) => plugin.id === activePluginId) ??
     visiblePlugins[0] ??
@@ -221,7 +221,7 @@ export function DataSourceWizardDialog({
     setType("logicalFiles");
     setPaths([]);
     setPluginFilter("");
-    setPluginTypeFilter("all");
+    setPluginTargetFilter("all");
     setActivePluginId("");
     setSelectedPluginIds([]);
     setError(null);
@@ -598,20 +598,20 @@ export function DataSourceWizardDialog({
                       onChange={(event) => setPluginFilter(event.target.value)}
                     />
                     <div className="flex flex-wrap gap-1">
-                      {pluginTypeFilters.map((pluginType) => {
+                      {pluginTargetFilters.map((pluginTarget) => {
                         const isSelected =
-                          pluginTypeFilter === pluginType.type;
+                          pluginTargetFilter === pluginTarget.target;
 
                         return (
                           <Button
-                            key={pluginType.type}
+                            key={pluginTarget.target}
                             type="button"
                             variant={isSelected ? "secondary" : "outline"}
                             size="xs"
                             className="h-7 rounded-sm px-2 text-[11px]"
-                            onClick={() => setPluginTypeFilter(pluginType.type)}
+                            onClick={() => setPluginTargetFilter(pluginTarget.target)}
                           >
-                            {pluginType.label}
+                            {pluginTarget.label}
                           </Button>
                         );
                       })}
@@ -649,7 +649,7 @@ export function DataSourceWizardDialog({
                                       variant="secondary"
                                       className="h-4 shrink-0 rounded-sm px-1 text-[10px]"
                                     >
-                                      {getPluginTypeLabel(plugin.type)}
+                                      {getPluginTargetLabel(plugin.target)}
                                     </Badge>
                                     <span className="block truncate text-[11px] text-muted-foreground">
                                       {plugin.description}
@@ -687,7 +687,7 @@ export function DataSourceWizardDialog({
                               variant="secondary"
                               className="h-4 rounded-sm px-1 text-[10px]"
                             >
-                              {getPluginTypeLabel(activePlugin.type)}
+                              {getPluginTargetLabel(activePlugin.target)}
                             </Badge>
                             <span className="truncate text-[11px] text-muted-foreground">
                               {activePlugin.id}

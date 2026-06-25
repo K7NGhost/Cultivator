@@ -25,10 +25,36 @@ export async function openPythonApiGuide(): Promise<void> {
 }
 
 export async function createPythonPlugin(
-  name: string,
+  request:
+    | string
+    | {
+        manifest?: {
+          id: string;
+          name: string;
+          description: string;
+          type: string;
+          target:
+            | "ios"
+            | "android"
+            | "windows"
+            | "macos"
+            | "infotainment"
+            | "other";
+          mode: "each_file" | "path_glob" | "path_regex";
+          pathGlob?: string[];
+          pathRegex?: string;
+          entry: string;
+          function: string;
+        };
+        manifestToml?: string;
+        name?: string;
+      },
 ): Promise<CreatedPythonPlugin> {
+  const createRequest =
+    typeof request === "string" ? { name: request } : request;
+
   return invoke<CreatedPythonPlugin>("create_python_plugin", {
-    request: { name },
+    request: createRequest,
   });
 }
 

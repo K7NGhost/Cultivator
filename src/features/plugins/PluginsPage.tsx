@@ -26,6 +26,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -46,6 +47,7 @@ import {
   listPluginLogs,
   listPythonPlugins,
   openPythonPluginFolder,
+  openPythonPluginFolderInVscode,
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
 import { createPluginRunId } from "@/features/plugins/pluginToasts";
@@ -68,8 +70,50 @@ type ActivePluginRun = {
   status: "running" | "cancelling";
 };
 
+type CreatePluginMode = "manual" | "toml";
+type CreatePluginTarget =
+  | "ios"
+  | "android"
+  | "windows"
+  | "macos"
+  | "infotainment"
+  | "other";
+type CreatePluginRunMode = "each_file" | "path_glob" | "path_regex";
+
+const createPluginTargets: Array<{ value: CreatePluginTarget; label: string }> = [
+  { value: "infotainment", label: "Infotainment" },
+  { value: "android", label: "Android" },
+  { value: "ios", label: "iOS" },
+  { value: "windows", label: "Windows" },
+  { value: "macos", label: "macOS" },
+  { value: "other", label: "Other" },
+];
+
+const createPluginModes: Array<{ value: CreatePluginRunMode; label: string }> = [
+  { value: "each_file", label: "Each file" },
+  { value: "path_glob", label: "Path glob" },
+  { value: "path_regex", label: "Path regex" },
+];
+
 function getErrorMessage(caughtError: unknown) {
   return caughtError instanceof Error ? caughtError.message : String(caughtError);
+}
+
+function getPluginTargetLabel(target: PythonPlugin["target"]) {
+  switch (target) {
+    case "android":
+      return "Android";
+    case "ios":
+      return "iOS";
+    case "windows":
+      return "Windows";
+    case "macos":
+      return "macOS";
+    case "infotainment":
+      return "Infotainment";
+    case "other":
+      return "Other";
+  }
 }
 
 function formatJobTime(value: string | null) {
@@ -150,7 +194,23 @@ export function PluginsPage() {
   const [logs, setLogs] = useState<PluginLogRecord[]>([]);
   const [activeRuns, setActiveRuns] = useState<ActivePluginRun[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [createPluginMode, setCreatePluginMode] =
+    useState<CreatePluginMode>("manual");
+  const [newPluginId, setNewPluginId] = useState("");
   const [newPluginName, setNewPluginName] = useState("");
+  const [newPluginDescription, setNewPluginDescription] = useState("");
+  const [newPluginType, setNewPluginType] = useState("other");
+  const [newPluginTarget, setNewPluginTarget] =
+    useState<CreatePluginTarget>("infotainment");
+  const [newPluginRunMode, setNewPluginRunMode] =
+    useState<CreatePluginRunMode>("each_file");
+  const [newPluginPathGlob, setNewPluginPathGlob] = useState("");
+  const [newPluginPathRegex, setNewPluginPathRegex] = useState("");
+  const [newPluginEntry, setNewPluginEntry] = useState("plugin.py");
+  const [newPluginFunction, setNewPluginFunction] = useState("run");
+  const [newPluginToml, setNewPluginToml] = useState(
+    'id = "example-plugin"\nname = "Example Plugin"\ndescription = "Extracts infotainment artifacts."\ntype = "other"\ntarget = "infotainment"\nmode = "path_glob"\npath_glob = ["*/example.db"]\nentry = "plugin.py"\nfunction = "run"\n',
+  );
   const [creatingPlugin, setCreatingPlugin] = useState(false);
   const [deletingPluginId, setDeletingPluginId] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
@@ -296,9 +356,38 @@ export function PluginsPage() {
 
   async function createPlugin() {
     const pluginName = newPluginName.trim();
+    const pluginId = newPluginId.trim();
+    const pluginType = newPluginType.trim();
+    const pluginEntry = newPluginEntry.trim();
+    const pluginFunction = newPluginFunction.trim();
+    const pluginToml = newPluginToml.trim();
 
-    if (!pluginName) {
-      setLoadState({ error: "Plugin name is required.", isLoading: false });
+    if (createPluginMode === "manual") {
+      if (!pluginId || !pluginName || !pluginType || !pluginEntry || !pluginFunction) {
+        setLoadState({
+          error: "Plugin id, name, type, entry, and function are required.",
+          isLoading: false,
+        });
+        return;
+      }
+
+      if (newPluginRunMode === "path_glob" && !newPluginPathGlob.trim()) {
+        setLoadState({
+          error: "Path glob mode requires at least one path glob.",
+          isLoading: false,
+        });
+        return;
+      }
+
+      if (newPluginRunMode === "path_regex" && !newPluginPathRegex.trim()) {
+        setLoadState({
+          error: "Path regex mode requires a path regex.",
+          isLoading: false,
+        });
+        return;
+      }
+    } else if (!pluginToml) {
+      setLoadState({ error: "Plugin TOML is required.", isLoading: false });
       return;
     }
 
@@ -306,7 +395,29 @@ export function PluginsPage() {
     setLoadState((currentState) => ({ ...currentState, error: null }));
 
     try {
-      await createPythonPlugin(pluginName);
+      await createPythonPlugin(
+        createPluginMode === "manual"
+          ? {
+              manifest: {
+                id: pluginId,
+                name: pluginName,
+                description: newPluginDescription.trim(),
+                type: pluginType,
+                target: newPluginTarget,
+                mode: newPluginRunMode,
+                pathGlob: newPluginPathGlob
+                  .split(/\r?\n|,/)
+                  .map((pathGlob) => pathGlob.trim())
+                  .filter(Boolean),
+                pathRegex: newPluginPathRegex.trim() || undefined,
+                entry: pluginEntry,
+                function: pluginFunction,
+              },
+            }
+          : { manifestToml: pluginToml },
+      );
+      await openPythonPluginFolderInVscode();
+      resetCreatePluginForm();
       setNewPluginName("");
       setIsCreateDialogOpen(false);
       await refreshPluginsPage();
@@ -318,6 +429,20 @@ export function PluginsPage() {
     } finally {
       setCreatingPlugin(false);
     }
+  }
+
+  function resetCreatePluginForm() {
+    setCreatePluginMode("manual");
+    setNewPluginId("");
+    setNewPluginName("");
+    setNewPluginDescription("");
+    setNewPluginType("other");
+    setNewPluginTarget("infotainment");
+    setNewPluginRunMode("each_file");
+    setNewPluginPathGlob("");
+    setNewPluginPathRegex("");
+    setNewPluginEntry("plugin.py");
+    setNewPluginFunction("run");
   }
 
   async function deletePlugin(plugin: PythonPlugin) {
@@ -486,13 +611,14 @@ export function PluginsPage() {
 
                 <Table
                   containerClassName="min-h-0 flex-1 overflow-auto"
-                  className="min-w-[760px] table-fixed text-xs"
+                  className="min-w-[860px] table-fixed text-xs"
                 >
                   <TableHeader className="sticky top-0 z-10 bg-muted">
-                    <TableRow className="hover:bg-muted">
-                      <TableHead className="h-7 w-[190px] px-2">Plugin</TableHead>
-                      <TableHead className="h-7 w-[110px] px-2">Mode</TableHead>
-                      <TableHead className="h-7 w-[260px] px-2">Description</TableHead>
+                      <TableRow className="hover:bg-muted">
+                        <TableHead className="h-7 w-[190px] px-2">Plugin</TableHead>
+                        <TableHead className="h-7 w-[110px] px-2">Target</TableHead>
+                        <TableHead className="h-7 w-[110px] px-2">Mode</TableHead>
+                        <TableHead className="h-7 w-[220px] px-2">Description</TableHead>
                       <TableHead className="h-7 w-[110px] px-2">Entry</TableHead>
                       <TableHead className="h-7 w-[90px] px-2">Action</TableHead>
                     </TableRow>
@@ -511,6 +637,14 @@ export function PluginsPage() {
                                 {plugin.id}
                               </div>
                             </div>
+                          </TableCell>
+                          <TableCell className="h-8 px-2 py-0">
+                            <Badge
+                              variant="secondary"
+                              className="h-5 rounded-sm px-1 text-[10px]"
+                            >
+                              {getPluginTargetLabel(plugin.target)}
+                            </Badge>
                           </TableCell>
                           <TableCell className="h-8 px-2 py-0">
                             <Badge
@@ -547,7 +681,7 @@ export function PluginsPage() {
                     {plugins.length === 0 && (
                       <TableRow>
                         <TableCell
-                          colSpan={5}
+                          colSpan={6}
                           className="h-16 text-center text-xs text-muted-foreground"
                         >
                           No Python plugins are installed.
@@ -844,12 +978,21 @@ export function PluginsPage() {
         </ResizablePanel>
       </ResizablePanelGroup>
 
-      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="max-w-md rounded-sm p-0">
+      <Dialog
+        open={isCreateDialogOpen}
+        onOpenChange={(isOpen) => {
+          setIsCreateDialogOpen(isOpen);
+
+          if (!isOpen) {
+            resetCreatePluginForm();
+          }
+        }}
+      >
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-3xl rounded-sm p-0">
           <DialogHeader className="border-b px-3 py-2">
             <DialogTitle className="text-sm">Add Python Plugin</DialogTitle>
             <DialogDescription className="text-xs">
-              Create a plugin folder with plugin.py and plugin.toml.
+              Create a plugin folder with plugin.py and plugin.toml, or paste an existing manifest.
             </DialogDescription>
           </DialogHeader>
           <form
@@ -858,14 +1001,164 @@ export function PluginsPage() {
               void createPlugin();
             }}
           >
-            <div className="px-3 py-3">
-              <Input
-                className="h-8 rounded-sm text-xs"
-                value={newPluginName}
-                autoFocus
-                placeholder="Plugin name"
-                onChange={(event) => setNewPluginName(event.target.value)}
-              />
+            <div className="max-h-[min(34rem,calc(100vh-12rem))] overflow-auto px-3 py-3">
+              <Tabs
+                value={createPluginMode}
+                onValueChange={(value) =>
+                  setCreatePluginMode(value as CreatePluginMode)
+                }
+              >
+                <TabsList className="h-8 rounded-sm">
+                  <TabsTrigger value="manual" className="h-7 rounded-sm text-xs">
+                    Manual
+                  </TabsTrigger>
+                  <TabsTrigger value="toml" className="h-7 rounded-sm text-xs">
+                    TOML
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="manual" className="mt-3 space-y-3">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">Plugin ID</span>
+                      <Input
+                        className="h-8 rounded-sm text-xs"
+                        value={newPluginId}
+                        autoFocus
+                        placeholder="ford-phonebook"
+                        onChange={(event) => setNewPluginId(event.target.value)}
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">Name</span>
+                      <Input
+                        className="h-8 rounded-sm text-xs"
+                        value={newPluginName}
+                        placeholder="Ford Phonebook"
+                        onChange={(event) => setNewPluginName(event.target.value)}
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs sm:col-span-2">
+                      <span className="text-muted-foreground">Description</span>
+                      <Input
+                        className="h-8 rounded-sm text-xs"
+                        value={newPluginDescription}
+                        placeholder="Extracts infotainment phonebook records."
+                        onChange={(event) =>
+                          setNewPluginDescription(event.target.value)
+                        }
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">Type</span>
+                      <Input
+                        className="h-8 rounded-sm text-xs"
+                        value={newPluginType}
+                        placeholder="contacts"
+                        onChange={(event) => setNewPluginType(event.target.value)}
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">Entry file</span>
+                      <Input
+                        className="h-8 rounded-sm text-xs"
+                        value={newPluginEntry}
+                        placeholder="plugin.py"
+                        onChange={(event) => setNewPluginEntry(event.target.value)}
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">Function</span>
+                      <Input
+                        className="h-8 rounded-sm text-xs"
+                        value={newPluginFunction}
+                        placeholder="run"
+                        onChange={(event) =>
+                          setNewPluginFunction(event.target.value)
+                        }
+                      />
+                    </label>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Target</div>
+                    <div className="flex flex-wrap gap-1">
+                      {createPluginTargets.map((target) => (
+                        <Button
+                          key={target.value}
+                          type="button"
+                          variant={
+                            newPluginTarget === target.value
+                              ? "secondary"
+                              : "outline"
+                          }
+                          size="xs"
+                          className="h-7 rounded-sm px-2 text-[11px]"
+                          onClick={() => setNewPluginTarget(target.value)}
+                        >
+                          {target.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Mode</div>
+                    <div className="flex flex-wrap gap-1">
+                      {createPluginModes.map((mode) => (
+                        <Button
+                          key={mode.value}
+                          type="button"
+                          variant={
+                            newPluginRunMode === mode.value
+                              ? "secondary"
+                              : "outline"
+                          }
+                          size="xs"
+                          className="h-7 rounded-sm px-2 text-[11px]"
+                          onClick={() => setNewPluginRunMode(mode.value)}
+                        >
+                          {mode.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">Path glob</span>
+                      <textarea
+                        className="min-h-20 w-full resize-y rounded-sm border bg-transparent px-2 py-1.5 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                        value={newPluginPathGlob}
+                        placeholder={"*/phonebook.db\n*/contacts*.json"}
+                        onChange={(event) =>
+                          setNewPluginPathGlob(event.target.value)
+                        }
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">Path regex</span>
+                      <textarea
+                        className="min-h-20 w-full resize-y rounded-sm border bg-transparent px-2 py-1.5 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                        value={newPluginPathRegex}
+                        placeholder="(?i).*phonebook.*"
+                        onChange={(event) =>
+                          setNewPluginPathRegex(event.target.value)
+                        }
+                      />
+                    </label>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="toml" className="mt-3">
+                  <textarea
+                    className="min-h-80 w-full resize-y rounded-sm border bg-transparent px-2 py-1.5 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    value={newPluginToml}
+                    onChange={(event) => setNewPluginToml(event.target.value)}
+                    spellCheck={false}
+                  />
+                </TabsContent>
+              </Tabs>
             </div>
             <DialogFooter className="border-t px-3 py-2">
               <Button
@@ -874,7 +1167,10 @@ export function PluginsPage() {
                 size="xs"
                 className="h-7 rounded-sm px-2 text-xs"
                 disabled={creatingPlugin}
-                onClick={() => setIsCreateDialogOpen(false)}
+                onClick={() => {
+                  setIsCreateDialogOpen(false);
+                  resetCreatePluginForm();
+                }}
               >
                 Cancel
               </Button>

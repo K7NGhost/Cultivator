@@ -1,4 +1,4 @@
-use crate::plugins::{PythonPluginManifest, PythonPluginMode};
+use crate::plugins::{PythonPluginManifest, PythonPluginMode, PythonPluginTarget};
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -121,6 +121,7 @@ pub fn manifest() -> PythonPluginManifest {
         name: "Image Metadata".to_string(),
         description: "Built-in Rust analyzer for image and video gallery metadata.".to_string(),
         plugin_type: "other".to_string(),
+        target: PythonPluginTarget::Other,
         mode: PythonPluginMode::PathRegex,
         path_glob: Vec::new(),
         path_regex: Some(

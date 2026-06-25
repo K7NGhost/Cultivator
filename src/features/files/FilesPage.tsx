@@ -27,7 +27,10 @@ import {
   subscribeToDataSourcesChanged,
 } from "@/features/datasources/dataSourceRepository";
 import { DataSourceWizardDialog } from "@/features/datasources/DataSourceWizardDialog";
-import type { DataSourceRecord } from "@/features/datasources/types";
+import type {
+  DataSourcePluginTarget,
+  DataSourceRecord,
+} from "@/features/datasources/types";
 import {
   type EvidenceDirectoryEntry,
   type EvidenceDirectoryListing,
@@ -54,6 +57,36 @@ import {
 } from "@/features/plugins/pluginToasts";
 import type { PythonPlugin } from "@/features/plugins/types";
 import { cn } from "@/lib/utils";
+
+function getPluginTargetLabel(target: PythonPlugin["target"]) {
+  switch (target) {
+    case "android":
+      return "Android";
+    case "ios":
+      return "iOS";
+    case "windows":
+      return "Windows";
+    case "macos":
+      return "macOS";
+    case "infotainment":
+      return "Infotainment";
+    case "other":
+      return "Other";
+  }
+}
+
+const pluginTargetFilters: Array<{
+  target: DataSourcePluginTarget | "all";
+  label: string;
+}> = [
+  { target: "all", label: "All" },
+  { target: "infotainment", label: "Infotainment" },
+  { target: "android", label: "Android" },
+  { target: "ios", label: "iOS" },
+  { target: "windows", label: "Windows" },
+  { target: "macos", label: "macOS" },
+  { target: "other", label: "Other" },
+];
 
 export function FilesPage() {
   const { error, isLoading, listing } = useEvidence();
@@ -84,6 +117,9 @@ export function FilesPage() {
   const [selectedRunPluginIds, setSelectedRunPluginIds] = useState<string[]>([]);
   const [activeRunPluginId, setActiveRunPluginId] = useState("");
   const [pluginFilter, setPluginFilter] = useState("");
+  const [pluginTargetFilter, setPluginTargetFilter] = useState<
+    DataSourcePluginTarget | "all"
+  >("all");
   const [isDataSourcesLoading, setIsDataSourcesLoading] = useState(false);
   const [isEntriesLoading, setIsEntriesLoading] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
@@ -99,20 +135,28 @@ export function FilesPage() {
   const visiblePlugins = useMemo(() => {
     const normalizedFilter = pluginFilter.trim().toLowerCase();
 
+    const targetMatches = (plugin: PythonPlugin) =>
+      pluginTargetFilter === "all" || plugin.target === pluginTargetFilter;
+
     if (!normalizedFilter) {
-      return availablePlugins;
+      return availablePlugins.filter(targetMatches);
     }
 
     return availablePlugins.filter((plugin) => {
+      if (!targetMatches(plugin)) {
+        return false;
+      }
+
       return (
         plugin.name.toLowerCase().includes(normalizedFilter) ||
+        plugin.type.toLowerCase().includes(normalizedFilter) ||
         plugin.description.toLowerCase().includes(normalizedFilter) ||
         plugin.id.toLowerCase().includes(normalizedFilter)
       );
     });
-  }, [availablePlugins, pluginFilter]);
+  }, [availablePlugins, pluginFilter, pluginTargetFilter]);
   const activeRunPlugin =
-    availablePlugins.find((plugin) => plugin.id === activeRunPluginId) ??
+    visiblePlugins.find((plugin) => plugin.id === activeRunPluginId) ??
     visiblePlugins[0] ??
     null;
   const pluginMap = useMemo(() => {
@@ -733,6 +777,8 @@ export function FilesPage() {
         onOpenChange={(isOpen) => {
           if (!isOpen) {
             setPluginRunDataSource(null);
+            setPluginFilter("");
+            setPluginTargetFilter("all");
           }
         }}
       >
@@ -760,7 +806,7 @@ export function FilesPage() {
                   <Input
                     className="h-8 rounded-sm text-xs"
                     value={pluginFilter}
-                    placeholder="Filter plugins"
+                    placeholder="Filter by name, type, or id"
                     onChange={(event) => setPluginFilter(event.target.value)}
                   />
                   <Button
@@ -768,10 +814,10 @@ export function FilesPage() {
                     variant="ghost"
                     size="xs"
                     className="h-7 rounded-sm px-2 text-xs"
-                    disabled={availablePlugins.length === 0}
+                    disabled={visiblePlugins.length === 0}
                     onClick={() =>
                       setSelectedRunPluginIds(
-                        availablePlugins.map((plugin) => plugin.id),
+                        visiblePlugins.map((plugin) => plugin.id),
                       )
                     }
                   >
@@ -787,6 +833,25 @@ export function FilesPage() {
                   >
                     Unselect All
                   </Button>
+                  <div className="col-span-3 flex flex-wrap gap-1">
+                    {pluginTargetFilters.map((targetFilter) => {
+                      const isSelected =
+                        pluginTargetFilter === targetFilter.target;
+
+                      return (
+                        <Button
+                          key={targetFilter.target}
+                          type="button"
+                          variant={isSelected ? "secondary" : "outline"}
+                          size="xs"
+                          className="h-7 rounded-sm px-2 text-[11px]"
+                          onClick={() => setPluginTargetFilter(targetFilter.target)}
+                        >
+                          {targetFilter.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto rounded-sm border">
@@ -858,7 +923,7 @@ export function FilesPage() {
                         variant="secondary"
                         className="h-4 rounded-sm px-1 text-[10px]"
                       >
-                        {activeRunPlugin.type}
+                        {getPluginTargetLabel(activeRunPlugin.target)}
                       </Badge>
                       <span className="truncate text-[11px] text-muted-foreground">
                         {activeRunPlugin.id}
@@ -885,6 +950,10 @@ export function FilesPage() {
                     <div>{pluginRunDataSource?.paths.length ?? 0}</div>
                     <div className="text-muted-foreground">Mode</div>
                     <div>{activeRunPlugin.mode}</div>
+                    <div className="text-muted-foreground">Type</div>
+                    <div className="truncate">{activeRunPlugin.type}</div>
+                    <div className="text-muted-foreground">Target</div>
+                    <div>{getPluginTargetLabel(activeRunPlugin.target)}</div>
                   </div>
                   <div className="mt-auto rounded-sm border border-dashed px-2 py-2 text-[11px] text-muted-foreground">
                     This plugin does not expose configurable options yet.

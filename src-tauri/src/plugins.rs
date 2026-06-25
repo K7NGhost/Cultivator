@@ -87,6 +87,7 @@ pub struct PythonPluginManifest {
     pub description: String,
     #[serde(rename = "type")]
     pub plugin_type: String,
+    pub target: PythonPluginTarget,
     pub mode: PythonPluginMode,
     #[serde(
         default,
@@ -101,6 +102,17 @@ pub struct PythonPluginManifest {
     pub entry: String,
     #[serde(default = "default_plugin_function")]
     pub function: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PythonPluginTarget {
+    Ios,
+    Android,
+    Windows,
+    Macos,
+    Infotainment,
+    Other,
 }
 
 #[derive(Deserialize)]
@@ -130,7 +142,32 @@ where
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePythonPluginRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub manifest: Option<CreatePythonPluginManifestRequest>,
+    #[serde(default)]
+    pub manifest_toml: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePythonPluginManifestRequest {
+    pub id: String,
     pub name: String,
+    pub description: String,
+    #[serde(rename = "type")]
+    pub plugin_type: String,
+    pub target: PythonPluginTarget,
+    pub mode: PythonPluginMode,
+    #[serde(default)]
+    pub path_glob: Vec<String>,
+    #[serde(default)]
+    pub path_regex: Option<String>,
+    #[serde(default = "default_plugin_entry")]
+    pub entry: String,
+    #[serde(default = "default_plugin_function")]
+    pub function: String,
 }
 
 #[derive(Deserialize)]
@@ -706,20 +743,23 @@ pub fn create_python_plugin(
     app_handle: AppHandle,
     request: CreatePythonPluginRequest,
 ) -> Result<CreatedPythonPlugin, String> {
-    let plugin_name = request.name.trim();
-
-    if plugin_name.is_empty() {
-        return Err("Plugin name is required.".to_string());
-    }
-
-    let plugin_id = plugin_id_from_name(plugin_name);
+    let manifest_text = create_plugin_manifest_text(request)?;
+    let manifest = toml::from_str::<PythonPluginManifest>(&manifest_text)
+        .map_err(|error| format!("Failed to parse plugin.toml: {error}"))?;
+    let plugin_id = manifest.id.trim();
 
     if plugin_id.is_empty() {
-        return Err("Plugin name must contain at least one letter or number.".to_string());
+        return Err("Plugin manifest id is required.".to_string());
+    }
+
+    if !is_safe_plugin_id(plugin_id) {
+        return Err(
+            "Plugin manifest id may only contain letters, numbers, '.', '_', and '-'.".to_string(),
+        );
     }
 
     let plugin_root = ensure_python_plugin_directory(&app_handle)?;
-    let plugin_directory = plugin_root.join(&plugin_id);
+    let plugin_directory = plugin_root.join(plugin_id);
     let manifest_path = plugin_directory.join("plugin.toml");
     let script_path = plugin_directory.join("plugin.py");
 
@@ -729,13 +769,11 @@ pub fn create_python_plugin(
 
     fs::create_dir_all(&plugin_directory)
         .map_err(|error| format!("Failed to create plugin directory: {error}"))?;
-    fs::write(
-        &manifest_path,
-        python_plugin_manifest_template(&plugin_id, plugin_name),
-    )
-    .map_err(|error| format!("Failed to write plugin.toml: {error}"))?;
-    fs::write(&script_path, python_plugin_script_template(plugin_name))
+    fs::write(&manifest_path, normalize_toml_for_write(&manifest_text))
+        .map_err(|error| format!("Failed to write plugin.toml: {error}"))?;
+    fs::write(&script_path, python_plugin_script_template(&manifest.name))
         .map_err(|error| format!("Failed to write plugin.py: {error}"))?;
+    validate_manifest(&manifest, &plugin_directory)?;
 
     let opened_in_vscode = open_plugin_files_in_vscode(&manifest_path, &script_path);
 
@@ -746,7 +784,7 @@ pub fn create_python_plugin(
     }
 
     Ok(CreatedPythonPlugin {
-        id: plugin_id,
+        id: plugin_id.to_string(),
         directory: plugin_directory.to_string_lossy().to_string(),
         manifest_path: manifest_path.to_string_lossy().to_string(),
         script_path: script_path.to_string_lossy().to_string(),
@@ -3351,6 +3389,7 @@ const CULTIVATOR_PYTHON_API_GUIDE: &str = r#"<!doctype html>
 name = "Phonebook Parser"
 description = "Extract phonebook records from ASR context files."
 type = "contacts"
+target = "infotainment"
 mode = "path_glob"
 path_glob = ["*/recents_storage", "*/favorites_storage"]
 entry = "plugin.py"
@@ -3365,6 +3404,7 @@ function = "run"</code></pre>
           <tr><td><code>name</code></td><td>Display name in Cultivator.</td></tr>
           <tr><td><code>description</code></td><td>Short explanation of what the plugin extracts.</td></tr>
           <tr><td><code>type</code></td><td>Artifact category label, such as <code>contacts</code>, <code>messages</code>, or <code>other</code>.</td></tr>
+          <tr><td><code>target</code></td><td>Required source target. Must be <code>ios</code>, <code>android</code>, <code>windows</code>, <code>macos</code>, <code>infotainment</code>, or <code>other</code>.</td></tr>
           <tr><td><code>mode</code></td><td><code>each_file</code> runs on every datasource file. <code>path_glob</code> runs only on matching paths.</td></tr>
           <tr><td><code>path_glob</code></td><td>Required for <code>path_glob</code>. Accepts one glob string or a list of glob strings. <code>path_globs</code> is also accepted as a list alias. Matched case-insensitively against normalized full file path and file name.</td></tr>
           <tr><td><code>entry</code></td><td>Python file to load. Defaults to <code>plugin.py</code>.</td></tr>
@@ -3429,6 +3469,7 @@ context["file"]["size"]</code></pre>
           <tr><td><code>add_table_row(table, values=None, **fields)</code></td><td><code>None</code></td><td>Appends a row to a custom table artifact before it is added or returned.</td></tr>
           <tr><td><code>add_artifact(artifact, file_path=None)</code></td><td><code>None</code></td><td>Adds an artifact to the current plugin job results without returning it from <code>run</code>.</td></tr>
           <tr><td><code>contact(label, **fields)</code> and other model helpers</td><td><code>dict</code></td><td>Creates a typed artifact payload with <code>kind</code>, <code>category</code>, and <code>label</code>.</td></tr>
+          <tr><td><code>sms</code>, <code>email</code>, <code>journey</code>, <code>map_artifact</code>, and base node helpers</td><td><code>dict</code></td><td>Creates node-ready artifacts for timelines, maps, and relationship graphs. Use <code>nodeId</code> and <code>relatedIds</code> to connect records.</td></tr>
           <tr><td><code>search(query, regex=False, case_sensitive=False, binary_files=False, max_matches=None)</code></td><td><code>list[SearchMatch]</code></td><td>Searches the current datasource paths.</td></tr>
           <tr><td><code>search_files(root_path, query, regex=False, case_sensitive=False, binary_files=False, max_matches=None)</code></td><td><code>list[SearchMatch]</code></td><td>Searches a specific file or directory.</td></tr>
         </tbody>
@@ -3468,19 +3509,43 @@ def run(context):
           <tr><td><code>application</code></td><td><code>ApplicationArtifact</code></td><td><code>applications</code></td><td><code>name: str</code>, <code>packageName: str</code>, <code>version: str</code>, <code>vendor: str</code></td></tr>
           <tr><td><code>browser_history</code></td><td><code>BrowserHistoryArtifact</code></td><td><code>browser</code></td><td><code>url: str</code>, <code>title: str</code>, <code>visitedAt: str</code>, <code>browser: str</code></td></tr>
           <tr><td><code>call</code></td><td><code>CallArtifact</code></td><td><code>calls</code></td><td><code>direction: str</code>, <code>phone: str</code>, <code>contactName: str</code>, <code>startedAt: str</code></td></tr>
+          <tr><td><code>calendar_entry</code></td><td><code>CalendarEntryArtifact</code></td><td><code>calendar</code></td><td><code>title: str</code>, <code>startsAt: str</code>, <code>endsAt: str</code>, <code>location: str</code>, <code>attendees: list[str]</code></td></tr>
+          <tr><td><code>carved_string</code></td><td><code>CarvedStringArtifact</code></td><td><code>search</code></td><td><code>value: str</code>, <code>encoding: str</code>, <code>offset: int</code>, <code>length: int</code></td></tr>
+          <tr><td><code>chat</code></td><td><code>ChatArtifact</code></td><td><code>communications</code></td><td><code>conversationId: str</code>, <code>participants: list[str]</code>, <code>service: str</code>, <code>startedAt: str</code></td></tr>
           <tr><td><code>contact</code></td><td><code>ContactArtifact</code></td><td><code>contacts</code></td><td><code>name: str</code>, <code>phones: list[str]</code>, <code>emails: list[str]</code>, <code>organization: str</code></td></tr>
           <tr><td><code>credential</code></td><td><code>CredentialArtifact</code></td><td><code>credentials</code></td><td><code>username: str</code>, <code>service: str</code>, <code>url: str</code>, <code>secretType: str</code>, <code>secretPreview: str</code></td></tr>
+          <tr><td><code>application_usage</code></td><td><code>ApplicationUsageArtifact</code></td><td><code>applications</code></td><td><code>application: str</code>, <code>packageName: str</code>, <code>startedAt: str</code>, <code>endedAt: str</code>, <code>durationSeconds: float</code></td></tr>
+          <tr><td><code>bluetooth_device</code></td><td><code>BluetoothDeviceArtifact</code></td><td><code>networks</code></td><td><code>name: str</code>, <code>address: str</code>, <code>pairedAt: str</code>, <code>lastConnectedAt: str</code></td></tr>
+          <tr><td><code>cookie</code></td><td><code>CookieArtifact</code></td><td><code>browser</code></td><td><code>host: str</code>, <code>name: str</code>, <code>path: str</code>, <code>createdAt: str</code>, <code>expiresAt: str</code></td></tr>
+          <tr><td><code>dictionary_word</code></td><td><code>DictionaryWordArtifact</code></td><td><code>search</code></td><td><code>word: str</code>, <code>language: str</code>, <code>learnedAt: str</code>, <code>usageCount: int</code></td></tr>
+          <tr><td><code>email</code></td><td><code>EmailArtifact</code></td><td><code>communications</code></td><td><code>messageId: str</code>, <code>from: str</code>, <code>to: list[str]</code>, <code>subject: str</code>, <code>sentAt: str</code></td></tr>
           <tr><td><code>file</code></td><td><code>FileArtifact</code></td><td><code>files</code></td><td><code>path: str</code>, <code>size: int</code>, <code>sha256: str</code>, <code>mimeType: str</code></td></tr>
+          <tr><td><code>installed_application</code></td><td><code>InstalledApplicationArtifact</code></td><td><code>applications</code></td><td><code>name: str</code>, <code>packageName: str</code>, <code>version: str</code>, <code>vendor: str</code>, <code>installedAt: str</code></td></tr>
+          <tr><td><code>instant_message</code></td><td><code>InstantMessageArtifact</code></td><td><code>messages</code></td><td><code>conversationId: str</code>, <code>sender: str</code>, <code>recipients: list[str]</code>, <code>body: str</code>, <code>sentAt: str</code></td></tr>
+          <tr><td><code>journey</code></td><td><code>JourneyArtifact</code></td><td><code>journeys</code></td><td><code>startedAt: str</code>, <code>endedAt: str</code>, <code>origin: str</code>, <code>destination: str</code>, <code>points: list[dict]</code></td></tr>
           <tr><td><code>location</code></td><td><code>LocationArtifact</code></td><td><code>locations</code></td><td><code>latitude: float</code>, <code>longitude: float</code>, <code>accuracyMeters: float</code>, <code>recordedAt: str</code></td></tr>
+          <tr><td><code>map</code></td><td><code>MapArtifact</code></td><td><code>maps</code></td><td><code>name: str</code>, <code>provider: str</code>, <code>centerLatitude: float</code>, <code>centerLongitude: float</code>, <code>bounds: dict</code>. Helper: <code>map_artifact(...)</code></td></tr>
           <tr><td><code>media</code></td><td><code>MediaArtifact</code></td><td><code>media</code></td><td><code>path: str</code>, <code>mediaType: str</code>, <code>createdAt: str</code>, <code>durationSeconds: float</code></td></tr>
           <tr><td><code>message</code></td><td><code>MessageArtifact</code></td><td><code>messages</code></td><td><code>sender: str</code>, <code>recipients: list[str]</code>, <code>body: str</code>, <code>sentAt: str</code>, <code>service: str</code></td></tr>
+          <tr><td><code>mms</code></td><td><code>MmsArtifact</code></td><td><code>messages</code></td><td><code>conversationId: str</code>, <code>sender: str</code>, <code>recipients: list[str]</code>, <code>body: str</code>, <code>attachments: list[str]</code></td></tr>
           <tr><td><code>note</code></td><td><code>NoteArtifact</code></td><td><code>notes</code></td><td><code>title: str</code>, <code>body: str</code>, <code>createdAt: str</code>, <code>modifiedAt: str</code></td></tr>
+          <tr><td><code>notification</code></td><td><code>NotificationArtifact</code></td><td><code>system</code></td><td><code>application: str</code>, <code>title: str</code>, <code>body: str</code>, <code>receivedAt: str</code></td></tr>
+          <tr><td><code>password</code></td><td><code>PasswordArtifact</code></td><td><code>credentials</code></td><td><code>username: str</code>, <code>service: str</code>, <code>url: str</code>, <code>secretPreview: str</code>, <code>storedAt: str</code></td></tr>
+          <tr><td><code>powering_event</code></td><td><code>PoweringEventArtifact</code></td><td><code>system</code></td><td><code>eventType: str</code>, <code>occurredAt: str</code>, <code>sourceApp: str</code></td></tr>
+          <tr><td><code>searched_item</code></td><td><code>SearchedItemArtifact</code></td><td><code>search</code></td><td><code>query: str</code>, <code>searchedAt: str</code>, <code>application: str</code>, <code>url: str</code></td></tr>
+          <tr><td><code>shared_file</code></td><td><code>SharedFileArtifact</code></td><td><code>files</code></td><td><code>path: str</code>, <code>name: str</code>, <code>sharedWith: list[str]</code>, <code>sharedAt: str</code>, <code>service: str</code></td></tr>
+          <tr><td><code>sms</code></td><td><code>SmsArtifact</code></td><td><code>messages</code></td><td><code>conversationId: str</code>, <code>sender: str</code>, <code>recipients: list[str]</code>, <code>body: str</code>, <code>sentAt: str</code></td></tr>
           <tr><td><code>system</code></td><td><code>SystemArtifact</code></td><td><code>system</code></td><td><code>key: str</code>, <code>value: str</code>, <code>namespace: str</code></td></tr>
           <tr><td><code>timeline_event</code></td><td><code>TimelineArtifact</code></td><td><code>timeline</code></td><td><code>occurredAt: str</code>, <code>eventType: str</code>, <code>actor: str</code>, <code>target: str</code></td></tr>
+          <tr><td><code>user_account</code></td><td><code>UserAccountArtifact</code></td><td><code>accounts</code></td><td><code>username: str</code>, <code>displayName: str</code>, <code>email: str</code>, <code>phone: str</code>, <code>service: str</code></td></tr>
+          <tr><td><code>visited_page</code></td><td><code>VisitedPageArtifact</code></td><td><code>browser</code></td><td><code>url: str</code>, <code>title: str</code>, <code>visitedAt: str</code>, <code>browser: str</code></td></tr>
+          <tr><td><code>voice_mail</code></td><td><code>VoiceMailArtifact</code></td><td><code>communications</code></td><td><code>phone: str</code>, <code>contactName: str</code>, <code>transcript: str</code>, <code>receivedAt: str</code>, <code>durationSeconds: float</code></td></tr>
+          <tr><td><code>web_bookmark</code></td><td><code>WebBookmarkArtifact</code></td><td><code>browser</code></td><td><code>url: str</code>, <code>title: str</code>, <code>folder: str</code>, <code>createdAt: str</code>, <code>browser: str</code></td></tr>
+          <tr><td><code>wireless_network</code></td><td><code>WirelessNetworkArtifact</code></td><td><code>networks</code></td><td><code>ssid: str</code>, <code>bssid: str</code>, <code>security: str</code>, <code>lastConnectedAt: str</code></td></tr>
           <tr><td><code>record</code></td><td><code>GenericArtifact</code></td><td><code>other</code></td><td><code>fields: dict[str, Any]</code></td></tr>
         </tbody>
       </table>
-      <p>All artifact model types extend <code>BaseArtifact</code>, which supports <code>kind: str</code>, <code>category: ArtifactCategory</code>, <code>label: str</code>, <code>description: str</code>, <code>source: ArtifactSourceReference</code>, <code>timestamps: list[ArtifactTimestamp]</code>, <code>tags: list[str]</code>, <code>confidence: ArtifactConfidence</code>, <code>severity: ArtifactSeverity</code>, and <code>raw: Any</code>.</p>
+      <p>All artifact model types extend <code>BaseArtifact</code>, which supports <code>kind: str</code>, <code>category: ArtifactCategory</code>, <code>label: str</code>, <code>description: str</code>, <code>source: ArtifactSourceReference</code>, <code>timestamps: list[ArtifactTimestamp]</code>, <code>tags: list[str]</code>, <code>confidence: ArtifactConfidence</code>, <code>severity: ArtifactSeverity</code>, and <code>raw: Any</code>. Base node artifacts also support <code>nodeId: str</code> and <code>relatedIds: list[str]</code> for relationship graphs.</p>
       <pre><code>def run(context):
     return {
         "kind": "contact",
@@ -4220,12 +4285,114 @@ fn plugin_id_from_name(name: &str) -> String {
     id.trim_matches('-').to_string()
 }
 
+fn create_plugin_manifest_text(request: CreatePythonPluginRequest) -> Result<String, String> {
+    if let Some(manifest_toml) = request.manifest_toml {
+        let manifest_toml = manifest_toml.trim();
+
+        if manifest_toml.is_empty() {
+            return Err("Plugin TOML is required.".to_string());
+        }
+
+        return Ok(manifest_toml.to_string());
+    }
+
+    if let Some(manifest) = request.manifest {
+        let path_glob = if manifest.path_glob.is_empty() {
+            String::new()
+        } else {
+            let globs = manifest
+                .path_glob
+                .iter()
+                .map(|glob| toml_quote(glob))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            format!("path_glob = [{globs}]\n")
+        };
+        let path_regex = manifest
+            .path_regex
+            .as_ref()
+            .filter(|pattern| !pattern.trim().is_empty())
+            .map(|pattern| format!("path_regex = {}\n", toml_quote(pattern)))
+            .unwrap_or_default();
+
+        return Ok(format!(
+            "id = {}\nname = {}\ndescription = {}\ntype = {}\ntarget = {}\nmode = {}\n{path_glob}{path_regex}entry = {}\nfunction = {}\n",
+            toml_quote(&manifest.id),
+            toml_quote(&manifest.name),
+            toml_quote(&manifest.description),
+            toml_quote(&manifest.plugin_type),
+            toml_quote(plugin_target_value(&manifest.target)),
+            toml_quote(plugin_mode_value(&manifest.mode)),
+            toml_quote(&manifest.entry),
+            toml_quote(&manifest.function),
+        ));
+    }
+
+    let plugin_name = request
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "Plugin name is required.".to_string())?;
+    let plugin_id = plugin_id_from_name(plugin_name);
+
+    if plugin_id.is_empty() {
+        return Err("Plugin name must contain at least one letter or number.".to_string());
+    }
+
+    Ok(python_plugin_manifest_template(&plugin_id, plugin_name))
+}
+
+fn normalize_toml_for_write(text: &str) -> String {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+
+    format!("{}\r\n", normalized.trim_end())
+}
+
+fn toml_quote(value: &str) -> String {
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\r', "\\r")
+            .replace('\n', "\\n")
+    )
+}
+
+fn plugin_target_value(target: &PythonPluginTarget) -> &'static str {
+    match target {
+        PythonPluginTarget::Ios => "ios",
+        PythonPluginTarget::Android => "android",
+        PythonPluginTarget::Windows => "windows",
+        PythonPluginTarget::Macos => "macos",
+        PythonPluginTarget::Infotainment => "infotainment",
+        PythonPluginTarget::Other => "other",
+    }
+}
+
+fn plugin_mode_value(mode: &PythonPluginMode) -> &'static str {
+    match mode {
+        PythonPluginMode::EachFile => "each_file",
+        PythonPluginMode::PathGlob => "path_glob",
+        PythonPluginMode::PathRegex => "path_regex",
+    }
+}
+
+fn is_safe_plugin_id(plugin_id: &str) -> bool {
+    plugin_id
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+}
+
 fn python_plugin_manifest_template(plugin_id: &str, plugin_name: &str) -> String {
     format!(
         r#"id = "{plugin_id}"
 name = "{plugin_name}"
 description = "Describe what this plugin extracts."
 type = "other"
+target = "other"
 mode = "each_file"
 entry = "plugin.py"
 function = "run"

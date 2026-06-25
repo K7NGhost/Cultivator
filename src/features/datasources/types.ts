@@ -1,6 +1,6 @@
 export type DataSourceType = "logicalFiles";
 
-export type DataSourcePluginType =
+export type DataSourcePluginTarget =
   | "android"
   | "ios"
   | "windows"
@@ -12,7 +12,8 @@ export type DataSourcePlugin = {
   id: string;
   name: string;
   description: string;
-  type: DataSourcePluginType;
+  type: string;
+  target: DataSourcePluginTarget;
   mode: "each_file" | "path_glob" | "path_regex";
   pathGlob?: string | string[];
   pathRegex?: string;
