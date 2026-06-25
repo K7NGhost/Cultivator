@@ -29,7 +29,7 @@ use sqlx::{
     Row, SqlitePool,
 };
 #[cfg(feature = "python-plugins")]
-use std::io;
+use std::io::{self, Write};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -52,6 +52,15 @@ mod builtin;
 pub use builtin::MediaGallery;
 
 const PYTHON_PLUGIN_RELATIVE_PATH: &[&str] = &["plugins", "python"];
+const LEGACY_DEMO_PLUGIN_IDS: &[&str] = &[
+    "file-metadata",
+    "keyword-scanner",
+    "string-extractor",
+    "sqlite-parser",
+    "browser-history",
+    "sample-error",
+];
+const LEGACY_DEMO_ARTIFACT_KINDS: &[&str] = &["file_metadata", "text_sample"];
 
 static NEXT_ID_SUFFIX: AtomicU64 = AtomicU64::new(1);
 static PLUGIN_CANCELLATIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -147,7 +156,7 @@ struct LoadedPythonPlugin {
     directory: PathBuf,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 #[cfg_attr(not(feature = "python-plugins"), allow(dead_code))]
 struct DatasourceForPlugins {
     id: String,
@@ -157,7 +166,7 @@ struct DatasourceForPlugins {
     plugin_ids: Vec<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 #[cfg(feature = "python-plugins")]
 struct TargetFile {
     path: String,
@@ -166,7 +175,7 @@ struct TargetFile {
     size: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 #[cfg(feature = "python-plugins")]
 struct PluginExecutionTask {
     plugin_id: String,
@@ -189,21 +198,47 @@ enum PluginTargetMatcher {
     PathRegex(Regex),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 struct PendingPluginLog {
     level: String,
     message: String,
 }
 
+#[derive(Deserialize)]
 struct PluginExecutionOutput {
+    #[serde(rename = "scannedFiles")]
     scanned_files: u64,
+    #[serde(rename = "matchedFiles")]
     matched_files: u64,
     records: Vec<PluginResultRecord>,
     logs: Vec<PendingPluginLog>,
 }
 
+#[derive(Clone)]
+#[cfg_attr(not(feature = "python-plugins"), allow(dead_code))]
+struct PythonRuntime {
+    executable: PathBuf,
+    home: Option<PathBuf>,
+    library_paths: Vec<PathBuf>,
+}
+
+#[derive(Serialize)]
+#[cfg(feature = "python-plugins")]
+struct PythonPluginProcessInput<'a> {
+    plugin: &'a PythonPluginManifest,
+    plugin_directory: String,
+    case_database_path: &'a str,
+    case_folder_path: &'a str,
+    datasource: &'a DatasourceForPlugins,
+    tasks: &'a [PluginExecutionTask],
+    scanned_files: u64,
+}
+
+#[derive(Deserialize)]
 struct PluginResultRecord {
+    #[serde(rename = "filePath")]
     file_path: String,
+    #[serde(rename = "resultKind")]
     result_kind: String,
     label: String,
     payload: JsonValue,
@@ -850,11 +885,14 @@ pub async fn list_plugin_artifacts(
             created_at
           FROM plugin_results
           WHERE plugin_id != $1
+            AND result_kind NOT IN ($2, $3)
           ORDER BY created_at DESC
           LIMIT 5000
         "#,
     )
     .bind(builtin::IMAGE_METADATA_PLUGIN_ID)
+    .bind(LEGACY_DEMO_ARTIFACT_KINDS[0])
+    .bind(LEGACY_DEMO_ARTIFACT_KINDS[1])
     .fetch_all(&pool)
     .await
     .map_err(|error| format!("Failed to list plugin artifacts: {error}"))?;
@@ -994,54 +1032,38 @@ pub async fn run_datasource_plugins(
         .map(|plugin| (plugin.manifest.id.clone(), plugin))
         .collect::<HashMap<_, _>>();
     let requested_plugin_ids = plugin_ids.unwrap_or_else(|| datasource.plugin_ids.clone());
+    #[cfg(feature = "python-plugins")]
+    let datasource_files = enumerate_datasource_files(&datasource)?;
+    let mut python_runtime = None;
     let mut jobs = Vec::new();
+    let mut job_handles = Vec::new();
+    let mut should_run_image_metadata = false;
 
     for plugin_id in &requested_plugin_ids {
         if is_plugin_run_cancelled(run_id.as_deref())? {
             break;
         }
 
-        if plugin_id == builtin::IMAGE_METADATA_PLUGIN_ID {
-            let job =
-                create_plugin_job(&pool, &datasource, builtin::IMAGE_METADATA_PLUGIN_ID).await?;
-            let execution_paths = datasource.paths.clone();
+        if LEGACY_DEMO_PLUGIN_IDS.contains(&plugin_id.as_str()) {
+            let job = create_plugin_job(&pool, &datasource, plugin_id).await?;
 
-            let output = tauri::async_runtime::spawn_blocking(move || {
-                builtin::execute_image_metadata(execution_paths)
-            })
-            .await
-            .map_err(|error| format!("Built-in plugin worker failed: {error}"))?;
-
-            match output {
-                Ok(gallery) => {
-                    if is_plugin_run_cancelled(run_id.as_deref())? {
-                        fail_plugin_job(&pool, &job.id, "Plugin run cancelled.").await?;
-                        jobs.push(load_plugin_job(&pool, &job.id).await?);
-                        continue;
-                    }
-
-                    let mut logs = Vec::new();
-                    let matched_files = (gallery.photos.len() + gallery.videos.len()) as u64;
-
-                    logs.push(PendingPluginLog {
-                        level: "info".to_string(),
-                        message: format!(
-                            "Scanned {} files and found {} media files.",
-                            gallery.scanned_files, matched_files
-                        ),
-                    });
-
-                    insert_plugin_logs(&pool, &job.id, builtin::IMAGE_METADATA_PLUGIN_ID, &logs)
-                        .await?;
-                    replace_media_gallery_items(&pool, &job.id, &datasource.id, &gallery).await?;
-                    complete_plugin_job(&pool, &job.id).await?;
-                }
-                Err(message) => {
-                    fail_plugin_job(&pool, &job.id, &message).await?;
-                }
-            }
-
+            insert_plugin_logs(
+                &pool,
+                &job.id,
+                plugin_id,
+                &[PendingPluginLog {
+                    level: "info".to_string(),
+                    message: "Skipped removed demo plugin.".to_string(),
+                }],
+            )
+            .await?;
+            complete_plugin_job(&pool, &job.id).await?;
             jobs.push(load_plugin_job(&pool, &job.id).await?);
+            continue;
+        }
+
+        if plugin_id == builtin::IMAGE_METADATA_PLUGIN_ID {
+            should_run_image_metadata = true;
             continue;
         }
 
@@ -1054,54 +1076,149 @@ pub async fn run_datasource_plugins(
             continue;
         };
 
-        let job = create_plugin_job(&pool, &datasource, &plugin.manifest.id).await?;
-        let run_plugin_id = plugin.manifest.id.clone();
-        let execution_datasource = datasource.clone();
-        let execution_case_database_path = case_database_path.clone();
-        let execution_case_folder_path = case_folder_path.clone();
-        let execution_run_id = run_id.clone();
+        #[cfg(feature = "python-plugins")]
+        {
+            let plan = build_plugin_execution_plan(&plugin, &datasource, &datasource_files)?;
+            let job = create_plugin_job(&pool, &datasource, &plugin.manifest.id).await?;
+            let run_plugin_id = plugin.manifest.id.clone();
+            let job_id = job.id.clone();
 
-        let output = tauri::async_runtime::spawn_blocking(move || {
-            execute_python_plugin(
-                &plugin,
-                &execution_datasource,
-                &execution_case_database_path,
-                &execution_case_folder_path,
-                execution_run_id.as_deref(),
-            )
-        })
-        .await
-        .map_err(|error| format!("Plugin worker failed: {error}"))?;
-
-        match output {
-            Ok(output) => {
-                let mut logs = output.logs;
-
-                logs.push(PendingPluginLog {
-                    level: "info".to_string(),
-                    message: format!(
-                        "Scanned {} files and ran on {} files.",
-                        output.scanned_files, output.matched_files
-                    ),
-                });
-
-                insert_plugin_logs(&pool, &job.id, &run_plugin_id, &logs).await?;
-                insert_plugin_results(
+            if plan.tasks.is_empty() {
+                insert_plugin_logs(
                     &pool,
-                    &job.id,
-                    &datasource.id,
+                    &job_id,
                     &run_plugin_id,
-                    &output.records,
+                    &[PendingPluginLog {
+                        level: "info".to_string(),
+                        message: format!(
+                            "Skipped after scanning {} files because no files matched this plugin.",
+                            plan.scanned_files
+                        ),
+                    }],
                 )
                 .await?;
-                complete_plugin_job(&pool, &job.id).await?;
+                complete_plugin_job(&pool, &job_id).await?;
+                jobs.push(load_plugin_job(&pool, &job_id).await?);
+                continue;
             }
-            Err(message) => {
-                fail_plugin_job(&pool, &job.id, &message).await?;
-            }
+
+            let execution_datasource = datasource.clone();
+            let execution_case_database_path = case_database_path.clone();
+            let execution_case_folder_path = case_folder_path.clone();
+            let execution_run_id = run_id.clone();
+            let execution_python_runtime = python_runtime
+                .get_or_insert_with(|| resolve_python_runtime(&app_handle))
+                .clone()?;
+            let job_pool = pool.clone();
+            let job_datasource_id = datasource.id.clone();
+
+            let handle = tauri::async_runtime::spawn(async move {
+                let output = tauri::async_runtime::spawn_blocking(move || {
+                    execute_python_plugin_process(
+                        &plugin,
+                        &execution_datasource,
+                        &execution_case_database_path,
+                        &execution_case_folder_path,
+                        plan,
+                        &execution_python_runtime,
+                        execution_run_id.as_deref(),
+                    )
+                })
+                .await
+                .map_err(|error| format!("Plugin worker failed: {error}"))?;
+
+                finish_python_plugin_job(
+                    &job_pool,
+                    &job_id,
+                    &job_datasource_id,
+                    &run_plugin_id,
+                    output,
+                )
+                .await
+            });
+
+            job_handles.push(handle);
         }
 
-        jobs.push(load_plugin_job(&pool, &job.id).await?);
+        #[cfg(not(feature = "python-plugins"))]
+        {
+            let job = create_plugin_job(&pool, &datasource, &plugin.manifest.id).await?;
+            let run_plugin_id = plugin.manifest.id.clone();
+            let execution_datasource = datasource.clone();
+            let execution_case_database_path = case_database_path.clone();
+            let execution_case_folder_path = case_folder_path.clone();
+            let execution_run_id = run_id.clone();
+            let execution_python_runtime = python_runtime
+                .get_or_insert_with(|| resolve_python_runtime(&app_handle))
+                .clone()?;
+            let job_id = job.id.clone();
+            let job_pool = pool.clone();
+            let job_datasource_id = datasource.id.clone();
+
+            let handle = tauri::async_runtime::spawn(async move {
+                let output = tauri::async_runtime::spawn_blocking(move || {
+                    execute_python_plugin_process(
+                        &plugin,
+                        &execution_datasource,
+                        &execution_case_database_path,
+                        &execution_case_folder_path,
+                        &execution_python_runtime,
+                        execution_run_id.as_deref(),
+                    )
+                })
+                .await
+                .map_err(|error| format!("Plugin worker failed: {error}"))?;
+
+                finish_python_plugin_job(
+                    &job_pool,
+                    &job_id,
+                    &job_datasource_id,
+                    &run_plugin_id,
+                    output,
+                )
+                .await
+            });
+
+            job_handles.push(handle);
+        }
+    }
+
+    if should_run_image_metadata && !is_plugin_run_cancelled(run_id.as_deref())? {
+        let job = create_plugin_job(&pool, &datasource, builtin::IMAGE_METADATA_PLUGIN_ID).await?;
+        let execution_paths = datasource.paths.clone();
+        let job_id = job.id.clone();
+        let plugin_id = builtin::IMAGE_METADATA_PLUGIN_ID.to_string();
+        let job_pool = pool.clone();
+        let job_datasource_id = datasource.id.clone();
+        let job_run_id = run_id.clone();
+
+        let handle = tauri::async_runtime::spawn(async move {
+            let output = tauri::async_runtime::spawn_blocking(move || {
+                builtin::execute_image_metadata(execution_paths)
+            })
+            .await
+            .map_err(|error| format!("Plugin worker failed: {error}"))?;
+
+            finish_image_metadata_job(
+                &job_pool,
+                &job_id,
+                &job_datasource_id,
+                &plugin_id,
+                output,
+                job_run_id.as_deref(),
+            )
+            .await
+        });
+
+        job_handles.push(handle);
+    }
+
+    for handle in job_handles {
+        jobs.push(
+            handle
+                .await
+                .map_err(|error| format!("Plugin job task failed: {error}"))??,
+        );
     }
 
     clear_plugin_run_cancellation(run_id.as_deref())?;
@@ -1112,7 +1229,175 @@ pub async fn run_datasource_plugins(
     })
 }
 
+async fn finish_python_plugin_job(
+    pool: &SqlitePool,
+    job_id: &str,
+    datasource_id: &str,
+    plugin_id: &str,
+    output: Result<PluginExecutionOutput, String>,
+) -> Result<PluginJobRecord, String> {
+    match output {
+        Ok(output) => {
+            let mut logs = output.logs;
+
+            logs.push(PendingPluginLog {
+                level: "info".to_string(),
+                message: format!(
+                    "Scanned {} files and ran on {} files.",
+                    output.scanned_files, output.matched_files
+                ),
+            });
+
+            insert_plugin_logs(pool, job_id, plugin_id, &logs).await?;
+            insert_plugin_results(pool, job_id, datasource_id, plugin_id, &output.records).await?;
+            complete_plugin_job(pool, job_id).await?;
+        }
+        Err(message) => {
+            fail_plugin_job(pool, job_id, &message).await?;
+        }
+    }
+
+    load_plugin_job(pool, job_id).await
+}
+
+async fn finish_image_metadata_job(
+    pool: &SqlitePool,
+    job_id: &str,
+    datasource_id: &str,
+    plugin_id: &str,
+    output: Result<builtin::MediaGallery, String>,
+    run_id: Option<&str>,
+) -> Result<PluginJobRecord, String> {
+    match output {
+        Ok(gallery) => {
+            if is_plugin_run_cancelled(run_id)? {
+                fail_plugin_job(pool, job_id, "Plugin run cancelled.").await?;
+                return load_plugin_job(pool, job_id).await;
+            }
+
+            let mut logs = Vec::new();
+            let matched_files = (gallery.photos.len() + gallery.videos.len()) as u64;
+
+            logs.push(PendingPluginLog {
+                level: "info".to_string(),
+                message: format!(
+                    "Scanned {} files and found {} media files.",
+                    gallery.scanned_files, matched_files
+                ),
+            });
+
+            insert_plugin_logs(pool, job_id, plugin_id, &logs).await?;
+            replace_media_gallery_items(pool, job_id, datasource_id, &gallery).await?;
+            complete_plugin_job(pool, job_id).await?;
+        }
+        Err(message) => {
+            fail_plugin_job(pool, job_id, &message).await?;
+        }
+    }
+
+    load_plugin_job(pool, job_id).await
+}
+
 #[cfg(feature = "python-plugins")]
+fn execute_python_plugin_process(
+    plugin: &LoadedPythonPlugin,
+    datasource: &DatasourceForPlugins,
+    case_database_path: &str,
+    case_folder_path: &str,
+    plan: PluginExecutionPlan,
+    python_runtime: &PythonRuntime,
+    run_id: Option<&str>,
+) -> Result<PluginExecutionOutput, String> {
+    if is_plugin_run_cancelled(run_id)? {
+        return Err("Plugin run cancelled.".to_string());
+    }
+
+    let input = PythonPluginProcessInput {
+        plugin: &plugin.manifest,
+        plugin_directory: plugin.directory.to_string_lossy().to_string(),
+        case_database_path,
+        case_folder_path,
+        datasource,
+        tasks: &plan.tasks,
+        scanned_files: plan.scanned_files,
+    };
+    let input_json = serde_json::to_vec(&input)
+        .map_err(|error| format!("Failed to serialize plugin input: {error}"))?;
+    let mut command = ProcessCommand::new(&python_runtime.executable);
+
+    command
+        .arg("-I")
+        .arg("-B")
+        .arg("-c")
+        .arg(PYTHON_PLUGIN_PROCESS_RUNNER)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    if let Some(python_home) = &python_runtime.home {
+        command.env("PYTHONHOME", python_home);
+    }
+
+    command.env("PYTHONDONTWRITEBYTECODE", "1");
+    apply_python_library_path(&mut command, &python_runtime.library_paths);
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Failed to start Python plugin process: {error}"))?;
+
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Failed to open Python plugin process stdin.".to_string())?;
+        stdin
+            .write_all(&input_json)
+            .map_err(|error| format!("Failed to send plugin input: {error}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("Failed to wait for Python plugin process: {error}"))?;
+
+    if is_plugin_run_cancelled(run_id)? {
+        return Err("Plugin run cancelled.".to_string());
+    }
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = stderr.trim();
+
+        return Err(if message.is_empty() {
+            format!(
+                "Python plugin process exited with status {}.",
+                output.status
+            )
+        } else {
+            message.to_string()
+        });
+    }
+
+    serde_json::from_slice::<PluginExecutionOutput>(&output.stdout)
+        .map_err(|error| format!("Failed to read Python plugin output: {error}"))
+}
+
+#[cfg(not(feature = "python-plugins"))]
+fn execute_python_plugin_process(
+    _plugin: &LoadedPythonPlugin,
+    _datasource: &DatasourceForPlugins,
+    _case_database_path: &str,
+    _case_folder_path: &str,
+    _python_runtime: &PythonRuntime,
+    _run_id: Option<&str>,
+) -> Result<PluginExecutionOutput, String> {
+    Err(
+        "Python plugin runtime is not enabled in this build. Run Tauri with the Cargo feature `python-plugins`."
+            .to_string(),
+    )
+}
+
+#[cfg(feature = "python-plugins")]
+#[allow(dead_code)]
 fn execute_python_plugin(
     plugin: &LoadedPythonPlugin,
     datasource: &DatasourceForPlugins,
@@ -1120,7 +1405,8 @@ fn execute_python_plugin(
     case_folder_path: &str,
     run_id: Option<&str>,
 ) -> Result<PluginExecutionOutput, String> {
-    let plan = build_plugin_execution_plan(plugin, datasource)?;
+    let all_files = enumerate_datasource_files(datasource)?;
+    let plan = build_plugin_execution_plan(plugin, datasource, &all_files)?;
     let matched_files = plan.tasks.len() as u64;
     let scanned_files = plan.scanned_files;
     let mut records = Vec::new();
@@ -1182,6 +1468,7 @@ fn execute_python_plugin(
 }
 
 #[cfg(not(feature = "python-plugins"))]
+#[allow(dead_code)]
 fn execute_python_plugin(
     _plugin: &LoadedPythonPlugin,
     _datasource: &DatasourceForPlugins,
@@ -1402,7 +1689,31 @@ fn artifact_category_for_kind(kind: &str) -> Option<&'static str> {
         "location" => Some("locations"),
         "media" => Some("media"),
         "message" => Some("messages"),
+        "sms" => Some("messages"),
+        "mms" => Some("messages"),
+        "instant_message" => Some("messages"),
+        "email" => Some("communications"),
+        "chat" => Some("communications"),
+        "voice_mail" => Some("communications"),
         "note" => Some("notes"),
+        "calendar_entry" => Some("calendar"),
+        "user_account" => Some("accounts"),
+        "password" => Some("credentials"),
+        "journey" => Some("journeys"),
+        "installed_application" => Some("applications"),
+        "cookie" => Some("browser"),
+        "application_usage" => Some("applications"),
+        "visited_page" => Some("browser"),
+        "dictionary_word" => Some("search"),
+        "web_bookmark" => Some("browser"),
+        "shared_file" => Some("files"),
+        "bluetooth_device" => Some("networks"),
+        "map" => Some("maps"),
+        "searched_item" => Some("search"),
+        "wireless_network" => Some("networks"),
+        "notification" => Some("system"),
+        "carved_string" => Some("search"),
+        "powering_event" => Some("system"),
         "system" => Some("system"),
         "timeline_event" => Some("timeline"),
         "custom_table" => Some("other"),
@@ -1630,8 +1941,8 @@ fn py_dict_to_json_map(dict: &Bound<'_, PyDict>) -> PyResult<JsonMap<String, Jso
 fn build_plugin_execution_plan(
     plugin: &LoadedPythonPlugin,
     datasource: &DatasourceForPlugins,
+    all_files: &[TargetFile],
 ) -> Result<PluginExecutionPlan, String> {
-    let all_files = enumerate_datasource_files(datasource)?;
     let scanned_files = all_files.len() as u64;
     let matcher = build_plugin_target_matcher(plugin)?;
     let mut tasks = Vec::new();
@@ -1643,7 +1954,7 @@ fn build_plugin_execution_plan(
                 file_path: target_file.path.clone(),
                 datasource_id: datasource.id.clone(),
                 case_id: datasource.case_id.clone(),
-                target_file,
+                target_file: target_file.clone(),
             });
         }
     }
@@ -1713,7 +2024,9 @@ fn enumerate_datasource_files(
         let path = PathBuf::from(source_path);
 
         if path.is_file() {
-            files.push(target_file_from_path(&path)?);
+            if let Ok(target_file) = target_file_from_path(&path) {
+                files.push(target_file);
+            }
             continue;
         }
 
@@ -1735,7 +2048,9 @@ fn enumerate_datasource_files(
             let entry_path = entry.into_path();
 
             if entry_path.is_file() {
-                files.push(target_file_from_path(&entry_path)?);
+                if let Ok(target_file) = target_file_from_path(&entry_path) {
+                    files.push(target_file);
+                }
             }
         }
     }
@@ -1791,6 +2106,10 @@ fn load_python_plugins(app_handle: &AppHandle) -> Result<Vec<LoadedPythonPlugin>
         let manifest = toml::from_str::<PythonPluginManifest>(&manifest_text)
             .map_err(|error| format!("Failed to parse '{}': {error}", manifest_path.display()))?;
 
+        if LEGACY_DEMO_PLUGIN_IDS.contains(&manifest.id.as_str()) {
+            continue;
+        }
+
         validate_manifest(&manifest, &plugin_dir)?;
 
         plugins.push(LoadedPythonPlugin {
@@ -1818,9 +2137,159 @@ fn ensure_python_plugin_directory(app_handle: &AppHandle) -> Result<PathBuf, Str
         .map_err(|error| format!("Failed to create Python plugin directory: {error}"))?;
     seed_cultivator_api_stub(&plugin_root)?;
     seed_python_api_guide(&plugin_root)?;
-    seed_sample_plugins(&plugin_root)?;
 
     Ok(plugin_root)
+}
+
+fn resolve_python_runtime(app_handle: &AppHandle) -> Result<PythonRuntime, String> {
+    if let Ok(executable) = std::env::var("PYO3_PYTHON") {
+        let executable = PathBuf::from(executable);
+
+        if executable.is_file() {
+            return Ok(PythonRuntime {
+                home: std::env::var("PYTHONHOME").ok().map(PathBuf::from),
+                library_paths: python_library_paths_from_env(),
+                executable,
+            });
+        }
+    }
+
+    let resource_dir = app_handle
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("Failed to resolve app resource directory: {error}"))?;
+    let runtime_dir = resource_dir
+        .join("python-runtime")
+        .join(python_runtime_target());
+    let executable = runtime_dir.join(python_executable_relative_path());
+
+    if !executable.is_file() {
+        return Err(format!(
+            "Python runtime executable was not found at '{}'. Run `bun run python:runtime` before running plugins.",
+            executable.display()
+        ));
+    }
+
+    Ok(PythonRuntime {
+        executable,
+        home: Some(runtime_dir.clone()),
+        library_paths: python_runtime_library_paths(&runtime_dir),
+    })
+}
+
+fn python_library_paths_from_env() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Ok(path) = std::env::var("PYTHONHOME") {
+        paths.push(PathBuf::from(path));
+    }
+
+    if let Some(path_value) = std::env::var_os(path_env_key()) {
+        paths.extend(std::env::split_paths(&path_value));
+    }
+
+    paths
+}
+
+fn python_runtime_library_paths(runtime_dir: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![runtime_dir.to_path_buf()];
+
+    #[cfg(target_os = "windows")]
+    {
+        paths.push(runtime_dir.join("DLLs"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        paths.push(runtime_dir.join("lib"));
+    }
+
+    paths
+}
+
+#[cfg(feature = "python-plugins")]
+fn apply_python_library_path(command: &mut ProcessCommand, library_paths: &[PathBuf]) {
+    let key = path_env_key();
+    let mut paths = library_paths.to_vec();
+
+    if let Some(existing_paths) = std::env::var_os(key) {
+        paths.extend(std::env::split_paths(&existing_paths));
+    }
+
+    if let Ok(joined_paths) = std::env::join_paths(paths) {
+        command.env(key, joined_paths);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut loader_paths = library_paths.to_vec();
+
+        if let Some(existing_paths) = std::env::var_os("DYLD_LIBRARY_PATH") {
+            loader_paths.extend(std::env::split_paths(&existing_paths));
+        }
+
+        if let Ok(joined_paths) = std::env::join_paths(loader_paths) {
+            command.env("DYLD_LIBRARY_PATH", joined_paths);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let mut loader_paths = library_paths.to_vec();
+
+        if let Some(existing_paths) = std::env::var_os("LD_LIBRARY_PATH") {
+            loader_paths.extend(std::env::split_paths(&existing_paths));
+        }
+
+        if let Ok(joined_paths) = std::env::join_paths(loader_paths) {
+            command.env("LD_LIBRARY_PATH", joined_paths);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn path_env_key() -> &'static str {
+    "Path"
+}
+
+#[cfg(not(target_os = "windows"))]
+fn path_env_key() -> &'static str {
+    "PATH"
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn python_runtime_target() -> &'static str {
+    "windows-x64"
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn python_runtime_target() -> &'static str {
+    "macos-x64"
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn python_runtime_target() -> &'static str {
+    "macos-arm64"
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn python_runtime_target() -> &'static str {
+    "linux-x64"
+}
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+fn python_runtime_target() -> &'static str {
+    "linux-arm64"
+}
+
+#[cfg(target_os = "windows")]
+fn python_executable_relative_path() -> PathBuf {
+    PathBuf::from("python.exe")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn python_executable_relative_path() -> PathBuf {
+    PathBuf::from("bin").join("python3")
 }
 
 #[cfg(feature = "python-plugins")]
@@ -2055,6 +2524,381 @@ fn seed_cultivator_api_stub(plugin_root: &Path) -> Result<(), String> {
     fs::write(&stub_path, CULTIVATOR_API_STUB)
         .map_err(|error| format!("Failed to write cultivator_api.pyi: {error}"))
 }
+
+#[cfg(feature = "python-plugins")]
+const PYTHON_PLUGIN_PROCESS_RUNNER: &str = r#"
+import contextlib
+import csv
+import hashlib
+import importlib.util
+import io
+import json
+import os
+import re
+import sys
+import types
+import traceback
+
+ARTIFACT_CATEGORIES = {
+    "account": "accounts",
+    "application": "applications",
+    "browser_history": "browser",
+    "call": "calls",
+    "contact": "contacts",
+    "credential": "credentials",
+    "file": "files",
+    "location": "locations",
+    "media": "media",
+    "message": "messages",
+    "sms": "messages",
+    "mms": "messages",
+    "instant_message": "messages",
+    "email": "communications",
+    "chat": "communications",
+    "voice_mail": "communications",
+    "note": "notes",
+    "calendar_entry": "calendar",
+    "user_account": "accounts",
+    "password": "credentials",
+    "journey": "journeys",
+    "installed_application": "applications",
+    "cookie": "browser",
+    "application_usage": "applications",
+    "visited_page": "browser",
+    "dictionary_word": "search",
+    "web_bookmark": "browser",
+    "shared_file": "files",
+    "bluetooth_device": "networks",
+    "map": "maps",
+    "searched_item": "search",
+    "wireless_network": "networks",
+    "notification": "system",
+    "carved_string": "search",
+    "powering_event": "system",
+    "system": "system",
+    "timeline_event": "timeline",
+    "custom_table": "other",
+    "record": "other",
+}
+
+logs = []
+artifacts = []
+search_roots = []
+
+
+def artifact_category_for_kind(kind):
+    return ARTIFACT_CATEGORIES.get(kind)
+
+
+def artifact_label_from_payload(payload):
+    for key in ("name", "title", "url", "path", "key", "eventType"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def json_record(payload, file_path):
+    if not isinstance(payload, dict):
+        payload = {"kind": "record", "label": str(payload), "value": payload}
+
+    kind = str(payload.get("kind") or "record")
+    payload.setdefault("kind", kind)
+    category = artifact_category_for_kind(kind)
+
+    if category:
+        payload.setdefault("category", category)
+
+    return {
+        "filePath": file_path,
+        "resultKind": kind,
+        "label": str(payload.get("label") or artifact_label_from_payload(payload)),
+        "payload": payload,
+    }
+
+
+def normalize_result(result, file_path):
+    if result is None:
+        return []
+
+    if isinstance(result, list):
+        records = []
+        for item in result:
+            if item is not None:
+                records.append(json_record(item, file_path))
+        return records
+
+    return [json_record(result, file_path)]
+
+
+def read_bytes(path, max_bytes=None):
+    with open(path, "rb") as file:
+        return file.read() if max_bytes is None else file.read(max_bytes)
+
+
+def read_text(path, max_bytes=None):
+    data = read_bytes(path, max_bytes)
+    return data.decode("utf-8", errors="replace")
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def log(level, message):
+    logs.append({"level": str(level), "message": str(message)})
+
+
+def create_artifact(kind, label, **fields):
+    artifact = {"kind": kind}
+    category = artifact_category_for_kind(kind)
+    if category:
+        artifact["category"] = category
+    artifact["label"] = label
+    artifact.update(fields)
+    return artifact
+
+
+def normalize_custom_category(category):
+    value = re.sub(r"[^0-9A-Za-z]+", "_", str(category).strip()).strip("_").lower()
+    return value or "other"
+
+
+def table_header_key(label, existing):
+    base = re.sub(r"[^0-9A-Za-z]+", "_", str(label).strip()).strip("_").lower() or "column"
+    key = base
+    suffix = 2
+    while key in existing:
+        key = f"{base}_{suffix}"
+        suffix += 1
+    existing.add(key)
+    return key
+
+
+def create_table_artifact(name, category, headers, label=None, **fields):
+    existing = set()
+    columns = []
+    for header in headers:
+        if isinstance(header, dict):
+            header_label = str(header.get("label") or header.get("key") or "")
+            key = str(header.get("key") or table_header_key(header_label, existing))
+            existing.add(key)
+        else:
+            header_label = str(header)
+            key = table_header_key(header_label, existing)
+        columns.append({"key": key, "label": header_label})
+
+    artifact = create_artifact(
+        "custom_table",
+        label or str(name),
+        category=normalize_custom_category(category),
+        table={"name": str(name), "columns": columns, "rows": []},
+        **fields,
+    )
+    return artifact
+
+
+def add_table_row(table, values=None, **fields):
+    row = {}
+    if values:
+        row.update(values)
+    row.update(fields)
+    table.setdefault("table", {}).setdefault("rows", []).append(row)
+
+
+def add_artifact(artifact, file_path=None):
+    if isinstance(artifact, dict):
+        source = artifact.get("source")
+        if not file_path and isinstance(source, dict):
+            file_path = source.get("filePath")
+        if not file_path:
+            file_path = artifact.get("path")
+    artifacts.append({"filePath": file_path, "payload": artifact})
+
+
+def account(label, **fields): return create_artifact("account", label, **fields)
+def application(label, **fields): return create_artifact("application", label, **fields)
+def browser_history(label, **fields): return create_artifact("browser_history", label, **fields)
+def call(label, **fields): return create_artifact("call", label, **fields)
+def contact(label, **fields): return create_artifact("contact", label, **fields)
+def credential(label, **fields): return create_artifact("credential", label, **fields)
+def file_artifact(label, **fields): return create_artifact("file", label, **fields)
+def location(label, **fields): return create_artifact("location", label, **fields)
+def media(label, **fields): return create_artifact("media", label, **fields)
+def message(label, **fields): return create_artifact("message", label, **fields)
+def sms(label, **fields): return create_artifact("sms", label, **fields)
+def mms(label, **fields): return create_artifact("mms", label, **fields)
+def email(label, **fields): return create_artifact("email", label, **fields)
+def chat(label, **fields): return create_artifact("chat", label, **fields)
+def instant_message(label, **fields): return create_artifact("instant_message", label, **fields)
+def user_account(label, **fields): return create_artifact("user_account", label, **fields)
+def voice_mail(label, **fields): return create_artifact("voice_mail", label, **fields)
+def calendar_entry(label, **fields): return create_artifact("calendar_entry", label, **fields)
+def password(label, **fields): return create_artifact("password", label, **fields)
+def journey(label, **fields): return create_artifact("journey", label, **fields)
+def installed_application(label, **fields): return create_artifact("installed_application", label, **fields)
+def cookie(label, **fields): return create_artifact("cookie", label, **fields)
+def application_usage(label, **fields): return create_artifact("application_usage", label, **fields)
+def visited_page(label, **fields): return create_artifact("visited_page", label, **fields)
+def dictionary_word(label, **fields): return create_artifact("dictionary_word", label, **fields)
+def web_bookmark(label, **fields): return create_artifact("web_bookmark", label, **fields)
+def shared_file(label, **fields): return create_artifact("shared_file", label, **fields)
+def bluetooth_device(label, **fields): return create_artifact("bluetooth_device", label, **fields)
+def map_artifact(label, **fields): return create_artifact("map", label, **fields)
+def searched_item(label, **fields): return create_artifact("searched_item", label, **fields)
+def wireless_network(label, **fields): return create_artifact("wireless_network", label, **fields)
+def notification(label, **fields): return create_artifact("notification", label, **fields)
+def carved_string(label, **fields): return create_artifact("carved_string", label, **fields)
+def powering_event(label, **fields): return create_artifact("powering_event", label, **fields)
+def note(label, **fields): return create_artifact("note", label, **fields)
+def system_artifact(label, **fields): return create_artifact("system", label, **fields)
+def timeline_event(label, **fields): return create_artifact("timeline_event", label, **fields)
+
+
+def search_files(root_path, query, regex=False, case_sensitive=False, binary_files=False, max_matches=None):
+    flags = 0 if case_sensitive else re.IGNORECASE
+    pattern = re.compile(query if regex else re.escape(query), flags)
+    matches = []
+
+    for root, _, files in os.walk(root_path):
+        for name in files:
+            path = os.path.join(root, name)
+            try:
+                text = read_text(path)
+            except Exception:
+                continue
+
+            if not binary_files and "\x00" in text:
+                continue
+
+            for line_index, line in enumerate(text.splitlines(), 1):
+                match = pattern.search(line)
+                if not match:
+                    continue
+                matches.append({
+                    "path": path,
+                    "file": name,
+                    "line": line_index,
+                    "column": match.start() + 1,
+                    "matched_text": match.group(0),
+                    "context": line,
+                })
+                if max_matches is not None and len(matches) >= max_matches:
+                    return matches
+    return matches
+
+
+def search(query, regex=False, case_sensitive=False, binary_files=False, max_matches=None):
+    matches = []
+    for root in search_roots:
+        remaining = None if max_matches is None else max_matches - len(matches)
+        if remaining is not None and remaining <= 0:
+            break
+        matches.extend(search_files(root, query, regex, case_sensitive, binary_files, remaining))
+    return matches
+
+
+api = types.ModuleType("cultivator_api")
+for name, value in list(globals().items()):
+    if name in {
+        "read_bytes", "read_text", "sha256", "log", "create_artifact",
+        "create_table_artifact", "add_table_row", "add_artifact", "account",
+        "application", "browser_history", "call", "contact", "credential",
+        "file_artifact", "location", "media", "message", "note",
+        "sms", "mms", "email", "chat", "instant_message", "user_account",
+        "voice_mail", "calendar_entry", "password", "journey",
+        "installed_application", "cookie", "application_usage", "visited_page",
+        "dictionary_word", "web_bookmark", "shared_file", "bluetooth_device",
+        "map_artifact", "searched_item", "wireless_network", "notification",
+        "carved_string", "powering_event", "system_artifact", "timeline_event",
+        "search_files", "search",
+    }:
+        setattr(api, name, value)
+sys.modules["cultivator_api"] = api
+
+
+def load_plugin(plugin, plugin_directory):
+    entry_path = os.path.join(plugin_directory, plugin["entry"])
+    module_name = "cultivator_plugin_" + re.sub(r"\W+", "_", plugin["id"])
+    sys.path.insert(0, plugin_directory)
+    spec = importlib.util.spec_from_file_location(module_name, entry_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def build_context(input_data, task):
+    artifacts_path = os.path.join(input_data["case_folder_path"], "artifacts")
+    target_file = task["target_file"]
+    plugin = input_data["plugin"]
+    datasource = input_data["datasource"]
+    return {
+        "case": {
+            "id": datasource["case_id"],
+            "database_path": input_data["case_database_path"],
+            "folder_path": input_data["case_folder_path"],
+            "artifacts_path": artifacts_path,
+        },
+        "datasource": {
+            "id": datasource["id"],
+            "name": datasource["name"],
+            "paths": datasource["paths"],
+        },
+        "plugin": {
+            "id": plugin["id"],
+            "name": plugin["name"],
+            "mode": plugin["mode"],
+        },
+        "file": {
+            "path": target_file["path"],
+            "name": target_file["name"],
+            "extension": target_file["extension"],
+            "size": target_file["size"],
+        },
+        "task": {
+            "plugin_id": task["plugin_id"],
+            "file_path": task["file_path"],
+            "datasource_id": task["datasource_id"],
+            "case_id": task["case_id"],
+        },
+    }
+
+
+def main():
+    input_data = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+    search_roots[:] = list(input_data["datasource"]["paths"])
+    with contextlib.redirect_stdout(sys.stderr):
+        module = load_plugin(input_data["plugin"], input_data["plugin_directory"])
+        function = getattr(module, input_data["plugin"]["function"])
+    records = []
+
+    for task in input_data["tasks"]:
+        with contextlib.redirect_stdout(sys.stderr):
+            result = function(build_context(input_data, task))
+        records.extend(normalize_result(result, task["file_path"]))
+
+    for artifact in artifacts:
+        file_path = artifact.get("filePath") or ""
+        records.append(json_record(artifact.get("payload"), file_path))
+
+    json.dump({
+        "scannedFiles": input_data["scanned_files"],
+        "matchedFiles": len(input_data["tasks"]),
+        "records": records,
+        "logs": logs,
+    }, sys.stdout, separators=(",", ":"))
+
+
+try:
+    main()
+except Exception:
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(1)
+"#;
 
 const CULTIVATOR_API_STUB: &str = r#"from typing import Any, Literal, Optional, TypedDict
 
@@ -2327,6 +3171,54 @@ def location(label: str, **fields: Any) -> LocationArtifact: ...
 def media(label: str, **fields: Any) -> MediaArtifact: ...
 
 def message(label: str, **fields: Any) -> MessageArtifact: ...
+
+def sms(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def mms(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def email(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def chat(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def instant_message(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def user_account(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def voice_mail(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def calendar_entry(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def password(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def journey(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def installed_application(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def cookie(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def application_usage(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def visited_page(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def dictionary_word(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def web_bookmark(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def shared_file(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def bluetooth_device(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def map_artifact(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def searched_item(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def wireless_network(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def notification(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def carved_string(label: str, **fields: Any) -> dict[str, Any]: ...
+
+def powering_event(label: str, **fields: Any) -> dict[str, Any]: ...
 
 def note(label: str, **fields: Any) -> NoteArtifact: ...
 
@@ -2638,7 +3530,7 @@ def run(context):
       <p>Return <code>None</code>, one dictionary, or a list of dictionaries.</p>
       <pre><code>return None</code></pre>
       <pre><code>return {
-    "kind": "file_metadata",
+    "kind": "file",
     "label": context["file"]["name"],
     "path": context["file"]["path"],
 }</code></pre>
@@ -2655,128 +3547,6 @@ path_glob = ["*/recents_storage", "*/favorites_storage"]</code></pre>
   </body>
 </html>
 "#;
-
-fn seed_sample_plugins(plugin_root: &Path) -> Result<(), String> {
-    let samples = [
-        (
-            "file-metadata",
-            r#"id = "file-metadata"
-name = "File Metadata"
-description = "Collect basic file metadata from each logical file."
-type = "other"
-mode = "each_file"
-entry = "plugin.py"
-function = "run"
-"#,
-            r#"def run(context):
-    file = context["file"]
-    return {
-        "kind": "file_metadata",
-        "label": file["name"],
-        "path": file["path"],
-        "name": file["name"],
-        "extension": file["extension"],
-        "size": file["size"],
-    }
-"#,
-        ),
-        (
-            "sqlite-parser",
-            r#"id = "sqlite-parser"
-name = "SQLite Parser"
-description = "Identify SQLite-looking database files by path."
-type = "other"
-mode = "path_glob"
-path_glob = "*.{sqlite,sqlite3,db}"
-entry = "plugin.py"
-function = "run"
-"#,
-            r#"def run(context):
-    file = context["file"]
-    return {
-        "kind": "sqlite_candidate",
-        "label": file["name"],
-        "path": file["path"],
-        "size": file["size"],
-    }
-"#,
-        ),
-        (
-            "keyword-scanner",
-            r#"id = "keyword-scanner"
-name = "Keyword Scanner"
-description = "Sample path-based scanner for text-like files."
-type = "other"
-mode = "path_glob"
-path_glob = "*.{txt,log,json,xml,csv}"
-entry = "plugin.py"
-function = "run"
-"#,
-            r#"def run(context):
-    import cultivator_api
-
-    file = context["file"]
-    text = cultivator_api.read_text(file["path"], 4096)
-    return {
-        "kind": "text_sample",
-        "label": file["name"],
-        "path": file["path"],
-        "preview": text[:200],
-    }
-"#,
-        ),
-        (
-            "string-extractor",
-            r#"id = "string-extractor"
-name = "String Extractor"
-description = "Sample no-op string extractor placeholder."
-type = "other"
-mode = "each_file"
-entry = "plugin.py"
-function = "run"
-"#,
-            r#"def run(context):
-    return None
-"#,
-        ),
-        (
-            "sample-error",
-            r#"id = "sample-error"
-name = "Sample Error Plugin"
-description = "Raises an exception to test plugin job failure handling."
-type = "other"
-mode = "path_glob"
-path_glob = "**/*"
-entry = "plugin.py"
-function = "run"
-"#,
-            r#"def run(context):
-    raise RuntimeError("Sample plugin failure")
-"#,
-        ),
-    ];
-
-    for (folder_name, manifest, code) in samples {
-        let folder = plugin_root.join(folder_name);
-        let manifest_path = folder.join("plugin.toml");
-        let plugin_path = folder.join("plugin.py");
-
-        fs::create_dir_all(&folder)
-            .map_err(|error| format!("Failed to create sample plugin '{folder_name}': {error}"))?;
-
-        if !manifest_path.exists() {
-            fs::write(&manifest_path, manifest)
-                .map_err(|error| format!("Failed to write sample plugin manifest: {error}"))?;
-        }
-
-        if !plugin_path.exists() {
-            fs::write(&plugin_path, code)
-                .map_err(|error| format!("Failed to write sample plugin code: {error}"))?;
-        }
-    }
-
-    Ok(())
-}
 
 fn validate_manifest(manifest: &PythonPluginManifest, plugin_dir: &Path) -> Result<(), String> {
     if manifest.id.trim().is_empty() {
@@ -3113,6 +3883,10 @@ async fn insert_plugin_results(
     records: &[PluginResultRecord],
 ) -> Result<(), String> {
     for record in records {
+        if LEGACY_DEMO_ARTIFACT_KINDS.contains(&record.result_kind.as_str()) {
+            continue;
+        }
+
         sqlx::query(
             r#"
               INSERT INTO plugin_results (

@@ -14,7 +14,13 @@ export type ArtifactCategory =
   | "locations"
   | "media"
   | "messages"
+  | "calendar"
+  | "communications"
+  | "journeys"
+  | "maps"
+  | "networks"
   | "notes"
+  | "search"
   | "system"
   | "timeline"
   | "other"
@@ -213,6 +219,318 @@ export type TimelineArtifact = BaseArtifact & {
   target?: string;
 };
 
+export type NodeArtifact<
+  Kind extends string,
+  Category extends ArtifactCategory,
+  Fields extends Record<string, unknown> = Record<string, unknown>,
+> = BaseArtifact &
+  Fields & {
+    kind: Kind;
+    category: Category;
+    nodeId?: string;
+    relatedIds?: string[];
+  };
+
+export type SmsArtifact = NodeArtifact<
+  "sms",
+  "messages",
+  {
+    conversationId?: string;
+    sender?: string;
+    recipients?: string[];
+    body?: string;
+    sentAt?: string;
+    receivedAt?: string;
+    service?: string;
+  }
+>;
+
+export type EmailArtifact = NodeArtifact<
+  "email",
+  "communications",
+  {
+    messageId?: string;
+    from?: string;
+    to?: string[];
+    cc?: string[];
+    bcc?: string[];
+    subject?: string;
+    body?: string;
+    sentAt?: string;
+    receivedAt?: string;
+  }
+>;
+
+export type MmsArtifact = NodeArtifact<
+  "mms",
+  "messages",
+  {
+    conversationId?: string;
+    sender?: string;
+    recipients?: string[];
+    body?: string;
+    attachments?: string[];
+    sentAt?: string;
+    receivedAt?: string;
+  }
+>;
+
+export type ChatArtifact = NodeArtifact<
+  "chat",
+  "communications",
+  {
+    conversationId?: string;
+    participants?: string[];
+    service?: string;
+    title?: string;
+    startedAt?: string;
+    lastMessageAt?: string;
+  }
+>;
+
+export type InstantMessageArtifact = NodeArtifact<
+  "instant_message",
+  "messages",
+  {
+    conversationId?: string;
+    sender?: string;
+    recipients?: string[];
+    body?: string;
+    sentAt?: string;
+    receivedAt?: string;
+    service?: string;
+  }
+>;
+
+export type UserAccountArtifact = NodeArtifact<
+  "user_account",
+  "accounts",
+  {
+    username?: string;
+    displayName?: string;
+    email?: string;
+    phone?: string;
+    service?: string;
+    identifier?: string;
+  }
+>;
+
+export type VoiceMailArtifact = NodeArtifact<
+  "voice_mail",
+  "communications",
+  {
+    phone?: string;
+    contactName?: string;
+    transcript?: string;
+    receivedAt?: string;
+    durationSeconds?: number;
+    audioPath?: string;
+  }
+>;
+
+export type CalendarEntryArtifact = NodeArtifact<
+  "calendar_entry",
+  "calendar",
+  {
+    title?: string;
+    startsAt?: string;
+    endsAt?: string;
+    location?: string;
+    attendees?: string[];
+    organizer?: string;
+  }
+>;
+
+export type PasswordArtifact = NodeArtifact<
+  "password",
+  "credentials",
+  {
+    username?: string;
+    service?: string;
+    url?: string;
+    secretPreview?: string;
+    storedAt?: string;
+  }
+>;
+
+export type JourneyArtifact = NodeArtifact<
+  "journey",
+  "journeys",
+  {
+    startedAt?: string;
+    endedAt?: string;
+    origin?: string;
+    destination?: string;
+    distanceMeters?: number;
+    points?: Array<{ latitude: number; longitude: number; recordedAt?: string }>;
+  }
+>;
+
+export type InstalledApplicationArtifact = NodeArtifact<
+  "installed_application",
+  "applications",
+  {
+    name?: string;
+    packageName?: string;
+    version?: string;
+    vendor?: string;
+    installedAt?: string;
+  }
+>;
+
+export type CookieArtifact = NodeArtifact<
+  "cookie",
+  "browser",
+  {
+    host?: string;
+    name?: string;
+    valuePreview?: string;
+    path?: string;
+    createdAt?: string;
+    expiresAt?: string;
+  }
+>;
+
+export type ApplicationUsageArtifact = NodeArtifact<
+  "application_usage",
+  "applications",
+  {
+    application?: string;
+    packageName?: string;
+    startedAt?: string;
+    endedAt?: string;
+    durationSeconds?: number;
+    eventType?: string;
+  }
+>;
+
+export type VisitedPageArtifact = NodeArtifact<
+  "visited_page",
+  "browser",
+  {
+    url?: string;
+    title?: string;
+    visitedAt?: string;
+    browser?: string;
+    visitCount?: number;
+  }
+>;
+
+export type DictionaryWordArtifact = NodeArtifact<
+  "dictionary_word",
+  "search",
+  {
+    word?: string;
+    language?: string;
+    learnedAt?: string;
+    usageCount?: number;
+  }
+>;
+
+export type WebBookmarkArtifact = NodeArtifact<
+  "web_bookmark",
+  "browser",
+  {
+    url?: string;
+    title?: string;
+    folder?: string;
+    createdAt?: string;
+    browser?: string;
+  }
+>;
+
+export type SharedFileArtifact = NodeArtifact<
+  "shared_file",
+  "files",
+  {
+    path?: string;
+    name?: string;
+    sharedWith?: string[];
+    sharedAt?: string;
+    service?: string;
+  }
+>;
+
+export type BluetoothDeviceArtifact = NodeArtifact<
+  "bluetooth_device",
+  "networks",
+  {
+    name?: string;
+    address?: string;
+    pairedAt?: string;
+    lastConnectedAt?: string;
+    deviceClass?: string;
+  }
+>;
+
+export type MapArtifact = NodeArtifact<
+  "map",
+  "maps",
+  {
+    name?: string;
+    provider?: string;
+    centerLatitude?: number;
+    centerLongitude?: number;
+    bounds?: unknown;
+  }
+>;
+
+export type SearchedItemArtifact = NodeArtifact<
+  "searched_item",
+  "search",
+  {
+    query?: string;
+    searchedAt?: string;
+    application?: string;
+    url?: string;
+  }
+>;
+
+export type WirelessNetworkArtifact = NodeArtifact<
+  "wireless_network",
+  "networks",
+  {
+    ssid?: string;
+    bssid?: string;
+    security?: string;
+    connectedAt?: string;
+    lastConnectedAt?: string;
+  }
+>;
+
+export type NotificationArtifact = NodeArtifact<
+  "notification",
+  "system",
+  {
+    application?: string;
+    title?: string;
+    body?: string;
+    receivedAt?: string;
+    action?: string;
+  }
+>;
+
+export type CarvedStringArtifact = NodeArtifact<
+  "carved_string",
+  "search",
+  {
+    value?: string;
+    encoding?: string;
+    offset?: number;
+    length?: number;
+  }
+>;
+
+export type PoweringEventArtifact = NodeArtifact<
+  "powering_event",
+  "system",
+  {
+    eventType?: "power_on" | "power_off" | "reboot" | "sleep" | "wake" | "unknown";
+    occurredAt?: string;
+    sourceApp?: string;
+  }
+>;
+
 /** Fallback model for plugin-specific records that do not fit a known model. */
 export type GenericArtifact = BaseArtifact & {
   kind: "record";
@@ -252,6 +570,30 @@ export type Artifact =
   | NoteArtifact
   | SystemArtifact
   | TimelineArtifact
+  | SmsArtifact
+  | EmailArtifact
+  | MmsArtifact
+  | ChatArtifact
+  | InstantMessageArtifact
+  | UserAccountArtifact
+  | VoiceMailArtifact
+  | CalendarEntryArtifact
+  | PasswordArtifact
+  | JourneyArtifact
+  | InstalledApplicationArtifact
+  | CookieArtifact
+  | ApplicationUsageArtifact
+  | VisitedPageArtifact
+  | DictionaryWordArtifact
+  | WebBookmarkArtifact
+  | SharedFileArtifact
+  | BluetoothDeviceArtifact
+  | MapArtifact
+  | SearchedItemArtifact
+  | WirelessNetworkArtifact
+  | NotificationArtifact
+  | CarvedStringArtifact
+  | PoweringEventArtifact
   | GenericArtifact
   | CustomTableArtifact;
 

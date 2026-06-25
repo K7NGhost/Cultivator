@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  Check,
+  ChevronDown,
   ChevronRight,
   Database,
   FileText,
@@ -30,6 +32,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -1024,29 +1032,48 @@ function ArtifactPropertiesPanel({
         </div>
 
         {artifactOptions.length > 1 && (
-          <div className="flex h-10 shrink-0 items-center gap-1 border-b bg-muted/20 px-2">
+          <div className="flex h-10 shrink-0 items-center gap-2 border-b bg-muted/20 px-2">
             <div className="mr-1 shrink-0 text-[11px] font-medium uppercase text-muted-foreground">
               File
             </div>
-            <ScrollArea className="min-w-0 flex-1">
-              <div className="flex min-w-max items-center gap-1">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 min-w-0 flex-1 justify-between rounded-sm px-2 text-xs"
+                  title={artifact.filePath || artifact.label || artifact.resultKind}
+                >
+                  <span className="min-w-0 truncate font-mono text-[11px]">
+                    {formatArtifactFileLabel(artifact)}
+                  </span>
+                  <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="max-h-72 w-80">
                 {artifactOptions.map((option) => (
-                  <Button
+                  <DropdownMenuItem
                     key={option.id}
-                    type="button"
-                    variant={option.id === artifact.id ? "secondary" : "ghost"}
-                    size="sm"
-                    className="h-7 max-w-56 rounded-sm px-2 text-xs"
+                    className="grid grid-cols-[1rem_minmax(0,1fr)] gap-2 text-xs"
                     title={option.filePath || option.label || option.resultKind}
-                    onClick={() => onSelectArtifact(option)}
+                    onSelect={() => onSelectArtifact(option)}
                   >
-                    <span className="truncate font-mono text-[11px]">
+                    <span className="flex size-4 items-center justify-center">
+                      {option.id === artifact.id ? (
+                        <Check className="size-3.5" aria-hidden="true" />
+                      ) : null}
+                    </span>
+                    <span className="min-w-0 truncate font-mono text-[11px]">
                       {formatArtifactFileLabel(option)}
                     </span>
-                  </Button>
+                  </DropdownMenuItem>
                 ))}
-              </div>
-            </ScrollArea>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Badge variant="secondary" className="h-5 shrink-0 rounded-sm text-[11px]">
+              {artifactOptions.length}
+            </Badge>
           </div>
         )}
 

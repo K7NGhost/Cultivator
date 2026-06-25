@@ -430,10 +430,19 @@ fn list_directory_entries(path: String) -> Result<Vec<DirectoryEntry>, String> {
 
 #[tauri::command]
 fn describe_paths(paths: Vec<String>) -> Result<Vec<DirectoryEntry>, String> {
-    paths
-        .into_iter()
-        .map(|path| build_directory_entry(&PathBuf::from(path)))
-        .collect()
+    let mut entries = Vec::new();
+
+    for path in paths {
+        let path = PathBuf::from(path);
+
+        if !path.exists() {
+            continue;
+        }
+
+        entries.push(build_directory_entry(&path)?);
+    }
+
+    Ok(entries)
 }
 
 #[tauri::command]
@@ -1828,8 +1837,8 @@ fn build_tree_node(path: &Path, depth: usize) -> Result<DirectoryTreeNode, Strin
         let mut entries = read_sorted_entries(path)?
             .into_iter()
             .take(MAX_DIRECTORY_CHILDREN)
-            .map(|entry| build_tree_node(&entry.path(), depth + 1))
-            .collect::<Result<Vec<_>, _>>()?;
+            .filter_map(|entry| build_tree_node(&entry.path(), depth + 1).ok())
+            .collect::<Vec<_>>();
 
         if entries.is_empty() {
             None
@@ -1852,11 +1861,13 @@ fn build_tree_node(path: &Path, depth: usize) -> Result<DirectoryTreeNode, Strin
 }
 
 fn list_immediate_entries(path: &Path) -> Result<Vec<DirectoryEntry>, String> {
-    read_sorted_entries(path)?
+    let entries = read_sorted_entries(path)?
         .into_iter()
         .take(MAX_LIST_ENTRIES)
-        .map(|entry| build_directory_entry(&entry.path()))
-        .collect()
+        .filter_map(|entry| build_directory_entry(&entry.path()).ok())
+        .collect::<Vec<_>>();
+
+    Ok(entries)
 }
 
 fn build_directory_entry(path: &Path) -> Result<DirectoryEntry, String> {

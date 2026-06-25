@@ -89,22 +89,6 @@ const steps: Array<{ step: WizardStep; title: string; description: string }> = [
   { step: 4, title: "Plugins", description: "Queue parser plugins" },
 ];
 
-const preferredDefaultPluginIds = [
-  "file-metadata",
-  "keyword-scanner",
-  "string-extractor",
-];
-
-function getDefaultPluginIds(plugins: DataSourcePlugin[] = []) {
-  if (plugins.length === 0) {
-    return preferredDefaultPluginIds;
-  }
-
-  return preferredDefaultPluginIds.filter((pluginId) =>
-    plugins.some((plugin) => plugin.id === pluginId),
-  );
-}
-
 function normalizeSelectedPaths(selectedPaths: string | string[] | null) {
   if (!selectedPaths) {
     return [];
@@ -183,13 +167,13 @@ export function DataSourceWizardDialog({
   const [pluginTypeFilter, setPluginTypeFilter] = useState<
     DataSourcePluginType | "all"
   >("all");
-  const [activePluginId, setActivePluginId] = useState("file-metadata");
+  const [activePluginId, setActivePluginId] = useState("");
   const [availablePlugins, setAvailablePlugins] = useState<DataSourcePlugin[]>(
     [],
   );
   const [isPluginsLoading, setIsPluginsLoading] = useState(false);
   const [selectedPluginIds, setSelectedPluginIds] = useState<string[]>(
-    getDefaultPluginIds(),
+    [],
   );
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -238,15 +222,15 @@ export function DataSourceWizardDialog({
     setPaths([]);
     setPluginFilter("");
     setPluginTypeFilter("all");
-    setActivePluginId("file-metadata");
-    setSelectedPluginIds(getDefaultPluginIds(availablePlugins));
+    setActivePluginId("");
+    setSelectedPluginIds([]);
     setError(null);
     setIsSaving(false);
   }
 
   function updateType(nextType: DataSourceType) {
     setType(nextType);
-    setSelectedPluginIds(getDefaultPluginIds(availablePlugins));
+    setSelectedPluginIds([]);
   }
 
   useEffect(() => {
@@ -266,13 +250,9 @@ export function DataSourceWizardDialog({
         setAvailablePlugins(plugins);
         setSelectedPluginIds((currentPluginIds) => {
           const installedPluginIds = new Set(plugins.map((plugin) => plugin.id));
-          const retainedPluginIds = currentPluginIds.filter((pluginId) =>
+          return currentPluginIds.filter((pluginId) =>
             installedPluginIds.has(pluginId),
           );
-
-          return retainedPluginIds.length > 0
-            ? retainedPluginIds
-            : getDefaultPluginIds(plugins);
         });
 
         if (plugins[0]) {

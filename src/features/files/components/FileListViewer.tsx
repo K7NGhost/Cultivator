@@ -126,7 +126,7 @@ function getEntryType(entry: EvidenceDirectoryEntry) {
 
 function getEntryPlugin(entry: EvidenceDirectoryEntry) {
   if (entry.kind === "directory") {
-    return "Directory traversal";
+    return "-";
   }
 
   const extension = entry.name.split(".").pop()?.toLowerCase();
@@ -136,16 +136,8 @@ function getEntryPlugin(entry: EvidenceDirectoryEntry) {
     case "jpeg":
     case "png":
       return "Image Metadata Reader";
-    case "json":
-      return "JSON Extractor";
-    case "sqlite":
-    case "db":
-      return "SQLite Parser";
-    case "txt":
-    case "log":
-      return "Keyword Scanner";
     default:
-      return "File Classifier";
+      return "-";
   }
 }
 
