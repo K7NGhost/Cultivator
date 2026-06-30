@@ -14,10 +14,18 @@ import {
   RefreshCw,
   Video,
 } from "lucide-react";
+import ReactPlayer from "react-player";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCases } from "@/features/cases/case-provider";
 import { listDataSources } from "@/features/datasources/dataSourceRepository";
@@ -63,6 +71,7 @@ export function MediaPage() {
     videos: [],
   });
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
+  const [playerItem, setPlayerItem] = useState<MediaItem | null>(null);
   const [dataSources, setDataSources] = useState<DataSourceRecord[]>([]);
   const [selectedDataSourceId, setSelectedDataSourceId] = useState<string | null>(
     null,
@@ -125,6 +134,7 @@ export function MediaPage() {
     if (!activeCase) {
       setGallery({ photos: [], videos: [] });
       setSelectedItem(null);
+      setPlayerItem(null);
       setError(null);
       return;
     }
@@ -132,6 +142,7 @@ export function MediaPage() {
     if (!selectedDataSourceId) {
       setGallery({ photos: [], videos: [] });
       setSelectedItem(null);
+      setPlayerItem(null);
       setError(null);
       setIsLoading(false);
       return;
@@ -163,6 +174,16 @@ export function MediaPage() {
 
           return mediaGallery.photos[0] ?? mediaGallery.videos[0] ?? null;
         });
+        setPlayerItem((currentItem) => {
+          if (
+            currentItem &&
+            mediaGallery.videos.some((item) => item.path === currentItem.path)
+          ) {
+            return currentItem;
+          }
+
+          return null;
+        });
       })
       .catch((caughtError) => {
         if (!isCurrent) {
@@ -172,6 +193,7 @@ export function MediaPage() {
         setError(getErrorMessage(caughtError));
         setGallery({ photos: [], videos: [] });
         setSelectedItem(null);
+        setPlayerItem(null);
       })
       .finally(() => {
         if (isCurrent) {
@@ -185,6 +207,14 @@ export function MediaPage() {
   }, [activeCase, refreshKey, selectedDataSourceId]);
 
   const totalMedia = gallery.photos.length + gallery.videos.length;
+  const handleSelectItem = (item: MediaItem) => {
+    setSelectedItem(item);
+
+    if (item.mediaType === "video") {
+      setPlayerItem(item);
+    }
+  };
+
   const selectedDataSource = useMemo(() => {
     return (
       dataSources.find((dataSource) => dataSource.id === selectedDataSourceId) ??
@@ -297,7 +327,7 @@ export function MediaPage() {
             isLoading={isLoading}
             mediaType="image"
             selectedItem={selectedItem?.mediaType === "image" ? selectedItem : null}
-            onSelectItem={setSelectedItem}
+            onSelectItem={handleSelectItem}
           />
         </TabsContent>
         <TabsContent value="videos" className="m-0 min-h-0 flex-1">
@@ -310,10 +340,12 @@ export function MediaPage() {
             isLoading={isLoading}
             mediaType="video"
             selectedItem={selectedItem?.mediaType === "video" ? selectedItem : null}
-            onSelectItem={setSelectedItem}
+            onSelectItem={handleSelectItem}
           />
         </TabsContent>
       </Tabs>
+
+      <VideoPlayerSheet item={playerItem} onOpenChange={setPlayerItem} />
     </div>
   );
 }
@@ -485,6 +517,60 @@ function MediaTilePreview({
         />
       )}
     </button>
+  );
+}
+
+function VideoPlayerSheet({
+  item,
+  onOpenChange,
+}: {
+  item: MediaItem | null;
+  onOpenChange: (item: MediaItem | null) => void;
+}) {
+  const source = item ? convertFileSrc(item.mediaPath) : "";
+
+  return (
+    <Sheet
+      open={Boolean(item)}
+      onOpenChange={(isOpen) => {
+        if (!isOpen) {
+          onOpenChange(null);
+        }
+      }}
+    >
+      <SheetContent
+        side="bottom"
+        className="h-[min(72vh,42rem)] gap-0 p-0"
+        aria-describedby="video-player-description"
+      >
+        <SheetHeader className="h-10 shrink-0 flex-row items-center gap-2 border-b px-2 py-0">
+          <Video className="size-3.5 text-muted-foreground" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <SheetTitle className="truncate text-xs font-medium">
+              {item?.name ?? "Video Player"}
+            </SheetTitle>
+            <SheetDescription
+              id="video-player-description"
+              className="truncate text-[11px]"
+            >
+              {item?.path ?? "No video selected"}
+            </SheetDescription>
+          </div>
+        </SheetHeader>
+        <div className="min-h-0 flex-1 bg-black">
+          {item ? (
+            <ReactPlayer
+              src={source}
+              controls
+              playing
+              width="100%"
+              height="100%"
+              style={{ backgroundColor: "black" }}
+            />
+          ) : null}
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 

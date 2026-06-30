@@ -31,6 +31,7 @@
     "react": "^19.1.0",
     "react-arborist": "^3.10.5",
     "react-dom": "^19.1.0",
+    "react-player": "^3.4.0",
     "react-resizable-panels": "^4",
     "react-router-dom": "^7.18.0",
     "react-toastify": "^11.1.0",
