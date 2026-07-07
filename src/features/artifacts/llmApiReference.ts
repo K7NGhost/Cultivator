@@ -82,9 +82,13 @@ Cultivator indexes case files, matches plugins by path_glob/path_regex, and call
 import cultivator_api
 
 cultivator_api.read_bytes(path: str, max_bytes: int | None = None) -> bytes
-cultivator_api.read_text(path: str, max_bytes: int | None = None) -> str
+cultivator_api.read_text(path: str, max_bytes: int | None = None, encoding: str = "utf-8", errors: str = "replace") -> str
+cultivator_api.read_lines(path: str, encoding: str = "utf-8", errors: str = "replace") -> Iterator[str]
 cultivator_api.sha256(path: str) -> str
 cultivator_api.log(level: str, message: str) -> None
+cultivator_api.datetime_from_unix(ts: float) -> str
+cultivator_api.datetime_from_iso(text: str) -> str
+cultivator_api.datetime_from_datetime(dt) -> str
 
 cultivator_api.search(
     query: str,
@@ -109,6 +113,7 @@ cultivator_api.create_table_artifact(
     category: str,
     headers: list[str | {"key": str, "label": str}],
     label: str | None = None,
+    icon: str | None = None,
     **fields,
 ) -> dict
 cultivator_api.add_table_row(
@@ -116,7 +121,8 @@ cultivator_api.add_table_row(
     values: dict | None = None,
     **fields,
 ) -> None
-cultivator_api.add_artifact(artifact: dict, file_path: str | None = None) -> None
+cultivator_api.create_group(label: str, id: str | None = None) -> dict
+cultivator_api.add_artifact(artifact: dict, file_path: str | None = None, group: dict | None = None) -> None
 \`\`\`
 
 Artifact helper functions create dictionaries with kind, category, and label:

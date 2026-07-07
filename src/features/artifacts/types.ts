@@ -56,6 +56,11 @@ export type ArtifactTimestamp = {
   source?: string;
 };
 
+export type ArtifactGroup = {
+  id: string;
+  label: string;
+};
+
 /**
  * Shared fields every artifact model can carry. Plugin payloads are persisted
  * as JSON, so these property names are intentionally stable and camelCase.
@@ -64,6 +69,8 @@ export type BaseArtifact = {
   kind: string;
   category: ArtifactCategory;
   label: string;
+  icon?: string;
+  group?: ArtifactGroup;
   description?: string;
   source?: ArtifactSourceReference;
   timestamps?: ArtifactTimestamp[];

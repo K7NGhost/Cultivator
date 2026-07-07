@@ -37,7 +37,7 @@ use std::{
     process::Command as ProcessCommand,
     sync::atomic::{AtomicU64, Ordering},
     sync::{Mutex, OnceLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 #[cfg(feature = "python-plugins")]
 use std::{
@@ -144,6 +144,8 @@ where
 pub struct CreatePythonPluginRequest {
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub folder_name: Option<String>,
     #[serde(default)]
     pub manifest: Option<CreatePythonPluginManifestRequest>,
     #[serde(default)]
@@ -345,8 +347,14 @@ fn read_bytes<'py>(
 }
 
 #[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (path, max_bytes=None))]
-fn read_text(path: String, max_bytes: Option<usize>) -> PyResult<String> {
+#[pyfunction(signature = (path, max_bytes=None, encoding="utf-8", errors="replace"))]
+fn read_text(
+    py: Python<'_>,
+    path: String,
+    max_bytes: Option<usize>,
+    encoding: &str,
+    errors: &str,
+) -> PyResult<String> {
     let mut bytes = fs::read(&path).map_err(|error| {
         PyRuntimeError::new_err(format!("Failed to read text from '{path}': {error}"))
     })?;
@@ -355,7 +363,29 @@ fn read_text(path: String, max_bytes: Option<usize>) -> PyResult<String> {
         bytes.truncate(max_bytes);
     }
 
-    Ok(String::from_utf8_lossy(&bytes).to_string())
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("errors", errors)?;
+
+    PyBytes::new(py, &bytes)
+        .call_method("decode", (encoding,), Some(&kwargs))?
+        .extract()
+}
+
+#[cfg(feature = "python-plugins")]
+#[pyfunction(signature = (path, encoding="utf-8", errors="replace"))]
+fn read_lines<'py>(
+    py: Python<'py>,
+    path: String,
+    encoding: &str,
+    errors: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("encoding", encoding)?;
+    kwargs.set_item("errors", errors)?;
+
+    py.import("builtins")?
+        .getattr("open")?
+        .call((path, "r"), Some(&kwargs))
 }
 
 #[cfg(feature = "python-plugins")]
@@ -396,13 +426,14 @@ fn create_artifact<'py>(
 }
 
 #[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (name, category, headers, label=None, **fields))]
+#[pyfunction(signature = (name, category, headers, label=None, icon=None, **fields))]
 fn create_table_artifact<'py>(
     py: Python<'py>,
     name: String,
     category: String,
     headers: &Bound<'py, PyAny>,
     label: Option<String>,
+    icon: Option<String>,
     fields: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let artifact = PyDict::new(py);
@@ -422,6 +453,9 @@ fn create_table_artifact<'py>(
     artifact.set_item("kind", "custom_table")?;
     artifact.set_item("category", normalize_custom_category(&category))?;
     artifact.set_item("label", label.unwrap_or_else(|| name.clone()))?;
+    if let Some(icon) = icon.filter(|value| !value.trim().is_empty()) {
+        artifact.set_item("icon", icon)?;
+    }
     artifact.set_item("table", table)?;
 
     Ok(artifact)
@@ -467,9 +501,20 @@ fn add_table_row<'py>(
 }
 
 #[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (artifact, file_path=None))]
-fn add_artifact(artifact: &Bound<'_, PyAny>, file_path: Option<String>) -> PyResult<()> {
-    let payload = py_any_to_json(artifact)?;
+#[pyfunction(signature = (artifact, file_path=None, group=None))]
+fn add_artifact(
+    artifact: &Bound<'_, PyAny>,
+    file_path: Option<String>,
+    group: Option<&Bound<'_, PyAny>>,
+) -> PyResult<()> {
+    let mut payload = py_any_to_json(artifact)?;
+
+    if let Some(group) = group.filter(|value| !value.is_none()) {
+        if let JsonValue::Object(payload) = &mut payload {
+            payload.insert("group".to_string(), py_any_to_json(group)?);
+        }
+    }
+
     let fallback_file_path = file_path
         .or_else(|| artifact_file_path_from_payload(&payload))
         .unwrap_or_default();
@@ -485,6 +530,53 @@ fn add_artifact(artifact: &Bound<'_, PyAny>, file_path: Option<String>) -> PyRes
         .push(record);
 
     Ok(())
+}
+
+#[cfg(feature = "python-plugins")]
+#[pyfunction(signature = (label, id=None))]
+fn create_group<'py>(
+    py: Python<'py>,
+    label: String,
+    id: Option<String>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let group = PyDict::new(py);
+    let id = id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| normalize_custom_category(&label));
+
+    group.set_item("id", id)?;
+    group.set_item("label", label)?;
+
+    Ok(group)
+}
+
+#[cfg(feature = "python-plugins")]
+#[pyfunction]
+fn datetime_from_unix(py: Python<'_>, ts: f64) -> PyResult<String> {
+    let datetime = py.import("datetime")?.getattr("datetime")?;
+
+    datetime
+        .call_method1("fromtimestamp", (ts,))?
+        .call_method0("isoformat")?
+        .extract()
+}
+
+#[cfg(feature = "python-plugins")]
+#[pyfunction]
+fn datetime_from_iso(py: Python<'_>, text: &str) -> PyResult<String> {
+    let normalized_text = text.trim().replace('Z', "+00:00");
+    let datetime = py.import("datetime")?.getattr("datetime")?;
+
+    datetime
+        .call_method1("fromisoformat", (normalized_text,))?
+        .call_method0("isoformat")?
+        .extract()
+}
+
+#[cfg(feature = "python-plugins")]
+#[pyfunction]
+fn datetime_from_datetime(value: &Bound<'_, PyAny>) -> PyResult<String> {
+    value.call_method0("isoformat")?.extract()
 }
 
 #[cfg(feature = "python-plugins")]
@@ -692,7 +784,10 @@ fn search<'py>(
 }
 
 pub fn list_python_plugins(app_handle: AppHandle) -> Result<Vec<PythonPluginManifest>, String> {
-    let mut plugins = vec![builtin::image_metadata_manifest()];
+    let mut plugins = vec![
+        builtin::archive_extractor_manifest(),
+        builtin::image_metadata_manifest(),
+    ];
 
     plugins.extend(
         load_python_plugins(&app_handle)?
@@ -743,7 +838,7 @@ pub fn create_python_plugin(
     app_handle: AppHandle,
     request: CreatePythonPluginRequest,
 ) -> Result<CreatedPythonPlugin, String> {
-    let manifest_text = create_plugin_manifest_text(request)?;
+    let manifest_text = create_plugin_manifest_text(&request)?;
     let manifest = toml::from_str::<PythonPluginManifest>(&manifest_text)
         .map_err(|error| format!("Failed to parse plugin.toml: {error}"))?;
     let plugin_id = manifest.id.trim();
@@ -758,13 +853,35 @@ pub fn create_python_plugin(
         );
     }
 
+    let plugin_folder_name = request
+        .folder_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|folder_name| !folder_name.is_empty())
+        .unwrap_or(plugin_id);
+
+    if !is_safe_plugin_id(plugin_folder_name) {
+        return Err(
+            "Plugin folder name may only contain letters, numbers, '.', '_', and '-'.".to_string(),
+        );
+    }
+
     let plugin_root = ensure_python_plugin_directory(&app_handle)?;
-    let plugin_directory = plugin_root.join(plugin_id);
+    let plugin_directory = plugin_root.join(plugin_folder_name);
     let manifest_path = plugin_directory.join("plugin.toml");
     let script_path = plugin_directory.join("plugin.py");
 
+    if load_python_plugins(&app_handle)?
+        .iter()
+        .any(|plugin| plugin.manifest.id == plugin_id)
+    {
+        return Err(format!("Python plugin id '{plugin_id}' already exists."));
+    }
+
     if plugin_directory.exists() {
-        return Err(format!("Python plugin '{plugin_id}' already exists."));
+        return Err(format!(
+            "Python plugin folder '{plugin_folder_name}' already exists."
+        ));
     }
 
     fs::create_dir_all(&plugin_directory)
@@ -803,7 +920,11 @@ pub fn delete_python_plugin(
     }
 
     let plugin_root = ensure_python_plugin_directory(&app_handle)?;
-    let plugin_directory = plugin_root.join(plugin_id);
+    let plugin_directory = load_python_plugins(&app_handle)?
+        .into_iter()
+        .find(|plugin| plugin.manifest.id == plugin_id)
+        .map(|plugin| plugin.directory)
+        .unwrap_or_else(|| plugin_root.join(plugin_id));
 
     if !plugin_directory.is_dir() {
         return Err(format!("Python plugin '{plugin_id}' was not found."));
@@ -1064,16 +1185,33 @@ pub async fn run_datasource_plugins(
 
     ensure_plugin_tables(&pool).await?;
 
-    let datasource = load_datasource_for_plugins(&pool, &datasource_id).await?;
+    let mut datasource = load_datasource_for_plugins(&pool, &datasource_id).await?;
     let plugin_map = load_python_plugins(&app_handle)?
         .into_iter()
         .map(|plugin| (plugin.manifest.id.clone(), plugin))
         .collect::<HashMap<_, _>>();
     let requested_plugin_ids = plugin_ids.unwrap_or_else(|| datasource.plugin_ids.clone());
+    let mut jobs = Vec::new();
+
+    if requested_plugin_ids
+        .iter()
+        .any(|plugin_id| plugin_id == builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID)
+        && !is_plugin_run_cancelled(run_id.as_deref())?
+    {
+        jobs.push(
+            run_archive_extractor_stage(
+                &pool,
+                &mut datasource,
+                &case_folder_path,
+                run_id.as_deref(),
+            )
+            .await?,
+        );
+    }
+
     #[cfg(feature = "python-plugins")]
     let datasource_files = enumerate_datasource_files(&datasource)?;
     let mut python_runtime = None;
-    let mut jobs = Vec::new();
     let mut job_handles = Vec::new();
     let mut should_run_image_metadata = false;
 
@@ -1102,6 +1240,10 @@ pub async fn run_datasource_plugins(
 
         if plugin_id == builtin::IMAGE_METADATA_PLUGIN_ID {
             should_run_image_metadata = true;
+            continue;
+        }
+
+        if plugin_id == builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID {
             continue;
         }
 
@@ -1224,18 +1366,69 @@ pub async fn run_datasource_plugins(
     if should_run_image_metadata && !is_plugin_run_cancelled(run_id.as_deref())? {
         let job = create_plugin_job(&pool, &datasource, builtin::IMAGE_METADATA_PLUGIN_ID).await?;
         let execution_paths = datasource.paths.clone();
+        insert_plugin_logs(
+            &pool,
+            &job.id,
+            builtin::IMAGE_METADATA_PLUGIN_ID,
+            &[PendingPluginLog {
+                level: "info".to_string(),
+                message: format!(
+                    "Image metadata started. Scanning {} datasource path{}.",
+                    execution_paths.len(),
+                    if execution_paths.len() == 1 { "" } else { "s" }
+                ),
+            }],
+        )
+        .await?;
         let job_id = job.id.clone();
         let plugin_id = builtin::IMAGE_METADATA_PLUGIN_ID.to_string();
         let job_pool = pool.clone();
         let job_datasource_id = datasource.id.clone();
         let job_run_id = run_id.clone();
+        let (progress_sender, progress_receiver) =
+            std::sync::mpsc::channel::<builtin::MediaScanProgress>();
+        let progress_pool = pool.clone();
+        let progress_job_id = job.id.clone();
+        let progress_plugin_id = builtin::IMAGE_METADATA_PLUGIN_ID.to_string();
+        let progress_logger = tauri::async_runtime::spawn(async move {
+            while let Ok(progress) = progress_receiver.recv_timeout(Duration::from_millis(500)) {
+                if progress.scanned_files == 0 {
+                    continue;
+                }
+
+                let current_path = if progress.current_path.is_empty() {
+                    String::new()
+                } else {
+                    format!(" Current file: {}", progress.current_path)
+                };
+                let log = PendingPluginLog {
+                    level: "info".to_string(),
+                    message: format!(
+                        "Image metadata still running. Scanned {} files and found {} media files so far.{}",
+                        progress.scanned_files, progress.matched_files, current_path
+                    ),
+                };
+
+                let _ = insert_plugin_logs(
+                    &progress_pool,
+                    &progress_job_id,
+                    &progress_plugin_id,
+                    &[log],
+                )
+                .await;
+            }
+        });
 
         let handle = tauri::async_runtime::spawn(async move {
             let output = tauri::async_runtime::spawn_blocking(move || {
-                builtin::execute_image_metadata(execution_paths)
+                builtin::execute_image_metadata_with_progress(execution_paths, |progress| {
+                    let _ = progress_sender.send(progress);
+                })
             })
             .await
             .map_err(|error| format!("Plugin worker failed: {error}"))?;
+
+            let _ = progress_logger.await;
 
             finish_image_metadata_job(
                 &job_pool,
@@ -1291,6 +1484,142 @@ async fn finish_python_plugin_job(
             complete_plugin_job(pool, job_id).await?;
         }
         Err(message) => {
+            fail_plugin_job(pool, job_id, &message).await?;
+        }
+    }
+
+    load_plugin_job(pool, job_id).await
+}
+
+async fn run_archive_extractor_stage(
+    pool: &SqlitePool,
+    datasource: &mut DatasourceForPlugins,
+    case_folder_path: &str,
+    run_id: Option<&str>,
+) -> Result<PluginJobRecord, String> {
+    let job = create_plugin_job(pool, datasource, builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID).await?;
+    let execution_paths = datasource.paths.clone();
+    let output_root = archive_extractor_output_root(case_folder_path, &datasource.id);
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        builtin::execute_archive_extractor(execution_paths, output_root)
+    })
+    .await
+    .map_err(|error| format!("Archive extractor worker failed: {error}"))?;
+    let extracted_path = output
+        .as_ref()
+        .ok()
+        .filter(|summary| summary.extracted_files > 0)
+        .map(|summary| summary.output_root.clone());
+    let job_record = finish_archive_extractor_job(
+        pool,
+        &job.id,
+        &datasource.id,
+        builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID,
+        output,
+        run_id,
+    )
+    .await?;
+
+    if job_record.status == "complete" {
+        if let Some(path) = extracted_path {
+            add_datasource_path_if_missing(pool, &datasource.id, &path).await?;
+
+            if !datasource.paths.iter().any(|existing| existing == &path) {
+                datasource.paths.push(path);
+            }
+        }
+    }
+
+    Ok(job_record)
+}
+
+async fn finish_archive_extractor_job(
+    pool: &SqlitePool,
+    job_id: &str,
+    datasource_id: &str,
+    plugin_id: &str,
+    output: Result<builtin::ArchiveExtractionSummary, String>,
+    run_id: Option<&str>,
+) -> Result<PluginJobRecord, String> {
+    match output {
+        Ok(summary) => {
+            if is_plugin_run_cancelled(run_id)? {
+                fail_plugin_job(pool, job_id, "Plugin run cancelled.").await?;
+                return load_plugin_job(pool, job_id).await;
+            }
+
+            let mut logs = vec![PendingPluginLog {
+                level: "info".to_string(),
+                message: format!(
+                    "Scanned {} files, found {} ZIP archives, and extracted {} files to {}.",
+                    summary.scanned_files,
+                    summary.archive_count,
+                    summary.extracted_files,
+                    summary.output_root
+                ),
+            }];
+
+            if summary.skipped_entries > 0 {
+                logs.push(PendingPluginLog {
+                    level: "warn".to_string(),
+                    message: format!(
+                        "Skipped {} unsafe or invalid archive entries.",
+                        summary.skipped_entries
+                    ),
+                });
+            }
+
+            if summary.archive_count == 0 {
+                logs.push(PendingPluginLog {
+                    level: "warn".to_string(),
+                    message: "No ZIP archives were found in the selected datasource paths."
+                        .to_string(),
+                });
+            }
+
+            logs.extend(summary.errors.iter().map(|message| PendingPluginLog {
+                level: "error".to_string(),
+                message: message.clone(),
+            }));
+
+            let records = if summary.archive_count > 0 {
+                vec![PluginResultRecord {
+                    file_path: summary.output_root.clone(),
+                    result_kind: "archive_extraction".to_string(),
+                    label: "Archive extraction".to_string(),
+                    payload: serde_json::json!({
+                        "category": "files",
+                        "icon": "archive",
+                        "kind": "archive_extraction",
+                        "outputRoot": summary.output_root,
+                        "scannedFiles": summary.scanned_files,
+                        "archiveCount": summary.archive_count,
+                        "extractedFiles": summary.extracted_files,
+                        "extractedBytes": summary.extracted_bytes,
+                        "skippedEntries": summary.skipped_entries,
+                        "archives": summary.archives,
+                        "errors": summary.errors,
+                    }),
+                }]
+            } else {
+                Vec::new()
+            };
+
+            insert_plugin_logs(pool, job_id, plugin_id, &logs).await?;
+            insert_plugin_results(pool, job_id, datasource_id, plugin_id, &records).await?;
+            complete_plugin_job(pool, job_id).await?;
+        }
+        Err(message) => {
+            insert_plugin_logs(
+                pool,
+                job_id,
+                plugin_id,
+                &[PendingPluginLog {
+                    level: "error".to_string(),
+                    message: message.clone(),
+                }],
+            )
+            .await?;
             fail_plugin_job(pool, job_id, &message).await?;
         }
     }
@@ -1578,12 +1907,17 @@ fn install_cultivator_api(py: Python<'_>) -> PyResult<()> {
 
     module.add_function(wrap_pyfunction!(read_bytes, &module)?)?;
     module.add_function(wrap_pyfunction!(read_text, &module)?)?;
+    module.add_function(wrap_pyfunction!(read_lines, &module)?)?;
     module.add_function(wrap_pyfunction!(sha256, &module)?)?;
     module.add_function(wrap_pyfunction!(log, &module)?)?;
     module.add_function(wrap_pyfunction!(create_artifact, &module)?)?;
     module.add_function(wrap_pyfunction!(create_table_artifact, &module)?)?;
     module.add_function(wrap_pyfunction!(add_table_row, &module)?)?;
     module.add_function(wrap_pyfunction!(add_artifact, &module)?)?;
+    module.add_function(wrap_pyfunction!(create_group, &module)?)?;
+    module.add_function(wrap_pyfunction!(datetime_from_unix, &module)?)?;
+    module.add_function(wrap_pyfunction!(datetime_from_iso, &module)?)?;
+    module.add_function(wrap_pyfunction!(datetime_from_datetime, &module)?)?;
     module.add_function(wrap_pyfunction!(account, &module)?)?;
     module.add_function(wrap_pyfunction!(application, &module)?)?;
     module.add_function(wrap_pyfunction!(browser_history, &module)?)?;
@@ -2567,6 +2901,7 @@ fn seed_cultivator_api_stub(plugin_root: &Path) -> Result<(), String> {
 const PYTHON_PLUGIN_PROCESS_RUNNER: &str = r#"
 import contextlib
 import csv
+import datetime
 import hashlib
 import importlib.util
 import io
@@ -2674,9 +3009,13 @@ def read_bytes(path, max_bytes=None):
         return file.read() if max_bytes is None else file.read(max_bytes)
 
 
-def read_text(path, max_bytes=None):
+def read_text(path, max_bytes=None, encoding="utf-8", errors="replace"):
     data = read_bytes(path, max_bytes)
-    return data.decode("utf-8", errors="replace")
+    return data.decode(encoding, errors=errors)
+
+
+def read_lines(path, encoding="utf-8", errors="replace"):
+    return open(path, "r", encoding=encoding, errors=errors)
 
 
 def sha256(path):
@@ -2717,7 +3056,7 @@ def table_header_key(label, existing):
     return key
 
 
-def create_table_artifact(name, category, headers, label=None, **fields):
+def create_table_artifact(name, category, headers, label=None, icon=None, **fields):
     existing = set()
     columns = []
     for header in headers:
@@ -2737,6 +3076,8 @@ def create_table_artifact(name, category, headers, label=None, **fields):
         table={"name": str(name), "columns": columns, "rows": []},
         **fields,
     )
+    if icon:
+        artifact["icon"] = str(icon)
     return artifact
 
 
@@ -2748,14 +3089,35 @@ def add_table_row(table, values=None, **fields):
     table.setdefault("table", {}).setdefault("rows", []).append(row)
 
 
-def add_artifact(artifact, file_path=None):
+def create_group(label, id=None):
+    return {
+        "id": str(id or normalize_custom_category(label)),
+        "label": str(label),
+    }
+
+
+def add_artifact(artifact, file_path=None, group=None):
     if isinstance(artifact, dict):
+        if group is not None:
+            artifact["group"] = group
         source = artifact.get("source")
         if not file_path and isinstance(source, dict):
             file_path = source.get("filePath")
         if not file_path:
             file_path = artifact.get("path")
     artifacts.append({"filePath": file_path, "payload": artifact})
+
+
+def datetime_from_unix(ts):
+    return datetime.datetime.fromtimestamp(float(ts)).isoformat()
+
+
+def datetime_from_iso(text):
+    return datetime.datetime.fromisoformat(str(text).strip().replace("Z", "+00:00")).isoformat()
+
+
+def datetime_from_datetime(value):
+    return value.isoformat()
 
 
 def account(label, **fields): return create_artifact("account", label, **fields)
@@ -2843,8 +3205,9 @@ def search(query, regex=False, case_sensitive=False, binary_files=False, max_mat
 api = types.ModuleType("cultivator_api")
 for name, value in list(globals().items()):
     if name in {
-        "read_bytes", "read_text", "sha256", "log", "create_artifact",
-        "create_table_artifact", "add_table_row", "add_artifact", "account",
+        "read_bytes", "read_text", "read_lines", "sha256", "log", "create_artifact",
+        "create_table_artifact", "add_table_row", "add_artifact", "create_group",
+        "datetime_from_unix", "datetime_from_iso", "datetime_from_datetime", "account",
         "application", "browser_history", "call", "contact", "credential",
         "file_artifact", "location", "media", "message", "note",
         "sms", "mms", "email", "chat", "instant_message", "user_account",
@@ -2938,7 +3301,7 @@ except Exception:
     sys.exit(1)
 "#;
 
-const CULTIVATOR_API_STUB: &str = r#"from typing import Any, Literal, Optional, TypedDict
+const CULTIVATOR_API_STUB: &str = r#"from typing import Any, Iterator, Literal, Optional, TypedDict
 
 class SearchMatch(TypedDict):
     path: str
@@ -2987,11 +3350,18 @@ class ArtifactTimestamp(TypedDict, total=False):
     timezone: str
     source: str
 
+class ArtifactGroup(TypedDict):
+    """Logical group used to display related plugin artifacts together."""
+    id: str
+    label: str
+
 class BaseArtifact(TypedDict, total=False):
     """Shared fields supported by every Cultivator artifact model."""
     kind: str
     category: ArtifactCategory
     label: str
+    icon: str
+    group: ArtifactGroup
     description: str
     source: ArtifactSourceReference
     timestamps: list[ArtifactTimestamp]
@@ -3179,6 +3549,7 @@ def create_table_artifact(
     category: str,
     headers: list[str | CustomTableColumn],
     label: Optional[str] = None,
+    icon: Optional[str] = None,
     **fields: Any,
 ) -> CustomTableArtifact: ...
 
@@ -3188,7 +3559,19 @@ def add_table_row(
     **fields: Any,
 ) -> None: ...
 
-def add_artifact(artifact: Artifact | dict[str, Any], file_path: Optional[str] = None) -> None: ...
+def create_group(label: str, id: Optional[str] = None) -> ArtifactGroup: ...
+
+def add_artifact(
+    artifact: Artifact | dict[str, Any],
+    file_path: Optional[str] = None,
+    group: Optional[ArtifactGroup] = None,
+) -> None: ...
+
+def datetime_from_unix(ts: float) -> str: ...
+
+def datetime_from_iso(text: str) -> str: ...
+
+def datetime_from_datetime(value: Any) -> str: ...
 
 def account(label: str, **fields: Any) -> AccountArtifact: ...
 
@@ -3266,7 +3649,18 @@ def timeline_event(label: str, **fields: Any) -> TimelineArtifact: ...
 
 def read_bytes(path: str, max_bytes: Optional[int] = None) -> bytes: ...
 
-def read_text(path: str, max_bytes: Optional[int] = None) -> str: ...
+def read_text(
+    path: str,
+    max_bytes: Optional[int] = None,
+    encoding: str = "utf-8",
+    errors: str = "replace",
+) -> str: ...
+
+def read_lines(
+    path: str,
+    encoding: str = "utf-8",
+    errors: str = "replace",
+) -> Iterator[str]: ...
 
 def sha256(path: str) -> str: ...
 
@@ -3461,13 +3855,16 @@ context["file"]["size"]</code></pre>
         </thead>
         <tbody>
           <tr><td><code>read_bytes(path, max_bytes=None)</code></td><td><code>bytes</code></td><td>Reads a file, optionally truncating to <code>max_bytes</code>.</td></tr>
-          <tr><td><code>read_text(path, max_bytes=None)</code></td><td><code>str</code></td><td>Reads bytes and decodes with lossy UTF-8.</td></tr>
+          <tr><td><code>read_text(path, max_bytes=None, encoding="utf-8", errors="replace")</code></td><td><code>str</code></td><td>Reads bytes and decodes using the requested Python text encoding and error handling.</td></tr>
+          <tr><td><code>read_lines(path, encoding="utf-8", errors="replace")</code></td><td><code>Iterator[str]</code></td><td>Streams text lines using the requested Python text encoding and error handling.</td></tr>
           <tr><td><code>sha256(path)</code></td><td><code>str</code></td><td>Returns the SHA-256 hex digest.</td></tr>
           <tr><td><code>log(level, message)</code></td><td><code>None</code></td><td>Adds a plugin job log entry.</td></tr>
           <tr><td><code>create_artifact(kind, label, **fields)</code></td><td><code>dict</code></td><td>Creates an artifact payload dictionary for any supported or custom kind.</td></tr>
-          <tr><td><code>create_table_artifact(name, category, headers, label=None, **fields)</code></td><td><code>dict</code></td><td>Creates a custom table artifact payload with plugin-defined columns.</td></tr>
+          <tr><td><code>create_table_artifact(name, category, headers, label=None, icon=None, **fields)</code></td><td><code>dict</code></td><td>Creates a custom table artifact payload with plugin-defined columns and an optional Lucide icon name.</td></tr>
           <tr><td><code>add_table_row(table, values=None, **fields)</code></td><td><code>None</code></td><td>Appends a row to a custom table artifact before it is added or returned.</td></tr>
-          <tr><td><code>add_artifact(artifact, file_path=None)</code></td><td><code>None</code></td><td>Adds an artifact to the current plugin job results without returning it from <code>run</code>.</td></tr>
+          <tr><td><code>create_group(label, id=None)</code></td><td><code>dict</code></td><td>Creates a reusable artifact group payload for related plugin artifacts.</td></tr>
+          <tr><td><code>add_artifact(artifact, file_path=None, group=None)</code></td><td><code>None</code></td><td>Adds an artifact to the current plugin job results without returning it from <code>run</code>.</td></tr>
+          <tr><td><code>datetime_from_unix(ts)</code>, <code>datetime_from_iso(text)</code>, <code>datetime_from_datetime(dt)</code></td><td><code>str</code></td><td>Returns ISO timestamp strings for artifact fields.</td></tr>
           <tr><td><code>contact(label, **fields)</code> and other model helpers</td><td><code>dict</code></td><td>Creates a typed artifact payload with <code>kind</code>, <code>category</code>, and <code>label</code>.</td></tr>
           <tr><td><code>sms</code>, <code>email</code>, <code>journey</code>, <code>map_artifact</code>, and base node helpers</td><td><code>dict</code></td><td>Creates node-ready artifacts for timelines, maps, and relationship graphs. Use <code>nodeId</code> and <code>relatedIds</code> to connect records.</td></tr>
           <tr><td><code>search(query, regex=False, case_sensitive=False, binary_files=False, max_matches=None)</code></td><td><code>list[SearchMatch]</code></td><td>Searches the current datasource paths.</td></tr>
@@ -3545,7 +3942,7 @@ def run(context):
           <tr><td><code>record</code></td><td><code>GenericArtifact</code></td><td><code>other</code></td><td><code>fields: dict[str, Any]</code></td></tr>
         </tbody>
       </table>
-      <p>All artifact model types extend <code>BaseArtifact</code>, which supports <code>kind: str</code>, <code>category: ArtifactCategory</code>, <code>label: str</code>, <code>description: str</code>, <code>source: ArtifactSourceReference</code>, <code>timestamps: list[ArtifactTimestamp]</code>, <code>tags: list[str]</code>, <code>confidence: ArtifactConfidence</code>, <code>severity: ArtifactSeverity</code>, and <code>raw: Any</code>. Base node artifacts also support <code>nodeId: str</code> and <code>relatedIds: list[str]</code> for relationship graphs.</p>
+      <p>All artifact model types extend <code>BaseArtifact</code>, which supports <code>kind: str</code>, <code>category: ArtifactCategory</code>, <code>label: str</code>, <code>icon: str</code>, <code>group: ArtifactGroup</code>, <code>description: str</code>, <code>source: ArtifactSourceReference</code>, <code>timestamps: list[ArtifactTimestamp]</code>, <code>tags: list[str]</code>, <code>confidence: ArtifactConfidence</code>, <code>severity: ArtifactSeverity</code>, and <code>raw: Any</code>. Base node artifacts also support <code>nodeId: str</code> and <code>relatedIds: list[str]</code> for relationship graphs.</p>
       <pre><code>def run(context):
     return {
         "kind": "contact",
@@ -3820,6 +4217,65 @@ async fn load_datasource_for_plugins(
             .map(|plugin_row| plugin_row.get::<String, _>("plugin_id"))
             .collect(),
     })
+}
+
+async fn add_datasource_path_if_missing(
+    pool: &SqlitePool,
+    datasource_id: &str,
+    path: &str,
+) -> Result<(), String> {
+    let existing_count: i64 = sqlx::query_scalar(
+        r#"
+          SELECT COUNT(*)
+          FROM data_source_paths
+          WHERE data_source_id = $1
+            AND path = $2
+        "#,
+    )
+    .bind(datasource_id)
+    .bind(path)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("Failed to check datasource extraction path: {error}"))?;
+
+    if existing_count > 0 {
+        return Ok(());
+    }
+
+    let sort_order: i64 = sqlx::query_scalar(
+        r#"
+          SELECT COALESCE(MAX(sort_order), -1) + 1
+          FROM data_source_paths
+          WHERE data_source_id = $1
+        "#,
+    )
+    .bind(datasource_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("Failed to choose datasource extraction path order: {error}"))?;
+
+    sqlx::query(
+        r#"
+          INSERT INTO data_source_paths (
+            id,
+            data_source_id,
+            path,
+            sort_order,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5)
+        "#,
+    )
+    .bind(create_id("datasource-path"))
+    .bind(datasource_id)
+    .bind(path)
+    .bind(sort_order)
+    .bind(now_iso_like())
+    .execute(pool)
+    .await
+    .map_err(|error| format!("Failed to save datasource extraction path: {error}"))?;
+
+    Ok(())
 }
 
 async fn create_plugin_job(
@@ -4285,8 +4741,8 @@ fn plugin_id_from_name(name: &str) -> String {
     id.trim_matches('-').to_string()
 }
 
-fn create_plugin_manifest_text(request: CreatePythonPluginRequest) -> Result<String, String> {
-    if let Some(manifest_toml) = request.manifest_toml {
+fn create_plugin_manifest_text(request: &CreatePythonPluginRequest) -> Result<String, String> {
+    if let Some(manifest_toml) = request.manifest_toml.as_deref() {
         let manifest_toml = manifest_toml.trim();
 
         if manifest_toml.is_empty() {
@@ -4296,7 +4752,7 @@ fn create_plugin_manifest_text(request: CreatePythonPluginRequest) -> Result<Str
         return Ok(manifest_toml.to_string());
     }
 
-    if let Some(manifest) = request.manifest {
+    if let Some(manifest) = request.manifest.as_ref() {
         let path_glob = if manifest.path_glob.is_empty() {
             String::new()
         } else {
@@ -4476,6 +4932,34 @@ fn unix_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
+}
+
+fn archive_extractor_output_root(case_folder_path: &str, datasource_id: &str) -> PathBuf {
+    PathBuf::from(case_folder_path)
+        .join("artifacts")
+        .join("extracted")
+        .join(sanitize_path_segment(datasource_id))
+}
+
+fn sanitize_path_segment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+
+    if sanitized.is_empty() {
+        "datasource".to_string()
+    } else {
+        sanitized
+    }
 }
 
 #[cfg(feature = "python-plugins")]

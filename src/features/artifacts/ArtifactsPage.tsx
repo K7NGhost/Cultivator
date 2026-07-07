@@ -1,14 +1,36 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  AutoSizer,
+  List,
+  type ListRowProps,
+} from "react-virtualized";
+import "react-virtualized/styles.css";
+import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Car,
   Check,
   ChevronDown,
   ChevronRight,
+  Clock,
+  Contact,
   Database,
   FileText,
   FolderOpen,
+  Image,
+  MapPin,
+  MessageSquare,
   RefreshCw,
+  Search,
+  Shield,
+  Smartphone,
+  Table2,
   Trash2,
+  User,
+  Wifi,
+  type LucideIcon,
 } from "lucide-react";
 import {
   Tree,
@@ -18,6 +40,7 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -45,14 +68,6 @@ import {
 } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCases } from "@/features/cases/case-provider";
 import { listDataSources } from "@/features/datasources/dataSourceRepository";
@@ -79,8 +94,10 @@ type LoadState = {
 type ArtifactTreeNode = {
   id: string;
   name: string;
-  kind: "category" | "artifact";
+  kind: "category" | "group" | "artifact";
   count: number;
+  entryCount: number;
+  icon?: string;
   artifact?: StoredArtifactRecord;
   artifacts?: StoredArtifactRecord[];
   children?: ArtifactTreeNode[];
@@ -95,6 +112,25 @@ type CustomTableData = {
   name: string;
   columns: CustomTableColumn[];
   rows: Record<string, unknown>[];
+};
+
+type ArtifactEntryViewMode = "selected" | "all";
+type CustomTableSortDirection = "asc" | "desc";
+
+type CustomTableSortState = {
+  key: string;
+  direction: CustomTableSortDirection;
+};
+
+const CUSTOM_TABLE_HEADER_HEIGHT = 30;
+const CUSTOM_TABLE_ROW_HEIGHT = 30;
+const CUSTOM_TABLE_MIN_COLUMN_WIDTH = 144;
+const CUSTOM_TABLE_MAX_COLUMN_WIDTH = 280;
+const CUSTOM_TABLE_WORKER_SORT_THRESHOLD = 50_000;
+
+type ArtifactCategoryBucket = {
+  grouped: Map<string, { name: string; artifacts: StoredArtifactRecord[] }>;
+  ungrouped: StoredArtifactRecord[];
 };
 
 type ArtifactRemovalTarget =
@@ -170,6 +206,86 @@ function getPayloadCategory(artifact: StoredArtifactRecord) {
   }
 
   return getArtifactModel(artifact.resultKind)?.category ?? "other";
+}
+
+function getPayloadIcon(artifact: StoredArtifactRecord) {
+  if (!isPayloadObject(artifact.payload)) {
+    return null;
+  }
+
+  const payload = artifact.payload as Record<string, unknown>;
+  const payloadIcon = payload.icon;
+
+  if (typeof payloadIcon === "string" && payloadIcon.length > 0) {
+    return payloadIcon;
+  }
+
+  if (isPayloadObject(payload.table)) {
+    const tableIcon = payload.table.icon;
+
+    if (typeof tableIcon === "string" && tableIcon.length > 0) {
+      return tableIcon;
+    }
+  }
+
+  return null;
+}
+
+function getPayloadGroup(artifact: StoredArtifactRecord) {
+  if (!isPayloadObject(artifact.payload) || !isPayloadObject(artifact.payload.group)) {
+    return null;
+  }
+
+  const group = artifact.payload.group;
+  const label =
+    typeof group.label === "string" && group.label.length > 0
+      ? group.label
+      : typeof group.name === "string" && group.name.length > 0
+        ? group.name
+        : null;
+  const id =
+    typeof group.id === "string" && group.id.length > 0
+      ? group.id
+      : label;
+
+  return id && label ? { id, label } : null;
+}
+
+function getArtifactTreeIcon(iconName: string | undefined): LucideIcon {
+  switch (iconName?.toLowerCase()) {
+    case "car":
+      return Car;
+    case "clock":
+      return Clock;
+    case "contact":
+    case "contacts":
+      return Contact;
+    case "image":
+      return Image;
+    case "map-pin":
+    case "map":
+      return MapPin;
+    case "message":
+    case "message-square":
+      return MessageSquare;
+    case "search":
+      return Search;
+    case "shield":
+      return Shield;
+    case "smartphone":
+    case "phone":
+      return Smartphone;
+    case "table":
+    case "table-2":
+      return Table2;
+    case "user":
+      return User;
+    case "wifi":
+    case "wireless":
+      return Wifi;
+    default:
+      return FileText;
+  }
 }
 
 function getArtifactModel(kind: string): ArtifactModelDefinition | undefined {
@@ -268,6 +384,55 @@ function getCustomTableData(payload: unknown): CustomTableData | null {
   };
 }
 
+function getCombinedCustomTableData(
+  artifacts: StoredArtifactRecord[],
+): CustomTableData | null {
+  const tables = artifacts
+    .map((artifact) => getCustomTableData(artifact.payload))
+    .filter(
+      (table): table is CustomTableData =>
+        table !== null,
+    );
+
+  if (tables.length === 0) {
+    return null;
+  }
+
+  const columns = new Map<string, CustomTableColumn>();
+
+  for (const table of tables) {
+    for (const column of table.columns) {
+      if (!columns.has(column.key)) {
+        columns.set(column.key, column);
+      }
+    }
+  }
+
+  return {
+    name: tables[0].name,
+    columns: Array.from(columns.values()),
+    rows: tables.flatMap((table) => table.rows),
+  };
+}
+
+function getArtifactEntryCount(artifact: StoredArtifactRecord) {
+  return getCustomTableData(artifact.payload)?.rows.length ?? 1;
+}
+
+function getArtifactEntriesCount(artifacts: StoredArtifactRecord[]) {
+  return artifacts.reduce(
+    (total, artifact) => total + getArtifactEntryCount(artifact),
+    0,
+  );
+}
+
+function formatEntryHitLabel(entryCount: number, fileHits: number) {
+  const entryLabel = entryCount === 1 ? "entry" : "entries";
+  const fileLabel = fileHits === 1 ? "file hit" : "file hits";
+
+  return `${entryCount.toLocaleString()} ${entryLabel} / ${fileHits.toLocaleString()} ${fileLabel}`;
+}
+
 function formatTableCell(value: unknown) {
   if (value === null || value === undefined) {
     return "";
@@ -288,6 +453,177 @@ function formatTableCell(value: unknown) {
   }
 }
 
+function isEmptyTableValue(value: unknown) {
+  return value === null || value === undefined || value === "";
+}
+
+function compareTableValues(left: unknown, right: unknown) {
+  if (isEmptyTableValue(left) || isEmptyTableValue(right)) {
+    if (isEmptyTableValue(left) && isEmptyTableValue(right)) {
+      return 0;
+    }
+
+    return isEmptyTableValue(left) ? 1 : -1;
+  }
+
+  if (typeof left === "number" && typeof right === "number") {
+    return left - right;
+  }
+
+  if (typeof left === "boolean" && typeof right === "boolean") {
+    return Number(left) - Number(right);
+  }
+
+  return formatTableCell(left).localeCompare(formatTableCell(right), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function sortCustomTableRowIndexes(
+  rows: Record<string, unknown>[],
+  sort: CustomTableSortState,
+) {
+  return Array.from({ length: rows.length }, (_, index) => index)
+    .sort((leftIndex, rightIndex) => {
+      const leftValue = rows[leftIndex][sort.key];
+      const rightValue = rows[rightIndex][sort.key];
+      const emptyComparison = compareTableValues(leftValue, rightValue);
+
+      if (
+        emptyComparison !== 0 &&
+        (isEmptyTableValue(leftValue) || isEmptyTableValue(rightValue))
+      ) {
+        return emptyComparison;
+      }
+
+      const comparison = compareTableValues(leftValue, rightValue);
+
+      if (comparison === 0) {
+        return leftIndex - rightIndex;
+      }
+
+      return sort.direction === "asc" ? comparison : -comparison;
+    });
+}
+
+function getNextCustomTableSort(
+  current: CustomTableSortState,
+  columnKey: string,
+): CustomTableSortState {
+  if (current.key !== columnKey) {
+    return { key: columnKey, direction: "asc" };
+  }
+
+  return {
+    key: columnKey,
+    direction: current.direction === "asc" ? "desc" : "asc",
+  };
+}
+
+function CustomTableSortIcon({
+  columnKey,
+  sort,
+}: {
+  columnKey: string;
+  sort: CustomTableSortState;
+}) {
+  if (sort.key !== columnKey) {
+    return (
+      <ArrowUpDown className="size-3 text-muted-foreground" aria-hidden="true" />
+    );
+  }
+
+  return sort.direction === "asc" ? (
+    <ArrowUp className="size-3 text-foreground" aria-hidden="true" />
+  ) : (
+    <ArrowDown className="size-3 text-foreground" aria-hidden="true" />
+  );
+}
+
+function useCustomTableSortedIndexes(
+  rows: Record<string, unknown>[],
+  sort: CustomTableSortState,
+) {
+  const workerRef = useRef<Worker | null>(null);
+  const requestIdRef = useRef(0);
+  const [sortedIndexes, setSortedIndexes] = useState<number[]>([]);
+  const [isSorting, setIsSorting] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    requestIdRef.current += 1;
+    const requestId = requestIdRef.current;
+
+    if (!sort.key || rows.length === 0) {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+      setSortedIndexes([]);
+      setIsSorting(false);
+      return;
+    }
+
+    if (rows.length < CUSTOM_TABLE_WORKER_SORT_THRESHOLD) {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+      setIsSorting(false);
+      setSortedIndexes(sortCustomTableRowIndexes(rows, sort));
+      return;
+    }
+
+    workerRef.current?.terminate();
+    const worker = new Worker(
+      new URL("./customTableSortWorker.ts", import.meta.url),
+      { type: "module" },
+    );
+    workerRef.current = worker;
+    setSortedIndexes([]);
+    setIsSorting(true);
+
+    worker.onmessage = (
+      event: MessageEvent<{ id: number; sortedIndexes: number[] }>,
+    ) => {
+      if (event.data.id !== requestId) {
+        return;
+      }
+
+      setSortedIndexes(event.data.sortedIndexes);
+      setIsSorting(false);
+    };
+
+    worker.onerror = (event) => {
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
+
+      console.error("Failed to sort custom table rows", event);
+      setSortedIndexes([]);
+      setIsSorting(false);
+    };
+
+    worker.postMessage({
+      id: requestId,
+      rows,
+      sort,
+    });
+
+    return () => {
+      if (workerRef.current === worker) {
+        worker.terminate();
+        workerRef.current = null;
+      }
+    };
+  }, [rows, sort]);
+
+  return { isSorting, sortedIndexes };
+}
+
 function formatArtifactFileLabel(artifact: StoredArtifactRecord) {
   if (!artifact.filePath) {
     return artifact.label || artifact.resultKind;
@@ -299,53 +635,152 @@ function formatArtifactFileLabel(artifact: StoredArtifactRecord) {
   return pathParts[pathParts.length - 1] ?? artifact.filePath;
 }
 
-function buildArtifactTree(artifacts: StoredArtifactRecord[]): ArtifactTreeNode[] {
-  const categoryMap = new Map<string, Map<string, StoredArtifactRecord[]>>();
+function getArtifactNodeKey(artifact: StoredArtifactRecord) {
+  if (artifact.resultKind === "custom_table" && isPayloadObject(artifact.payload)) {
+    const payload = artifact.payload as Record<string, unknown>;
+    const table = payload.table;
+
+    if (isPayloadObject(table) && typeof table.name === "string" && table.name.length > 0) {
+      return [artifact.pluginId, artifact.resultKind, table.name].join(":");
+    }
+  }
+
+  return [artifact.pluginId, artifact.resultKind].join(":");
+}
+
+function getArtifactNodeName(artifact: StoredArtifactRecord) {
+  if (artifact.resultKind === "custom_table" && isPayloadObject(artifact.payload)) {
+    const payload = artifact.payload as Record<string, unknown>;
+    const table = payload.table;
+
+    if (isPayloadObject(table) && typeof table.name === "string" && table.name.length > 0) {
+      return table.name;
+    }
+  }
+
+  return artifact.label || artifact.resultKind;
+}
+
+function buildArtifactNodes(
+  category: string,
+  artifacts: StoredArtifactRecord[],
+  idPrefix: string,
+  showEmptyArtifacts: boolean,
+): ArtifactTreeNode[] {
+  const artifactMap = new Map<string, StoredArtifactRecord[]>();
+
+  for (const artifact of artifacts) {
+    const key = getArtifactNodeKey(artifact);
+    const artifactGroup = artifactMap.get(key) ?? [];
+
+    artifactGroup.push(artifact);
+    artifactMap.set(key, artifactGroup);
+  }
+
+  return Array.from(artifactMap.entries())
+    .map(([groupKey, groupArtifacts]) => {
+      const [firstArtifact] = groupArtifacts;
+
+      return {
+        id: `artifact:${category}:${idPrefix}:${groupKey}`,
+        name: getArtifactNodeName(firstArtifact),
+        kind: "artifact" as const,
+        count: groupArtifacts.length,
+        entryCount: getArtifactEntriesCount(groupArtifacts),
+        icon: getPayloadIcon(firstArtifact) ?? undefined,
+        artifact: firstArtifact,
+        artifacts: groupArtifacts,
+      };
+    })
+    .filter((node) => showEmptyArtifacts || node.entryCount > 0)
+    .sort((firstNode, secondNode) =>
+      firstNode.name.localeCompare(secondNode.name),
+    );
+}
+
+function buildArtifactTree(
+  artifacts: StoredArtifactRecord[],
+  showEmptyArtifacts: boolean,
+): ArtifactTreeNode[] {
+  const categoryMap = new Map<string, ArtifactCategoryBucket>();
 
   for (const artifact of artifacts) {
     const category = getPayloadCategory(artifact);
-    const groupMap = categoryMap.get(category) ?? new Map<string, StoredArtifactRecord[]>();
-    const groupKey = [
-      artifact.pluginId,
-      artifact.resultKind,
-    ].join(":");
-    const groupArtifacts = groupMap.get(groupKey) ?? [];
+    const defaultBucket: ArtifactCategoryBucket = {
+      grouped: new Map(),
+      ungrouped: [],
+    };
+    const categoryBucket = categoryMap.get(category) ?? defaultBucket;
+    const payloadGroup = getPayloadGroup(artifact);
 
-    groupArtifacts.push(artifact);
-    groupMap.set(groupKey, groupArtifacts);
-    categoryMap.set(category, groupMap);
+    if (payloadGroup) {
+      const groupKey = [artifact.pluginId, payloadGroup.id].join(":");
+      const groupBucket =
+        categoryBucket.grouped.get(groupKey) ?? {
+          name: payloadGroup.label,
+          artifacts: [],
+        };
+
+      groupBucket.artifacts.push(artifact);
+      categoryBucket.grouped.set(groupKey, groupBucket);
+    } else {
+      categoryBucket.ungrouped.push(artifact);
+    }
+
+    categoryMap.set(category, categoryBucket);
   }
 
   return Array.from(categoryMap.entries())
     .sort(([firstCategory], [secondCategory]) =>
       firstCategory.localeCompare(secondCategory),
     )
-    .map(([category, groupMap]) => {
-      const artifactNodes = Array.from(groupMap.entries())
-        .map(([groupKey, groupArtifacts]) => {
-          const [firstArtifact] = groupArtifacts;
+    .map(([category, categoryBucket]) => {
+      const artifactNodes = buildArtifactNodes(
+        category,
+        categoryBucket.ungrouped,
+        "ungrouped",
+        showEmptyArtifacts,
+      );
+      const groupNodes = Array.from(categoryBucket.grouped.entries())
+        .map(([groupKey, groupBucket]) => {
+          const children = buildArtifactNodes(
+            category,
+            groupBucket.artifacts,
+            groupKey,
+            showEmptyArtifacts,
+          );
 
           return {
-            id: `artifact:${category}:${groupKey}`,
-            name: firstArtifact.label || firstArtifact.resultKind,
-            kind: "artifact" as const,
-            count: groupArtifacts.length,
-            artifact: firstArtifact,
-            artifacts: groupArtifacts,
+            id: `group:${category}:${groupKey}`,
+            name: groupBucket.name,
+            kind: "group" as const,
+            count: children.reduce((total, node) => total + node.count, 0),
+            entryCount: children.reduce(
+              (total, node) => total + node.entryCount,
+              0,
+            ),
+            children,
           };
         })
+        .filter((node) => showEmptyArtifacts || node.entryCount > 0)
         .sort((firstNode, secondNode) =>
           firstNode.name.localeCompare(secondNode.name),
         );
+      const children = [...groupNodes, ...artifactNodes];
 
       return {
         id: `category:${category}`,
         name: category,
         kind: "category" as const,
-        count: artifactNodes.reduce((total, node) => total + node.count, 0),
-        children: artifactNodes,
+        count: children.reduce((total, node) => total + node.count, 0),
+        entryCount: children.reduce(
+          (total, node) => total + node.entryCount,
+          0,
+        ),
+        children,
       };
-    });
+    })
+    .filter((node) => showEmptyArtifacts || node.children.length > 0);
 }
 
 function collectTreeArtifacts(node: ArtifactTreeNode): StoredArtifactRecord[] {
@@ -435,6 +870,7 @@ export function ArtifactsPage() {
   const [selectedArtifactNodeId, setSelectedArtifactNodeId] = useState<
     string | null
   >(null);
+  const [showEmptyArtifacts, setShowEmptyArtifacts] = useState(false);
   const [removalTarget, setRemovalTarget] =
     useState<ArtifactRemovalTarget | null>(null);
   const [loadState, setLoadState] = useState<LoadState>({
@@ -460,7 +896,14 @@ export function ArtifactsPage() {
       return counts;
     }, new Map<string, number>());
   }, [artifacts]);
-  const artifactTree = useMemo(() => buildArtifactTree(artifacts), [artifacts]);
+  const artifactEntryCount = useMemo(
+    () => getArtifactEntriesCount(artifacts),
+    [artifacts],
+  );
+  const artifactTree = useMemo(
+    () => buildArtifactTree(artifacts, showEmptyArtifacts),
+    [artifacts, showEmptyArtifacts],
+  );
   const selectedArtifactNode =
     findArtifactNodeById(artifactTree, selectedArtifactNodeId) ??
     findArtifactNodeContainingArtifact(artifactTree, selectedArtifactId) ??
@@ -586,7 +1029,9 @@ export function ArtifactsPage() {
           Refresh
         </Button>
         <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
-          <span>{artifacts.length.toLocaleString()} artifacts</span>
+          <span>
+            {formatEntryHitLabel(artifactEntryCount, artifacts.length)}
+          </span>
           <Separator orientation="vertical" className="h-4" />
           <span>{categories.size.toLocaleString()} categories</span>
         </div>
@@ -606,13 +1051,18 @@ export function ArtifactsPage() {
         <ResizablePanel defaultSize="38%" minSize="24%">
           <ArtifactTreeViewer
             artifacts={artifacts}
+            entryCount={artifactEntryCount}
+            showEmptyArtifacts={showEmptyArtifacts}
             treeData={artifactTree}
             selectedTreeNodeId={selectedArtifactNode?.id ?? null}
             emptyText={
               activeCase
-                ? "No artifacts have been created by plugins yet."
+                ? artifacts.length > 0
+                  ? "No artifacts with entries are visible."
+                  : "No artifacts have been created by plugins yet."
                 : "Create or select a case before viewing artifacts."
             }
+            onShowEmptyArtifactsChange={setShowEmptyArtifacts}
             onSelectArtifactNode={(artifactNode) => {
               const firstArtifact = artifactNode.artifacts?.[0] ?? artifactNode.artifact;
 
@@ -751,6 +1201,9 @@ export function ArtifactsPage() {
 function ArtifactTreeViewer({
   artifacts,
   emptyText,
+  entryCount,
+  showEmptyArtifacts,
+  onShowEmptyArtifactsChange,
   onSelectArtifactNode,
   onRequestRemoveArtifact,
   onRequestRemoveCategory,
@@ -759,6 +1212,9 @@ function ArtifactTreeViewer({
 }: {
   artifacts: StoredArtifactRecord[];
   emptyText: string;
+  entryCount: number;
+  showEmptyArtifacts: boolean;
+  onShowEmptyArtifactsChange: (showEmptyArtifacts: boolean) => void;
   onSelectArtifactNode: (artifactNode: ArtifactTreeNode) => void;
   onRequestRemoveArtifact: (artifactNode: ArtifactTreeNode) => void;
   onRequestRemoveCategory: (categoryNode: ArtifactTreeNode) => void;
@@ -777,12 +1233,30 @@ function ArtifactTreeViewer({
         <div className="text-xs font-medium uppercase text-muted-foreground">
           Artifact Tree
         </div>
-        <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
-          {artifacts.length.toLocaleString()}
-        </Badge>
+        <div className="flex min-w-0 items-center gap-2">
+          <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Checkbox
+              className="size-3.5 rounded-sm"
+              checked={showEmptyArtifacts}
+              onCheckedChange={(checked) => {
+                onShowEmptyArtifactsChange(checked === true);
+              }}
+            />
+            Empty
+          </label>
+          <Badge
+            variant="secondary"
+            className="h-5 max-w-44 rounded-sm text-[11px]"
+            title={formatEntryHitLabel(entryCount, artifacts.length)}
+          >
+            <span className="truncate">
+              {formatEntryHitLabel(entryCount, artifacts.length)}
+            </span>
+          </Badge>
+        </div>
       </div>
       <div ref={treePanel.ref} className="h-[calc(100%-2rem)]">
-        {artifacts.length === 0 ? (
+        {artifacts.length === 0 || treeData.length === 0 ? (
           <div className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
             {emptyText}
           </div>
@@ -832,16 +1306,20 @@ function ArtifactTreeRow({
   const connectorWidth = node.level * 16;
   const Icon =
     node.data.kind === "artifact"
-      ? FileText
+      ? getArtifactTreeIcon(node.data.icon)
+      : node.data.kind === "group"
+        ? FolderOpen
       : node.data.kind === "category"
         ? Database
-        : FolderOpen;
+        : FileText;
   const iconClassName =
     node.data.kind === "artifact"
       ? "text-muted-foreground"
+      : node.data.kind === "group"
+        ? "text-amber-600 dark:text-amber-400"
       : node.data.kind === "category"
         ? "text-primary"
-        : "text-amber-600 dark:text-amber-400";
+        : "text-muted-foreground";
 
   const row = (
     <div style={style} className="px-1">
@@ -893,9 +1371,15 @@ function ArtifactTreeRow({
             {node.data.name}
           </span>
           {node.data.kind === "artifact" && node.data.artifact ? (
-            node.data.count > 1 ? (
-              <Badge variant="outline" className="h-4 rounded-sm px-1 text-[10px]">
-                {node.data.count} files
+            node.data.entryCount !== 1 || node.data.count > 1 ? (
+              <Badge
+                variant="outline"
+                className="h-4 max-w-40 rounded-sm px-1 text-[10px]"
+                title={formatEntryHitLabel(node.data.entryCount, node.data.count)}
+              >
+                <span className="truncate">
+                  {formatEntryHitLabel(node.data.entryCount, node.data.count)}
+                </span>
               </Badge>
             ) : (
               <span className="max-w-32 truncate text-[10px] text-muted-foreground">
@@ -904,8 +1388,14 @@ function ArtifactTreeRow({
               </span>
             )
           ) : (
-            <Badge variant="outline" className="h-4 rounded-sm px-1 text-[10px]">
-              {node.data.count}
+            <Badge
+              variant="outline"
+              className="h-4 max-w-40 rounded-sm px-1 text-[10px]"
+              title={formatEntryHitLabel(node.data.entryCount, node.data.count)}
+            >
+              <span className="truncate">
+                {formatEntryHitLabel(node.data.entryCount, node.data.count)}
+              </span>
             </Badge>
           )}
         </Button>
@@ -973,6 +1463,9 @@ function ArtifactPropertiesPanel({
   onSelectArtifact: (artifact: StoredArtifactRecord) => void;
   pluginName?: string;
 }) {
+  const [entryViewMode, setEntryViewMode] =
+    useState<ArtifactEntryViewMode>("selected");
+
   if (!artifact) {
     return (
       <section className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
@@ -983,6 +1476,13 @@ function ArtifactPropertiesPanel({
 
   const model = getArtifactModel(artifact.resultKind);
   const category = getPayloadCategory(artifact);
+  const combinedCustomTable = getCombinedCustomTableData(artifactOptions);
+  const canViewAllEntries =
+    artifactOptions.length > 1 && combinedCustomTable !== null;
+  const isViewingAllEntries = canViewAllEntries && entryViewMode === "all";
+  const fileSelectorLabel = isViewingAllEntries
+    ? "All entries"
+    : formatArtifactFileLabel(artifact);
   const propertyRows = [
     ["Label", artifact.label || "-"],
     ["Kind", artifact.resultKind],
@@ -1031,10 +1531,10 @@ function ArtifactPropertiesPanel({
           </div>
         </div>
 
-        {artifactOptions.length > 1 && (
+        {(artifactOptions.length > 1 || canViewAllEntries) && (
           <div className="flex h-10 shrink-0 items-center gap-2 border-b bg-muted/20 px-2">
             <div className="mr-1 shrink-0 text-[11px] font-medium uppercase text-muted-foreground">
-              File
+              View
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -1043,24 +1543,46 @@ function ArtifactPropertiesPanel({
                   variant="outline"
                   size="sm"
                   className="h-7 min-w-0 flex-1 justify-between rounded-sm px-2 text-xs"
-                  title={artifact.filePath || artifact.label || artifact.resultKind}
+                  title={
+                    isViewingAllEntries
+                      ? "All entries"
+                      : artifact.filePath || artifact.label || artifact.resultKind
+                  }
                 >
                   <span className="min-w-0 truncate font-mono text-[11px]">
-                    {formatArtifactFileLabel(artifact)}
+                    {fileSelectorLabel}
                   </span>
                   <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="max-h-72 w-80">
+                {canViewAllEntries && (
+                  <DropdownMenuItem
+                    className="grid grid-cols-[1rem_minmax(0,1fr)] gap-2 text-xs"
+                    onSelect={() => setEntryViewMode("all")}
+                  >
+                    <span className="flex size-4 items-center justify-center">
+                      {isViewingAllEntries ? (
+                        <Check className="size-3.5" aria-hidden="true" />
+                      ) : null}
+                    </span>
+                    <span className="min-w-0 truncate text-xs">
+                      All entries
+                    </span>
+                  </DropdownMenuItem>
+                )}
                 {artifactOptions.map((option) => (
                   <DropdownMenuItem
                     key={option.id}
                     className="grid grid-cols-[1rem_minmax(0,1fr)] gap-2 text-xs"
                     title={option.filePath || option.label || option.resultKind}
-                    onSelect={() => onSelectArtifact(option)}
+                    onSelect={() => {
+                      setEntryViewMode("selected");
+                      onSelectArtifact(option);
+                    }}
                   >
                     <span className="flex size-4 items-center justify-center">
-                      {option.id === artifact.id ? (
+                      {!isViewingAllEntries && option.id === artifact.id ? (
                         <Check className="size-3.5" aria-hidden="true" />
                       ) : null}
                     </span>
@@ -1072,7 +1594,9 @@ function ArtifactPropertiesPanel({
               </DropdownMenuContent>
             </DropdownMenu>
             <Badge variant="secondary" className="h-5 shrink-0 rounded-sm text-[11px]">
-              {artifactOptions.length}
+              {isViewingAllEntries
+                ? combinedCustomTable.rows.length.toLocaleString()
+                : artifactOptions.length.toLocaleString()}
             </Badge>
           </div>
         )}
@@ -1081,7 +1605,11 @@ function ArtifactPropertiesPanel({
           value="preview"
           className="m-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
         >
-          <ArtifactPreviewPanel artifact={artifact} />
+          <ArtifactPreviewPanel
+            artifact={artifact}
+            artifactOptions={artifactOptions}
+            entryViewMode={isViewingAllEntries ? "all" : "selected"}
+          />
         </TabsContent>
 
         <TabsContent
@@ -1127,10 +1655,25 @@ function ArtifactPropertiesPanel({
 
 function ArtifactPreviewPanel({
   artifact,
+  artifactOptions,
+  entryViewMode,
 }: {
   artifact: StoredArtifactRecord;
+  artifactOptions: StoredArtifactRecord[];
+  entryViewMode: ArtifactEntryViewMode;
 }) {
+  const combinedCustomTable =
+    entryViewMode === "all" ? getCombinedCustomTableData(artifactOptions) : null;
   const customTable = getCustomTableData(artifact.payload);
+
+  if (combinedCustomTable) {
+    return (
+      <CustomTableArtifactPreview
+        table={combinedCustomTable}
+        subtitle="All entries"
+      />
+    );
+  }
 
   if (customTable) {
     return <CustomTableArtifactPreview table={customTable} />;
@@ -1162,69 +1705,195 @@ function ArtifactPreviewPanel({
   );
 }
 
-function CustomTableArtifactPreview({ table }: { table: CustomTableData }) {
+function CustomTableArtifactPreview({
+  subtitle,
+  table,
+}: {
+  subtitle?: string;
+  table: CustomTableData;
+}) {
+  const [sort, setSort] = useState<CustomTableSortState>(() => ({
+    key: table.columns[0]?.key ?? "",
+    direction: "asc",
+  }));
+  useEffect(() => {
+    if (table.columns.length === 0) {
+      return;
+    }
+
+    setSort((current) =>
+      table.columns.some((column) => column.key === current.key)
+        ? current
+        : { key: table.columns[0].key, direction: "asc" },
+    );
+  }, [table.columns]);
+  const columnWidths = useMemo(
+    () =>
+      table.columns.map((column) =>
+        Math.min(
+          CUSTOM_TABLE_MAX_COLUMN_WIDTH,
+          Math.max(
+            CUSTOM_TABLE_MIN_COLUMN_WIDTH,
+            column.label.length * 9 + 32,
+          ),
+        ),
+      ),
+    [table.columns],
+  );
+  const tableWidth = useMemo(
+    () => columnWidths.reduce((total, width) => total + width, 0),
+    [columnWidths],
+  );
+  const { isSorting, sortedIndexes } = useCustomTableSortedIndexes(
+    table.rows,
+    sort,
+  );
+  const rowRenderer = ({ index, key, style }: ListRowProps) => {
+    const rowIndex = sortedIndexes[index] ?? index;
+    const row = table.rows[rowIndex];
+
+    return (
+      <div
+        key={key}
+        style={{
+          ...style,
+          width: tableWidth,
+        }}
+        className="flex border-t text-xs"
+      >
+        {table.columns.map((column, columnIndex) => {
+          const value = formatTableCell(row?.[column.key]);
+
+          return (
+            <div
+              key={column.key}
+              className="flex h-full items-center border-r px-2 text-[11px] last:border-r-0"
+              style={{
+                width: columnWidths[columnIndex],
+              }}
+              title={value}
+            >
+              <span className="block min-w-0 truncate">
+                {value || "-"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-8 shrink-0 items-center justify-between border-b bg-muted/20 px-2 text-xs">
-        <div className="min-w-0 truncate font-medium">{table.name}</div>
+        <div className="min-w-0 truncate font-medium">
+          {table.name}
+          {subtitle ? (
+            <span className="ml-2 font-normal text-muted-foreground">
+              {subtitle}
+            </span>
+          ) : null}
+        </div>
         <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
           {table.rows.length.toLocaleString()} rows
         </Badge>
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden p-2">
-        <Table
-          containerClassName="h-full overflow-auto rounded-sm border"
-          className="w-max min-w-full table-auto text-xs"
-        >
-          <TableHeader className="sticky top-0 z-10 bg-background">
-            <TableRow className="hover:bg-transparent">
-              {table.columns.map((column) => (
-                <TableHead
-                  key={column.key}
-                  className="border-r px-2 py-1 align-top text-[11px] last:border-r-0"
-                  title={column.label}
-                >
-                  <span className="block whitespace-nowrap">
-                    {column.label}
-                  </span>
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {table.rows.map((row, rowIndex) => (
-              <TableRow key={rowIndex}>
-                {table.columns.map((column) => {
-                  const value = formatTableCell(row[column.key]);
+        <div className="relative h-full overflow-hidden rounded-sm border">
+          {table.rows.length === 0 ? (
+            <div className="grid h-full place-items-center px-2 py-2 text-center text-xs text-muted-foreground">
+              No rows were added to this table.
+            </div>
+          ) : (
+            <AutoSizer>
+              {({ height, width }) => {
+                const viewportWidth = Math.max(0, width);
+                const viewportHeight = Math.max(0, height);
+                const renderedTableWidth = Math.max(tableWidth, viewportWidth);
+                const bodyHeight = Math.max(
+                  0,
+                  viewportHeight - CUSTOM_TABLE_HEADER_HEIGHT,
+                );
 
-                  return (
-                    <TableCell
-                      key={column.key}
-                      className="border-r px-2 py-1 align-top text-[11px] last:border-r-0"
-                      title={value}
-                    >
-                      <span className="block whitespace-pre-wrap">
-                        {value || "-"}
-                      </span>
-                    </TableCell>
-                  );
-                })}
-              </TableRow>
-            ))}
-
-            {table.rows.length === 0 && (
-              <TableRow>
-                <TableCell
-                  colSpan={table.columns.length}
-                  className="h-12 px-2 py-2 text-center text-xs text-muted-foreground"
-                >
-                  No rows were added to this table.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
+                return (
+                  <div
+                    className="h-full overflow-auto"
+                    style={{ height: viewportHeight, width: viewportWidth }}
+                  >
+                    <div style={{ width: renderedTableWidth }}>
+                      <div
+                        className="flex border-b bg-background text-xs"
+                        style={{
+                          height: CUSTOM_TABLE_HEADER_HEIGHT,
+                          width: renderedTableWidth,
+                        }}
+                      >
+                        {table.columns.map((column, columnIndex) => (
+                          <div
+                            key={column.key}
+                            className="flex h-full items-center border-r text-[11px] font-medium text-muted-foreground last:border-r-0"
+                            style={{
+                              width: columnWidths[columnIndex],
+                            }}
+                            title={column.label}
+                          >
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="xs"
+                              className="h-full w-full justify-start gap-1 rounded-none px-2 text-[11px] font-medium uppercase text-muted-foreground"
+                              aria-sort={
+                                sort.key === column.key
+                                  ? sort.direction === "asc"
+                                    ? "ascending"
+                                    : "descending"
+                                  : "none"
+                              }
+                              onClick={() => {
+                                setSort((current) =>
+                                  getNextCustomTableSort(
+                                    current,
+                                    column.key,
+                                  ),
+                                );
+                              }}
+                            >
+                              <span className="min-w-0 truncate">
+                                {column.label}
+                              </span>
+                              <CustomTableSortIcon
+                                columnKey={column.key}
+                                sort={sort}
+                              />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                      <List
+                        height={bodyHeight}
+                        overscanRowCount={8}
+                        rowCount={table.rows.length}
+                        rowHeight={CUSTOM_TABLE_ROW_HEIGHT}
+                        rowRenderer={rowRenderer}
+                        width={renderedTableWidth}
+                      />
+                      {isSorting ? (
+                        <div className="absolute right-3 top-10 flex items-center gap-2 rounded-sm border bg-background/95 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
+                          <span
+                            className="size-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground"
+                            aria-hidden="true"
+                          />
+                          Loading all entries
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              }}
+            </AutoSizer>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -46,6 +46,7 @@ export async function createPythonPlugin(
           entry: string;
           function: string;
         };
+        folderName?: string;
         manifestToml?: string;
         name?: string;
       },

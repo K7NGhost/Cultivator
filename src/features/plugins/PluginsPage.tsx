@@ -40,6 +40,11 @@ import { useCases } from "@/features/cases/case-provider";
 import { listDataSources } from "@/features/datasources/dataSourceRepository";
 import type { DataSourceRecord } from "@/features/datasources/types";
 import {
+  getStoredCreatePluginMode,
+  storeCreatePluginMode,
+} from "@/features/plugins/createPluginPreferences";
+import { isSafePluginFolderName } from "@/features/plugins/pluginManifest";
+import {
   cancelDatasourcePluginRun,
   createPythonPlugin,
   deletePythonPlugin,
@@ -70,7 +75,7 @@ type ActivePluginRun = {
   status: "running" | "cancelling";
 };
 
-type CreatePluginMode = "manual" | "toml";
+type CreatePluginMode = "manual" | "automatic";
 type CreatePluginTarget =
   | "ios"
   | "android"
@@ -194,8 +199,9 @@ export function PluginsPage() {
   const [logs, setLogs] = useState<PluginLogRecord[]>([]);
   const [activeRuns, setActiveRuns] = useState<ActivePluginRun[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
-  const [createPluginMode, setCreatePluginMode] =
-    useState<CreatePluginMode>("manual");
+  const [createPluginMode, setCreatePluginMode] = useState<CreatePluginMode>(
+    getStoredCreatePluginMode,
+  );
   const [newPluginId, setNewPluginId] = useState("");
   const [newPluginName, setNewPluginName] = useState("");
   const [newPluginDescription, setNewPluginDescription] = useState("");
@@ -208,9 +214,7 @@ export function PluginsPage() {
   const [newPluginPathRegex, setNewPluginPathRegex] = useState("");
   const [newPluginEntry, setNewPluginEntry] = useState("plugin.py");
   const [newPluginFunction, setNewPluginFunction] = useState("run");
-  const [newPluginToml, setNewPluginToml] = useState(
-    'id = "example-plugin"\nname = "Example Plugin"\ndescription = "Extracts infotainment artifacts."\ntype = "other"\ntarget = "infotainment"\nmode = "path_glob"\npath_glob = ["*/example.db"]\nentry = "plugin.py"\nfunction = "run"\n',
-  );
+  const [newPluginTomlDetails, setNewPluginTomlDetails] = useState("");
   const [creatingPlugin, setCreatingPlugin] = useState(false);
   const [deletingPluginId, setDeletingPluginId] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
@@ -360,7 +364,7 @@ export function PluginsPage() {
     const pluginType = newPluginType.trim();
     const pluginEntry = newPluginEntry.trim();
     const pluginFunction = newPluginFunction.trim();
-    const pluginToml = newPluginToml.trim();
+    const pluginTomlDetails = newPluginTomlDetails.trim();
 
     if (createPluginMode === "manual") {
       if (!pluginId || !pluginName || !pluginType || !pluginEntry || !pluginFunction) {
@@ -386,9 +390,28 @@ export function PluginsPage() {
         });
         return;
       }
-    } else if (!pluginToml) {
-      setLoadState({ error: "Plugin TOML is required.", isLoading: false });
-      return;
+    } else {
+      if (!pluginName) {
+        setLoadState({ error: "Plugin folder name is required.", isLoading: false });
+        return;
+      }
+
+      if (!isSafePluginFolderName(pluginName)) {
+        setLoadState({
+          error:
+            "Plugin folder name may only contain letters, numbers, '.', '_', and '-'.",
+          isLoading: false,
+        });
+        return;
+      }
+
+      if (!pluginTomlDetails) {
+        setLoadState({
+          error: "Plugin TOML details are required.",
+          isLoading: false,
+        });
+        return;
+      }
     }
 
     setCreatingPlugin(true);
@@ -414,11 +437,13 @@ export function PluginsPage() {
                 function: pluginFunction,
               },
             }
-          : { manifestToml: pluginToml },
+          : {
+              folderName: pluginName,
+              manifestToml: pluginTomlDetails,
+            },
       );
       await openPythonPluginFolderInVscode();
       resetCreatePluginForm();
-      setNewPluginName("");
       setIsCreateDialogOpen(false);
       await refreshPluginsPage();
     } catch (caughtError) {
@@ -432,7 +457,6 @@ export function PluginsPage() {
   }
 
   function resetCreatePluginForm() {
-    setCreatePluginMode("manual");
     setNewPluginId("");
     setNewPluginName("");
     setNewPluginDescription("");
@@ -443,6 +467,14 @@ export function PluginsPage() {
     setNewPluginPathRegex("");
     setNewPluginEntry("plugin.py");
     setNewPluginFunction("run");
+    setNewPluginTomlDetails("");
+  }
+
+  function handleCreatePluginModeChange(value: string) {
+    const nextMode = value === "automatic" ? "automatic" : "manual";
+
+    setCreatePluginMode(nextMode);
+    storeCreatePluginMode(nextMode);
   }
 
   async function deletePlugin(plugin: PythonPlugin) {
@@ -992,7 +1024,7 @@ export function PluginsPage() {
           <DialogHeader className="border-b px-3 py-2">
             <DialogTitle className="text-sm">Add Python Plugin</DialogTitle>
             <DialogDescription className="text-xs">
-              Create a plugin folder with plugin.py and plugin.toml, or paste an existing manifest.
+              Create plugin.py and plugin.toml from manual fields or a folder name plus pasted TOML.
             </DialogDescription>
           </DialogHeader>
           <form
@@ -1004,16 +1036,17 @@ export function PluginsPage() {
             <div className="max-h-[min(34rem,calc(100vh-12rem))] overflow-auto px-3 py-3">
               <Tabs
                 value={createPluginMode}
-                onValueChange={(value) =>
-                  setCreatePluginMode(value as CreatePluginMode)
-                }
+                onValueChange={handleCreatePluginModeChange}
               >
                 <TabsList className="h-8 rounded-sm">
                   <TabsTrigger value="manual" className="h-7 rounded-sm text-xs">
-                    Manual
+                    Manual Entry
                   </TabsTrigger>
-                  <TabsTrigger value="toml" className="h-7 rounded-sm text-xs">
-                    TOML
+                  <TabsTrigger
+                    value="automatic"
+                    className="h-7 rounded-sm text-xs"
+                  >
+                    Automatic Entry
                   </TabsTrigger>
                 </TabsList>
 
@@ -1150,13 +1183,26 @@ export function PluginsPage() {
                   </div>
                 </TabsContent>
 
-                <TabsContent value="toml" className="mt-3">
-                  <textarea
-                    className="min-h-80 w-full resize-y rounded-sm border bg-transparent px-2 py-1.5 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                    value={newPluginToml}
-                    onChange={(event) => setNewPluginToml(event.target.value)}
-                    spellCheck={false}
-                  />
+                <TabsContent value="automatic" className="mt-3 space-y-2">
+                  <label className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-2 text-xs">
+                    <span className="text-muted-foreground">Folder name</span>
+                    <Input
+                      className="h-8 rounded-sm text-xs"
+                      value={newPluginName}
+                      onChange={(event) => setNewPluginName(event.target.value)}
+                    />
+                  </label>
+                  <label className="space-y-1 text-xs">
+                    <span className="text-muted-foreground">TOML Details</span>
+                    <textarea
+                      className="min-h-72 w-full resize-y rounded-sm border bg-transparent px-2 py-1.5 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                      value={newPluginTomlDetails}
+                      onChange={(event) =>
+                        setNewPluginTomlDetails(event.target.value)
+                      }
+                      spellCheck={false}
+                    />
+                  </label>
                 </TabsContent>
               </Tabs>
             </div>

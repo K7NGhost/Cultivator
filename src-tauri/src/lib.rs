@@ -25,12 +25,14 @@ use std::{
 use tauri::Emitter;
 
 mod plugins;
+mod text_preview;
 
 const MAX_TREE_DEPTH: usize = 12;
 const MAX_DIRECTORY_CHILDREN: usize = 500;
 const MAX_LIST_ENTRIES: usize = 1_000;
 const MAX_HEX_PREVIEW_BYTES: usize = 512;
-const MAX_TEXT_PREVIEW_LINE_BYTES: usize = 4_096;
+const MAX_HEX_FILE_BYTES: usize = 64 * 1024;
+const MAX_FILE_FORMAT_PREVIEW_BYTES: usize = 64 * 1024;
 const SEARCH_BATCH_FILE_LIMIT: u64 = 64;
 const SEARCH_BATCH_MATCH_LIMIT: usize = 2_048;
 const SEARCH_BATCH_INTERVAL: Duration = Duration::from_millis(100);
@@ -1333,41 +1335,33 @@ fn trim_line_ending_bytes(bytes: &[u8]) -> &[u8] {
 }
 
 #[tauri::command]
-fn read_text_preview(path: String, _line: u64) -> Result<Vec<String>, String> {
-    let path = PathBuf::from(path);
-
-    if !path.is_file() {
-        return Err("Preview path is not a file.".to_string());
-    }
-
-    let mut file =
-        fs::File::open(&path).map_err(|error| format!("Failed to open file: {error}"))?;
-    let mut bytes = Vec::new();
-
-    Read::by_ref(&mut file)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("Failed to read file preview: {error}"))?;
-
-    Ok(format_text_preview_lines(&bytes))
-}
-
-#[tauri::command]
 fn read_hex_preview(path: String) -> Result<Vec<String>, String> {
-    let bytes = fs::read(&path).map_err(|error| format!("Failed to read file: {error}"))?;
+    let bytes = read_file_prefix(Path::new(&path), MAX_HEX_PREVIEW_BYTES)?;
 
     Ok(format_hex_lines(&bytes, Some(MAX_HEX_PREVIEW_BYTES / 16)))
 }
 
 #[tauri::command]
 fn read_hex_file(path: String) -> Result<Vec<String>, String> {
-    let bytes = fs::read(&path).map_err(|error| format!("Failed to read file: {error}"))?;
+    let metadata =
+        fs::metadata(&path).map_err(|error| format!("Failed to read file metadata: {error}"))?;
+    let bytes = read_file_prefix(Path::new(&path), MAX_HEX_FILE_BYTES)?;
+    let mut lines = format_hex_lines(&bytes, None);
 
-    Ok(format_hex_lines(&bytes, None))
+    if metadata.len() > bytes.len() as u64 {
+        lines.push(format!(
+            "... preview limited to {} of {} bytes",
+            format_byte_count(bytes.len() as u64),
+            format_byte_count(metadata.len())
+        ));
+    }
+
+    Ok(lines)
 }
 
 #[tauri::command]
 fn read_file_format_preview(path: String) -> Result<Option<FileFormatPreview>, String> {
-    let bytes = fs::read(&path).map_err(|error| format!("Failed to read file: {error}"))?;
+    let bytes = read_file_prefix(Path::new(&path), MAX_FILE_FORMAT_PREVIEW_BYTES)?;
 
     if bytes.starts_with(b"SQLite format 3\0") {
         return Ok(Some(sqlite_file_format_preview(&bytes)));
@@ -1378,6 +1372,19 @@ fn read_file_format_preview(path: String) -> Result<Option<FileFormatPreview>, S
     }
 
     Ok(None)
+}
+
+pub(crate) fn read_file_prefix(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String> {
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("Failed to open file '{}': {error}", path.display()))?;
+    let mut bytes = Vec::with_capacity(max_bytes);
+
+    Read::by_ref(&mut file)
+        .take(max_bytes as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Failed to read file preview '{}': {error}", path.display()))?;
+
+    Ok(bytes)
 }
 
 #[tauri::command]
@@ -1955,56 +1962,21 @@ fn emit_worker_output(stdout: &Arc<Mutex<io::Stdout>>, output: &SearchWorkerOutp
     }
 }
 
-fn format_text_preview_lines(bytes: &[u8]) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut start = 0;
-    let mut index = 0;
-    let mut line_number = 1;
+pub(crate) fn format_byte_count(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit_index = 0usize;
 
-    while index < bytes.len() {
-        let is_line_break = bytes[index] == b'\n';
-        let is_long_line = index.saturating_sub(start) >= MAX_TEXT_PREVIEW_LINE_BYTES;
-
-        if is_line_break || is_long_line {
-            let mut end = index;
-
-            if is_line_break && index > start && bytes[index - 1] == b'\r' {
-                end = index - 1;
-            }
-
-            lines.push(format_text_preview_line(
-                line_number,
-                &bytes[start..end],
-                is_long_line && !is_line_break,
-            ));
-
-            if is_line_break {
-                line_number += 1;
-                start = index + 1;
-            } else {
-                start = index;
-            }
-        }
-
-        index += 1;
+    while value >= 1024.0 && unit_index + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit_index += 1;
     }
 
-    if start < bytes.len() {
-        lines.push(format_text_preview_line(
-            line_number,
-            &bytes[start..],
-            false,
-        ));
+    if unit_index == 0 {
+        format!("{bytes} {}", UNITS[unit_index])
+    } else {
+        format!("{value:.1} {}", UNITS[unit_index])
     }
-
-    lines
-}
-
-fn format_text_preview_line(line_number: usize, bytes: &[u8], is_continued: bool) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    let continuation = if is_continued { " ..." } else { "" };
-
-    format!("{line_number:>6}  {text}{continuation}")
 }
 
 fn display_name(path: &Path) -> String {
@@ -2116,7 +2088,7 @@ pub fn run() {
             search_files,
             cancel_search,
             read_search_match_details,
-            read_text_preview,
+            text_preview::read_text_preview,
             read_hex_preview,
             read_hex_file,
             read_file_format_preview,

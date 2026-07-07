@@ -5,12 +5,14 @@ use std::{
     fs,
     io::{BufReader, Read},
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 pub const PLUGIN_ID: &str = "image-metadata";
 
 const MAX_HEADER_BYTES: usize = 64;
+const PROGRESS_FILE_INTERVAL: u64 = 500;
+const PROGRESS_TIME_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +20,14 @@ pub struct MediaGallery {
     pub photos: Vec<MediaItem>,
     pub videos: Vec<MediaItem>,
     pub scanned_files: u64,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaScanProgress {
+    pub scanned_files: u64,
+    pub matched_files: u64,
+    pub current_path: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -133,14 +143,25 @@ pub fn manifest() -> PythonPluginManifest {
     }
 }
 
-pub fn execute(paths: Vec<String>) -> Result<MediaGallery, String> {
-    scan_media_gallery(paths)
+pub fn execute_with_progress<F>(paths: Vec<String>, progress: F) -> Result<MediaGallery, String>
+where
+    F: FnMut(MediaScanProgress),
+{
+    scan_media_gallery_with_progress(paths, progress)
 }
 
-fn scan_media_gallery(paths: Vec<String>) -> Result<MediaGallery, String> {
+fn scan_media_gallery_with_progress<F>(
+    paths: Vec<String>,
+    mut progress: F,
+) -> Result<MediaGallery, String>
+where
+    F: FnMut(MediaScanProgress),
+{
     let mut photos = Vec::new();
     let mut videos = Vec::new();
     let mut scanned_files = 0u64;
+    let mut last_progress_file_count = 0u64;
+    let mut last_progress_at = Instant::now();
 
     for root_path in paths {
         let root = PathBuf::from(root_path);
@@ -152,6 +173,15 @@ fn scan_media_gallery(paths: Vec<String>) -> Result<MediaGallery, String> {
         if root.is_file() {
             scanned_files += 1;
             push_media_item(&root, &mut photos, &mut videos)?;
+            maybe_report_progress(
+                &root,
+                scanned_files,
+                &photos,
+                &videos,
+                &mut last_progress_file_count,
+                &mut last_progress_at,
+                &mut progress,
+            );
             continue;
         }
 
@@ -174,15 +204,61 @@ fn scan_media_gallery(paths: Vec<String>) -> Result<MediaGallery, String> {
             }
 
             scanned_files += 1;
-            push_media_item(&entry.into_path(), &mut photos, &mut videos)?;
+            let entry_path = entry.into_path();
+
+            push_media_item(&entry_path, &mut photos, &mut videos)?;
+            maybe_report_progress(
+                &entry_path,
+                scanned_files,
+                &photos,
+                &videos,
+                &mut last_progress_file_count,
+                &mut last_progress_at,
+                &mut progress,
+            );
         }
     }
+
+    progress(MediaScanProgress {
+        scanned_files,
+        matched_files: (photos.len() + videos.len()) as u64,
+        current_path: String::new(),
+    });
 
     Ok(MediaGallery {
         photos,
         videos,
         scanned_files,
     })
+}
+
+fn maybe_report_progress<F>(
+    path: &Path,
+    scanned_files: u64,
+    photos: &[MediaItem],
+    videos: &[MediaItem],
+    last_progress_file_count: &mut u64,
+    last_progress_at: &mut Instant,
+    progress: &mut F,
+) where
+    F: FnMut(MediaScanProgress),
+{
+    let now = Instant::now();
+
+    if scanned_files.saturating_sub(*last_progress_file_count) < PROGRESS_FILE_INTERVAL
+        && now.duration_since(*last_progress_at) < PROGRESS_TIME_INTERVAL
+    {
+        return;
+    }
+
+    *last_progress_file_count = scanned_files;
+    *last_progress_at = now;
+
+    progress(MediaScanProgress {
+        scanned_files,
+        matched_files: (photos.len() + videos.len()) as u64,
+        current_path: path.to_string_lossy().to_string(),
+    });
 }
 
 fn push_media_item(
