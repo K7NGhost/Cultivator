@@ -634,6 +634,15 @@ async fn list_media_gallery(
 }
 
 #[tauri::command]
+async fn remove_datasource(
+    case_database_path: String,
+    case_id: String,
+    datasource_id: String,
+) -> Result<(), String> {
+    plugins::remove_datasource(case_database_path, case_id, datasource_id).await
+}
+
+#[tauri::command]
 async fn run_datasource_plugins(
     app_handle: tauri::AppHandle,
     case_database_path: String,
@@ -1514,7 +1523,8 @@ async fn open_readonly_sqlite_database(path: &str) -> Result<SqlitePool, String>
     let options = SqliteConnectOptions::new()
         .filename(path)
         .read_only(true)
-        .create_if_missing(false);
+        .create_if_missing(false)
+        .busy_timeout(Duration::from_secs(5));
 
     SqlitePoolOptions::new()
         .max_connections(1)
@@ -2144,6 +2154,7 @@ pub fn run() {
             delete_plugin_artifact,
             delete_plugin_artifacts,
             list_media_gallery,
+            remove_datasource,
             run_datasource_plugins,
             cancel_plugin_run,
             create_case_workspace,

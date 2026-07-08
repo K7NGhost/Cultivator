@@ -1,12 +1,17 @@
-import Database from "@tauri-apps/plugin-sql";
+import { invoke } from "@tauri-apps/api/core";
 
+import {
+  getCaseDatabase,
+  normalizePath,
+  resetCaseDatabase,
+  withCaseDatabaseWriteLock,
+} from "@/features/cases/caseDatabase";
 import type {
   CreateDataSourceInput,
   DataSourceRecord,
   DataSourceType,
 } from "@/features/datasources/types";
 
-const databasePromises = new Map<string, Promise<Database>>();
 const dataSourcesChangedEvent = "cultivator:datasources-changed";
 
 type DataSourceRow = {
@@ -28,10 +33,6 @@ type DataSourcePluginRow = {
   plugin_id: string;
 };
 
-type DataSourcePathCleanupRow = {
-  path: string;
-};
-
 function createId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -40,165 +41,45 @@ function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function normalizePath(path: string) {
-  return path.replace(/\\/g, "/");
-}
+async function ensureDataSourceTables(databasePath: string) {
+  await withCaseDatabaseWriteLock(databasePath, async () => {
+    const database = await getCaseDatabase(databasePath);
 
-function createSqliteUrl(databasePath: string) {
-  return `sqlite:${normalizePath(databasePath)}`;
-}
+    await database.execute(`
+      CREATE TABLE IF NOT EXISTS data_sources (
+        id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        path TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    `);
 
-async function getCaseDatabase(databasePath: string) {
-  const normalizedPath = normalizePath(databasePath);
+    await database.execute(`
+      CREATE TABLE IF NOT EXISTS data_source_plugins (
+        id TEXT PRIMARY KEY,
+        data_source_id TEXT NOT NULL,
+        plugin_id TEXT NOT NULL,
+        plugin_name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (data_source_id) REFERENCES data_sources (id)
+          ON DELETE CASCADE
+      )
+    `);
 
-  if (!databasePromises.has(normalizedPath)) {
-    databasePromises.set(
-      normalizedPath,
-      Database.load(createSqliteUrl(normalizedPath)).then(async (database) => {
-        await database.execute(`
-          CREATE TABLE IF NOT EXISTS data_sources (
-            id TEXT PRIMARY KEY,
-            case_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            type TEXT NOT NULL,
-            path TEXT NOT NULL,
-            created_at TEXT NOT NULL
-          )
-        `);
-
-        await database.execute(`
-          CREATE TABLE IF NOT EXISTS data_source_plugins (
-            id TEXT PRIMARY KEY,
-            data_source_id TEXT NOT NULL,
-            plugin_id TEXT NOT NULL,
-            plugin_name TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (data_source_id) REFERENCES data_sources (id)
-              ON DELETE CASCADE
-          )
-        `);
-
-        await database.execute(`
-          CREATE TABLE IF NOT EXISTS data_source_paths (
-            id TEXT PRIMARY KEY,
-            data_source_id TEXT NOT NULL,
-            path TEXT NOT NULL,
-            sort_order INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (data_source_id) REFERENCES data_sources (id)
-              ON DELETE CASCADE
-          )
-        `);
-
-        return database;
-      }),
-    );
-  }
-
-  return databasePromises.get(normalizedPath)!;
-}
-
-async function ensureDataSourceDependencyTables(database: Database) {
-  await database.execute(`
-    CREATE TABLE IF NOT EXISTS plugin_jobs (
-      id TEXT PRIMARY KEY,
-      case_id TEXT NOT NULL,
-      datasource_id TEXT NOT NULL,
-      plugin_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      started_at TEXT NOT NULL,
-      finished_at TEXT,
-      error TEXT
-    )
-  `);
-
-  await database.execute(`
-    CREATE TABLE IF NOT EXISTS plugin_results (
-      id TEXT PRIMARY KEY,
-      job_id TEXT NOT NULL,
-      plugin_id TEXT NOT NULL,
-      datasource_id TEXT NOT NULL,
-      file_path TEXT NOT NULL,
-      result_kind TEXT NOT NULL,
-      label TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (job_id) REFERENCES plugin_jobs (id)
-        ON DELETE CASCADE
-    )
-  `);
-
-  await database.execute(`
-    CREATE TABLE IF NOT EXISTS plugin_logs (
-      id TEXT PRIMARY KEY,
-      job_id TEXT NOT NULL,
-      plugin_id TEXT NOT NULL,
-      level TEXT NOT NULL,
-      message TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (job_id) REFERENCES plugin_jobs (id)
-        ON DELETE CASCADE
-    )
-  `);
-
-  await database.execute(`
-    CREATE TABLE IF NOT EXISTS media_gallery_items (
-      id TEXT PRIMARY KEY,
-      job_id TEXT NOT NULL,
-      datasource_id TEXT NOT NULL,
-      media_type TEXT NOT NULL,
-      path TEXT NOT NULL,
-      name TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE(datasource_id, path),
-      FOREIGN KEY (job_id) REFERENCES plugin_jobs (id)
-        ON DELETE CASCADE
-    )
-  `);
-
-  await database.execute(`
-    CREATE TABLE IF NOT EXISTS file_tags (
-      id TEXT PRIMARY KEY,
-      file_path TEXT NOT NULL,
-      file_name TEXT NOT NULL,
-      file_kind TEXT NOT NULL,
-      file_size INTEGER,
-      file_modified_ms INTEGER,
-      tag_name TEXT NOT NULL,
-      tag_group TEXT NOT NULL,
-      comment TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE(file_path, tag_name)
-    )
-  `);
-}
-
-function escapeSqlLikePattern(value: string) {
-  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
-}
-
-function createPathDescendantLikePattern(path: string) {
-  return `${escapeSqlLikePattern(normalizePath(path).replace(/\/+$/, ""))}/%`;
-}
-
-async function deleteFileTagsForDataSourcePaths(
-  database: Database,
-  paths: string[],
-) {
-  for (const path of paths) {
-    const normalizedPath = normalizePath(path);
-
-    await database.execute(
-      `
-        DELETE FROM file_tags
-        WHERE file_path = $1
-           OR file_path LIKE $2 ESCAPE '\\'
-      `,
-      [normalizedPath, createPathDescendantLikePattern(normalizedPath)],
-    );
-  }
+    await database.execute(`
+      CREATE TABLE IF NOT EXISTS data_source_paths (
+        id TEXT PRIMARY KEY,
+        data_source_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        sort_order INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (data_source_id) REFERENCES data_sources (id)
+          ON DELETE CASCADE
+      )
+    `);
+  });
 }
 
 export async function createDataSource(
@@ -218,7 +99,6 @@ export async function createDataSource(
     throw new Error("Select at least one datasource path.");
   }
 
-  const database = await getCaseDatabase(input.caseDatabasePath);
   const now = new Date().toISOString();
   const nextDataSource: DataSourceRecord = {
     id: createId("datasource"),
@@ -231,71 +111,77 @@ export async function createDataSource(
     createdAt: now,
   };
 
-  await database.execute(
-    `
-      INSERT INTO data_sources (
-        id,
-        case_id,
-        name,
-        type,
-        path,
-        created_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6)
-    `,
-    [
-      nextDataSource.id,
-      nextDataSource.caseId,
-      nextDataSource.name,
-      nextDataSource.type,
-      nextDataSource.path,
-      nextDataSource.createdAt,
-    ],
-  );
+  await ensureDataSourceTables(input.caseDatabasePath);
 
-  for (const [index, path] of nextDataSource.paths.entries()) {
+  await withCaseDatabaseWriteLock(input.caseDatabasePath, async () => {
+    const database = await getCaseDatabase(input.caseDatabasePath);
+
     await database.execute(
       `
-        INSERT INTO data_source_paths (
+        INSERT INTO data_sources (
           id,
-          data_source_id,
+          case_id,
+          name,
+          type,
           path,
-          sort_order,
           created_at
         )
-        VALUES ($1, $2, $3, $4, $5)
+        VALUES ($1, $2, $3, $4, $5, $6)
       `,
       [
-        createId("datasource-path"),
         nextDataSource.id,
-        path,
-        index,
-        now,
+        nextDataSource.caseId,
+        nextDataSource.name,
+        nextDataSource.type,
+        nextDataSource.path,
+        nextDataSource.createdAt,
       ],
     );
-  }
 
-  for (const plugin of input.plugins) {
-    await database.execute(
-      `
-        INSERT INTO data_source_plugins (
-          id,
-          data_source_id,
-          plugin_id,
-          plugin_name,
-          created_at
-        )
-        VALUES ($1, $2, $3, $4, $5)
-      `,
-      [
-        createId("datasource-plugin"),
-        nextDataSource.id,
-        plugin.id,
-        plugin.name,
-        now,
-      ],
-    );
-  }
+    for (const [index, path] of nextDataSource.paths.entries()) {
+      await database.execute(
+        `
+          INSERT INTO data_source_paths (
+            id,
+            data_source_id,
+            path,
+            sort_order,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5)
+        `,
+        [
+          createId("datasource-path"),
+          nextDataSource.id,
+          path,
+          index,
+          now,
+        ],
+      );
+    }
+
+    for (const plugin of input.plugins) {
+      await database.execute(
+        `
+          INSERT INTO data_source_plugins (
+            id,
+            data_source_id,
+            plugin_id,
+            plugin_name,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5)
+        `,
+        [
+          createId("datasource-plugin"),
+          nextDataSource.id,
+          plugin.id,
+          plugin.name,
+          now,
+        ],
+      );
+    }
+  });
 
   notifyDataSourcesChanged(input.caseId);
 
@@ -339,6 +225,8 @@ export async function listDataSources(
   caseDatabasePath: string,
   caseId: string,
 ): Promise<DataSourceRecord[]> {
+  await ensureDataSourceTables(caseDatabasePath);
+
   const database = await getCaseDatabase(caseDatabasePath);
   const rows = await database.select<DataSourceRow[]>(
     `
@@ -421,107 +309,15 @@ export async function removeDataSource(input: {
   caseId: string;
   dataSourceId: string;
 }): Promise<void> {
-  const database = await getCaseDatabase(input.caseDatabasePath);
-  await ensureDataSourceDependencyTables(database);
+  await withCaseDatabaseWriteLock(input.caseDatabasePath, async () => {
+    await resetCaseDatabase(input.caseDatabasePath);
 
-  const pathRows = await database.select<DataSourcePathCleanupRow[]>(
-    `
-      SELECT path
-      FROM data_source_paths
-      WHERE data_source_id = $1
-    `,
-    [input.dataSourceId],
-  );
-  const fallbackRows = await database.select<DataSourcePathCleanupRow[]>(
-    `
-      SELECT path
-      FROM data_sources
-      WHERE id = $1
-        AND case_id = $2
-      LIMIT 1
-    `,
-    [input.dataSourceId, input.caseId],
-  );
-  const cleanupPaths = Array.from(
-    new Set(
-      [...pathRows, ...fallbackRows]
-        .map((row) => normalizePath(row.path))
-        .filter(Boolean),
-    ),
-  );
-
-  await database.execute("BEGIN IMMEDIATE");
-
-  try {
-    // Datasource-owned evidence can be represented in several feature tables.
-    // Delete those rows first so the gallery, plugin output, and tags do not
-    // keep stale references after the datasource disappears from the tree.
-    await deleteFileTagsForDataSourcePaths(database, cleanupPaths);
-    await database.execute(
-      `
-        DELETE FROM media_gallery_items
-        WHERE datasource_id = $1
-      `,
-      [input.dataSourceId],
-    );
-    await database.execute(
-      `
-        DELETE FROM plugin_logs
-        WHERE job_id IN (
-          SELECT id
-          FROM plugin_jobs
-          WHERE datasource_id = $1
-        )
-      `,
-      [input.dataSourceId],
-    );
-    await database.execute(
-      `
-        DELETE FROM plugin_results
-        WHERE datasource_id = $1
-           OR job_id IN (
-             SELECT id
-             FROM plugin_jobs
-             WHERE datasource_id = $1
-           )
-      `,
-      [input.dataSourceId],
-    );
-    await database.execute(
-      `
-        DELETE FROM plugin_jobs
-        WHERE datasource_id = $1
-      `,
-      [input.dataSourceId],
-    );
-    await database.execute(
-      `
-        DELETE FROM data_source_plugins
-        WHERE data_source_id = $1
-      `,
-      [input.dataSourceId],
-    );
-    await database.execute(
-      `
-        DELETE FROM data_source_paths
-        WHERE data_source_id = $1
-      `,
-      [input.dataSourceId],
-    );
-    await database.execute(
-      `
-        DELETE FROM data_sources
-        WHERE id = $1
-          AND case_id = $2
-      `,
-      [input.dataSourceId, input.caseId],
-    );
-
-    await database.execute("COMMIT");
-  } catch (caughtError) {
-    await database.execute("ROLLBACK").catch(() => undefined);
-    throw caughtError;
-  }
+    await invoke("remove_datasource", {
+      caseDatabasePath: input.caseDatabasePath,
+      caseId: input.caseId,
+      datasourceId: input.dataSourceId,
+    });
+  });
 
   notifyDataSourcesChanged(input.caseId);
 }

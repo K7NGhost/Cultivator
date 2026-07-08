@@ -1,5 +1,8 @@
-import Database from "@tauri-apps/plugin-sql";
-
+import {
+  getCaseDatabase,
+  normalizePath,
+  withCaseDatabaseWriteLock,
+} from "@/features/cases/caseDatabase";
 import type { EvidenceDirectoryEntry } from "@/features/evidence/evidence-provider";
 
 export type FileTagGroup = "bookmark" | "follow-up" | "notable" | "project-vic" | "custom";
@@ -44,8 +47,6 @@ type FileTagSummaryRow = {
   count: number;
 };
 
-const databasePromises = new Map<string, Promise<Database>>();
-
 function createId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -54,54 +55,37 @@ function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function normalizePath(path: string) {
-  return path.replace(/\\/g, "/");
-}
+async function ensureFileTagTable(databasePath: string) {
+  await withCaseDatabaseWriteLock(databasePath, async () => {
+    const database = await getCaseDatabase(databasePath);
 
-function createSqliteUrl(databasePath: string) {
-  return `sqlite:${normalizePath(databasePath)}`;
-}
+    await database.execute(`
+      CREATE TABLE IF NOT EXISTS file_tags (
+        id TEXT PRIMARY KEY,
+        file_path TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        file_kind TEXT NOT NULL,
+        file_size INTEGER,
+        file_modified_ms INTEGER,
+        tag_name TEXT NOT NULL,
+        tag_group TEXT NOT NULL,
+        comment TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(file_path, tag_name)
+      )
+    `);
 
-async function getCaseDatabase(databasePath: string) {
-  const normalizedPath = normalizePath(databasePath);
+    await database.execute(`
+      CREATE INDEX IF NOT EXISTS idx_file_tags_file_path
+      ON file_tags(file_path)
+    `);
 
-  if (!databasePromises.has(normalizedPath)) {
-    databasePromises.set(
-      normalizedPath,
-      Database.load(createSqliteUrl(normalizedPath)).then(async (database) => {
-        await database.execute(`
-          CREATE TABLE IF NOT EXISTS file_tags (
-            id TEXT PRIMARY KEY,
-            file_path TEXT NOT NULL,
-            file_name TEXT NOT NULL,
-            file_kind TEXT NOT NULL,
-            file_size INTEGER,
-            file_modified_ms INTEGER,
-            tag_name TEXT NOT NULL,
-            tag_group TEXT NOT NULL,
-            comment TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(file_path, tag_name)
-          )
-        `);
-
-        await database.execute(`
-          CREATE INDEX IF NOT EXISTS idx_file_tags_file_path
-          ON file_tags(file_path)
-        `);
-
-        await database.execute(`
-          CREATE INDEX IF NOT EXISTS idx_file_tags_tag_name
-          ON file_tags(tag_name)
-        `);
-
-        return database;
-      }),
-    );
-  }
-
-  return databasePromises.get(normalizedPath)!;
+    await database.execute(`
+      CREATE INDEX IF NOT EXISTS idx_file_tags_tag_name
+      ON file_tags(tag_name)
+    `);
+  });
 }
 
 function mapTagRow(row: FileTagRow): FileTagRecord {
@@ -129,6 +113,8 @@ export async function listFileTagsForPaths(
   if (normalizedPaths.length === 0) {
     return {};
   }
+
+  await ensureFileTagTable(caseDatabasePath);
 
   const database = await getCaseDatabase(caseDatabasePath);
   const rows = await database.select<FileTagRow[]>(
@@ -165,6 +151,8 @@ export async function listFileTagsForPaths(
 export async function listFileTagSummaries(
   caseDatabasePath: string,
 ): Promise<FileTagSummary[]> {
+  await ensureFileTagTable(caseDatabasePath);
+
   const database = await getCaseDatabase(caseDatabasePath);
   const rows = await database.select<FileTagSummaryRow[]>(`
     SELECT
@@ -187,6 +175,8 @@ export async function listTaggedFileEntries(
   caseDatabasePath: string,
   tagName: string,
 ): Promise<EvidenceDirectoryEntry[]> {
+  await ensureFileTagTable(caseDatabasePath);
+
   const database = await getCaseDatabase(caseDatabasePath);
   const rows = await database.select<FileTagRow[]>(
     `
@@ -232,49 +222,54 @@ export async function upsertFileTag(input: {
     throw new Error("Tag name is required.");
   }
 
-  const database = await getCaseDatabase(input.caseDatabasePath);
   const now = new Date().toISOString();
   const filePath = normalizePath(input.entry.path);
 
-  await database.execute(
-    `
-      INSERT INTO file_tags (
-        id,
-        file_path,
-        file_name,
-        file_kind,
-        file_size,
-        file_modified_ms,
-        tag_name,
-        tag_group,
-        comment,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      ON CONFLICT(file_path, tag_name) DO UPDATE SET
-        file_name = excluded.file_name,
-        file_kind = excluded.file_kind,
-        file_size = excluded.file_size,
-        file_modified_ms = excluded.file_modified_ms,
-        tag_group = excluded.tag_group,
-        comment = excluded.comment,
-        updated_at = excluded.updated_at
-    `,
-    [
-      createId("file-tag"),
-      filePath,
-      input.entry.name,
-      input.entry.kind,
-      input.entry.size ?? null,
-      input.entry.modifiedMs ?? null,
-      tagName,
-      input.tagGroup,
-      input.comment?.trim() ?? "",
-      now,
-      now,
-    ],
-  );
+  await ensureFileTagTable(input.caseDatabasePath);
+
+  await withCaseDatabaseWriteLock(input.caseDatabasePath, async () => {
+    const database = await getCaseDatabase(input.caseDatabasePath);
+
+    await database.execute(
+      `
+        INSERT INTO file_tags (
+          id,
+          file_path,
+          file_name,
+          file_kind,
+          file_size,
+          file_modified_ms,
+          tag_name,
+          tag_group,
+          comment,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT(file_path, tag_name) DO UPDATE SET
+          file_name = excluded.file_name,
+          file_kind = excluded.file_kind,
+          file_size = excluded.file_size,
+          file_modified_ms = excluded.file_modified_ms,
+          tag_group = excluded.tag_group,
+          comment = excluded.comment,
+          updated_at = excluded.updated_at
+      `,
+      [
+        createId("file-tag"),
+        filePath,
+        input.entry.name,
+        input.entry.kind,
+        input.entry.size ?? null,
+        input.entry.modifiedMs ?? null,
+        tagName,
+        input.tagGroup,
+        input.comment?.trim() ?? "",
+        now,
+        now,
+      ],
+    );
+  });
 }
 
 export async function removeFileTag(input: {
@@ -282,14 +277,18 @@ export async function removeFileTag(input: {
   filePath: string;
   tagName: string;
 }): Promise<void> {
-  const database = await getCaseDatabase(input.caseDatabasePath);
+  await ensureFileTagTable(input.caseDatabasePath);
 
-  await database.execute(
-    `
-      DELETE FROM file_tags
-      WHERE file_path = $1
-        AND tag_name = $2
-    `,
-    [normalizePath(input.filePath), input.tagName],
-  );
+  await withCaseDatabaseWriteLock(input.caseDatabasePath, async () => {
+    const database = await getCaseDatabase(input.caseDatabasePath);
+
+    await database.execute(
+      `
+        DELETE FROM file_tags
+        WHERE file_path = $1
+          AND tag_name = $2
+      `,
+      [normalizePath(input.filePath), input.tagName],
+    );
+  });
 }

@@ -1,6 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import Database from "@tauri-apps/plugin-sql";
 
+import {
+  getCaseDatabase,
+  normalizePath,
+  withCaseDatabaseWriteLock,
+} from "@/features/cases/caseDatabase";
 import type { CaseRecord, CreateCaseInput } from "@/features/cases/types";
 
 const RECENT_CASE_DATABASES_STORAGE_KEY = "cultivator.recentCaseDatabases";
@@ -22,8 +26,6 @@ type CaseWorkspacePaths = {
   databasePath: string;
 };
 
-const databasePromises = new Map<string, Promise<Database>>();
-
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -34,14 +36,6 @@ function createId() {
 
 function normalizeCaseName(name: string) {
   return name.trim().replace(/\s+/g, " ");
-}
-
-function createSqliteUrl(databasePath: string) {
-  return `sqlite:${normalizePath(databasePath)}`;
-}
-
-function normalizePath(path: string) {
-  return path.replace(/\\/g, "/");
 }
 
 function loadRecentCaseDatabasePaths() {
@@ -103,36 +97,29 @@ function mapCaseRow(row: CaseRow): CaseRecord {
   };
 }
 
-async function getCaseDatabase(databasePath: string) {
-  const normalizedPath = normalizePath(databasePath);
+async function ensureCaseTable(databasePath: string) {
+  await withCaseDatabaseWriteLock(databasePath, async () => {
+    const database = await getCaseDatabase(databasePath);
 
-  if (!databasePromises.has(normalizedPath)) {
-    databasePromises.set(
-      normalizedPath,
-      Database.load(createSqliteUrl(normalizedPath)).then(async (database) => {
-        await database.execute(`
-          CREATE TABLE IF NOT EXISTS cases (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            examiner TEXT NOT NULL DEFAULT '',
-            reference TEXT NOT NULL DEFAULT '',
-            description TEXT NOT NULL DEFAULT '',
-            folder_path TEXT NOT NULL,
-            database_path TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-          )
-        `);
-
-        return database;
-      }),
-    );
-  }
-
-  return databasePromises.get(normalizedPath)!;
+    await database.execute(`
+      CREATE TABLE IF NOT EXISTS cases (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        examiner TEXT NOT NULL DEFAULT '',
+        reference TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        folder_path TEXT NOT NULL,
+        database_path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+  });
 }
 
 async function loadCase(databasePath: string): Promise<CaseRecord | null> {
+  await ensureCaseTable(databasePath);
+
   const database = await getCaseDatabase(databasePath);
   const rows = await database.select<CaseRow[]>(
     `
@@ -197,35 +184,39 @@ export async function createCase(input: CreateCaseInput): Promise<CaseRecord> {
     createdAt: now,
     updatedAt: now,
   };
-  const database = await getCaseDatabase(nextCase.databasePath);
+  await ensureCaseTable(nextCase.databasePath);
 
-  await database.execute(
-    `
-      INSERT INTO cases (
-        id,
-        name,
-        examiner,
-        reference,
-        description,
-        folder_path,
-        database_path,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    `,
-    [
-      nextCase.id,
-      nextCase.name,
-      nextCase.examiner,
-      nextCase.reference,
-      nextCase.description,
-      nextCase.folderPath,
-      nextCase.databasePath,
-      nextCase.createdAt,
-      nextCase.updatedAt,
-    ],
-  );
+  await withCaseDatabaseWriteLock(nextCase.databasePath, async () => {
+    const database = await getCaseDatabase(nextCase.databasePath);
+
+    await database.execute(
+      `
+        INSERT INTO cases (
+          id,
+          name,
+          examiner,
+          reference,
+          description,
+          folder_path,
+          database_path,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `,
+      [
+        nextCase.id,
+        nextCase.name,
+        nextCase.examiner,
+        nextCase.reference,
+        nextCase.description,
+        nextCase.folderPath,
+        nextCase.databasePath,
+        nextCase.createdAt,
+        nextCase.updatedAt,
+      ],
+    );
+  });
 
   rememberCaseDatabasePath(nextCase.databasePath);
 

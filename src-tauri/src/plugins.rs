@@ -25,7 +25,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 #[cfg(feature = "python-plugins")]
 use sha2::{Digest, Sha256};
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     Row, SqlitePool,
 };
 #[cfg(feature = "python-plugins")]
@@ -1159,6 +1159,171 @@ pub async fn list_media_gallery(
         videos,
         scanned_files: 0,
     })
+}
+
+pub async fn remove_datasource(
+    case_database_path: String,
+    case_id: String,
+    datasource_id: String,
+) -> Result<(), String> {
+    let pool = open_case_database(&case_database_path).await?;
+
+    ensure_datasource_tables(&pool).await?;
+    ensure_plugin_tables(&pool).await?;
+    ensure_file_tag_table(&pool).await?;
+
+    let path_rows = sqlx::query(
+        r#"
+          SELECT path
+          FROM data_source_paths
+          WHERE data_source_id = $1
+        "#,
+    )
+    .bind(&datasource_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|error| format!("Failed to load datasource paths for removal: {error}"))?;
+
+    let fallback_rows = sqlx::query(
+        r#"
+          SELECT path
+          FROM data_sources
+          WHERE id = $1
+            AND case_id = $2
+          LIMIT 1
+        "#,
+    )
+    .bind(&datasource_id)
+    .bind(&case_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|error| format!("Failed to load datasource for removal: {error}"))?;
+
+    let mut cleanup_paths = HashSet::new();
+
+    for row in path_rows.iter().chain(fallback_rows.iter()) {
+        let path: String = row.get("path");
+        let normalized_path = normalize_case_database_path(&path);
+
+        if !normalized_path.is_empty() {
+            cleanup_paths.insert(normalized_path);
+        }
+    }
+
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| format!("Failed to start datasource removal: {error}"))?;
+
+    for path in cleanup_paths {
+        sqlx::query(
+            r#"
+              DELETE FROM file_tags
+              WHERE file_path = $1
+                 OR file_path LIKE $2 ESCAPE '\'
+            "#,
+        )
+        .bind(&path)
+        .bind(create_path_descendant_like_pattern(&path))
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("Failed to remove datasource file tags: {error}"))?;
+    }
+
+    sqlx::query(
+        r#"
+          DELETE FROM media_gallery_items
+          WHERE datasource_id = $1
+        "#,
+    )
+    .bind(&datasource_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to remove datasource media gallery items: {error}"))?;
+
+    sqlx::query(
+        r#"
+          DELETE FROM plugin_logs
+          WHERE job_id IN (
+            SELECT id
+            FROM plugin_jobs
+            WHERE datasource_id = $1
+          )
+        "#,
+    )
+    .bind(&datasource_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to remove datasource plugin logs: {error}"))?;
+
+    sqlx::query(
+        r#"
+          DELETE FROM plugin_results
+          WHERE datasource_id = $1
+             OR job_id IN (
+               SELECT id
+               FROM plugin_jobs
+               WHERE datasource_id = $1
+             )
+        "#,
+    )
+    .bind(&datasource_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to remove datasource plugin results: {error}"))?;
+
+    sqlx::query(
+        r#"
+          DELETE FROM plugin_jobs
+          WHERE datasource_id = $1
+        "#,
+    )
+    .bind(&datasource_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to remove datasource plugin jobs: {error}"))?;
+
+    sqlx::query(
+        r#"
+          DELETE FROM data_source_plugins
+          WHERE data_source_id = $1
+        "#,
+    )
+    .bind(&datasource_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to remove datasource plugin selections: {error}"))?;
+
+    sqlx::query(
+        r#"
+          DELETE FROM data_source_paths
+          WHERE data_source_id = $1
+        "#,
+    )
+    .bind(&datasource_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to remove datasource paths: {error}"))?;
+
+    sqlx::query(
+        r#"
+          DELETE FROM data_sources
+          WHERE id = $1
+            AND case_id = $2
+        "#,
+    )
+    .bind(&datasource_id)
+    .bind(&case_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to remove datasource: {error}"))?;
+
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Failed to finish datasource removal: {error}"))?;
+
+    Ok(())
 }
 
 pub fn cancel_plugin_run(run_id: String) -> Result<bool, String> {
@@ -4060,13 +4225,69 @@ fn validate_manifest(manifest: &PythonPluginManifest, plugin_dir: &Path) -> Resu
 async fn open_case_database(database_path: &str) -> Result<SqlitePool, String> {
     let options = SqliteConnectOptions::new()
         .filename(database_path)
-        .create_if_missing(false);
+        .create_if_missing(false)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(30));
 
     SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(options)
         .await
         .map_err(|error| format!("Failed to open case database: {error}"))
+}
+
+async fn ensure_datasource_tables(pool: &SqlitePool) -> Result<(), String> {
+    sqlx::query(
+        r#"
+          CREATE TABLE IF NOT EXISTS data_sources (
+            id TEXT PRIMARY KEY,
+            case_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            path TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| format!("Failed to create data_sources table: {error}"))?;
+
+    sqlx::query(
+        r#"
+          CREATE TABLE IF NOT EXISTS data_source_plugins (
+            id TEXT PRIMARY KEY,
+            data_source_id TEXT NOT NULL,
+            plugin_id TEXT NOT NULL,
+            plugin_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (data_source_id) REFERENCES data_sources (id)
+              ON DELETE CASCADE
+          )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| format!("Failed to create data_source_plugins table: {error}"))?;
+
+    sqlx::query(
+        r#"
+          CREATE TABLE IF NOT EXISTS data_source_paths (
+            id TEXT PRIMARY KEY,
+            data_source_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (data_source_id) REFERENCES data_sources (id)
+              ON DELETE CASCADE
+          )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| format!("Failed to create data_source_paths table: {error}"))?;
+
+    Ok(())
 }
 
 async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
@@ -4149,6 +4370,54 @@ async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
     .map_err(|error| format!("Failed to create media_gallery_items table: {error}"))?;
 
     Ok(())
+}
+
+async fn ensure_file_tag_table(pool: &SqlitePool) -> Result<(), String> {
+    sqlx::query(
+        r#"
+          CREATE TABLE IF NOT EXISTS file_tags (
+            id TEXT PRIMARY KEY,
+            file_path TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            file_kind TEXT NOT NULL,
+            file_size INTEGER,
+            file_modified_ms INTEGER,
+            tag_name TEXT NOT NULL,
+            tag_group TEXT NOT NULL,
+            comment TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(file_path, tag_name)
+          )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| format!("Failed to create file_tags table: {error}"))?;
+
+    Ok(())
+}
+
+fn normalize_case_database_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn escape_sql_like_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+
+    for character in value.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+
+        escaped.push(character);
+    }
+
+    escaped
+}
+
+fn create_path_descendant_like_pattern(path: &str) -> String {
+    format!("{}/%", escape_sql_like_pattern(path.trim_end_matches('/')))
 }
 
 async fn load_datasource_for_plugins(
