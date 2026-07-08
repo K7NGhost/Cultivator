@@ -1,22 +1,24 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Tree,
-  type NodeApi,
   type NodeRendererProps,
   type TreeApi,
 } from "react-arborist";
 import {
+  ArrowLeft,
+  ArrowRight,
   ChevronsDownUp,
   ChevronsUpDown,
   ChevronRight,
   Database,
   File,
+  Folder,
   FolderOpen,
   Play,
+  Settings2,
   Trash2,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -25,6 +27,14 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Separator } from "@/components/ui/separator";
 import type { EvidenceTreeNode } from "@/features/evidence/evidence-provider";
 import { cn } from "@/lib/utils";
 
@@ -63,91 +73,95 @@ function useElementSize<TElement extends HTMLElement>() {
   return { ref, size };
 }
 
+function filterTreeForAutopsyView(
+  nodes: EvidenceTreeNode[],
+  options: { showFileLeaves: boolean },
+): EvidenceTreeNode[] {
+  const visibleNodes: EvidenceTreeNode[] = [];
+
+  for (const node of nodes) {
+    if (node.kind === "file" && !options.showFileLeaves) {
+      continue;
+    }
+
+    const children = filterTreeForAutopsyView(node.children ?? [], options);
+
+    visibleNodes.push({
+      ...node,
+      children: children.length > 0 ? children : undefined,
+    });
+  }
+
+  return visibleNodes;
+}
+
+function getNodeIcon(node: EvidenceTreeNode) {
+  switch (node.kind) {
+    case "datasource":
+      return Database;
+    case "file":
+      return File;
+    case "directory":
+      return node.children?.length ? FolderOpen : Folder;
+  }
+}
+
+function getNodeIconClassName(node: EvidenceTreeNode) {
+  switch (node.kind) {
+    case "datasource":
+      return "text-primary";
+    case "file":
+      return "text-muted-foreground";
+    case "directory":
+      return "text-amber-600 dark:text-amber-400";
+  }
+}
+
+function getNodeKindLabel(node: EvidenceTreeNode) {
+  switch (node.kind) {
+    case "datasource":
+      return "Datasource";
+    case "file":
+      return "File";
+    case "directory":
+      return "Directory";
+  }
+}
+
+function getNodeVisibleCount(node: EvidenceTreeNode) {
+  return node.childCount ?? node.files;
+}
+
 function EvidenceTreeNodeRow({
   node,
   style,
+  showChildCounts,
   onSelectNode,
   onRemoveDataSource,
   onRunDataSourcePlugins,
 }: NodeRendererProps<EvidenceTreeNode> & {
+  showChildCounts: boolean;
   onSelectNode: (node: EvidenceTreeNode) => void;
   onRemoveDataSource?: (node: EvidenceTreeNode) => void;
   onRunDataSourcePlugins?: (node: EvidenceTreeNode) => void;
 }) {
-  const ancestorColumns: NodeApi<EvidenceTreeNode>[] = [];
-  let parent = node.parent;
-
-  while (parent && !parent.isRoot) {
-    ancestorColumns.unshift(parent);
-    parent = parent.parent;
-  }
-
-  const connectorWidth = node.level * 16;
-  const currentLineX = Math.max(connectorWidth - 8, 0);
-  const Icon =
-    node.data.kind === "datasource"
-      ? Database
-      : node.data.kind === "file"
-        ? File
-        : FolderOpen;
-  const iconClassName =
-    node.data.kind === "datasource"
-      ? "text-primary"
-      : node.data.kind === "file"
-        ? "text-muted-foreground"
-        : "text-amber-600 dark:text-amber-400";
+  const Icon = getNodeIcon(node.data);
+  const visibleCount = getNodeVisibleCount(node.data);
 
   const row = (
-    <div style={style} className="relative px-1">
-      <div
-        className="pointer-events-none absolute inset-y-0 left-1"
-        style={{ width: `${connectorWidth}px` }}
-        aria-hidden="true"
-      >
-        {ancestorColumns.map((ancestorNode, index) => {
-          if (!ancestorNode.nextSibling) {
-            return null;
-          }
-
-          return (
-            <span
-              key={ancestorNode.id}
-              className="absolute top-0 bottom-0 w-px bg-foreground"
-              style={{ left: `${index * 16 + 8}px` }}
-            />
-          );
-        })}
-        {node.level > 0 && (
-          <>
-            <span
-              className="absolute top-0 h-1/2 w-px bg-foreground"
-              style={{ left: `${currentLineX}px` }}
-            />
-            {node.nextSibling && (
-              <span
-                className="absolute bottom-0 h-1/2 w-px bg-foreground"
-                style={{ left: `${currentLineX}px` }}
-              />
-            )}
-            <span
-              className="absolute top-1/2 h-px w-2 bg-foreground"
-              style={{ left: `${currentLineX}px` }}
-            />
-          </>
-        )}
-      </div>
+    <div style={style} className="px-1">
       <div
         className={cn(
-          "flex h-7 items-center rounded-sm",
-          node.isSelected && "bg-accent",
+          "flex h-6 items-center rounded-sm border border-transparent text-xs",
+          node.isSelected && "border-border bg-accent",
         )}
-        style={{ paddingLeft: `${connectorWidth + 6}px` }}
+        style={{ paddingLeft: `${node.level * 16 + 2}px` }}
       >
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          className="size-5 shrink-0 rounded-sm"
+          className="size-5 shrink-0 rounded-sm hover:bg-transparent"
           disabled={node.isLeaf || node.data.kind === "file"}
           aria-label={node.isOpen ? "Collapse item" : "Expand item"}
           onClick={() => {
@@ -168,30 +182,28 @@ function EvidenceTreeNodeRow({
         <Button
           type="button"
           variant="ghost"
-          className="h-7 min-w-0 flex-1 justify-start gap-1 rounded-sm px-1.5 text-xs font-normal"
+          className="h-6 min-w-0 flex-1 justify-start gap-1 rounded-sm px-1 text-xs font-normal hover:bg-transparent"
           onClick={() => {
             node.select();
             onSelectNode(node.data);
           }}
         >
-          <Icon className={cn("size-3.5 shrink-0", iconClassName)} aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-left">
+          <Icon
+            className={cn("size-3.5 shrink-0", getNodeIconClassName(node.data))}
+            aria-hidden="true"
+          />
+          <span className="min-w-0 truncate text-left">
             {node.data.name}
           </span>
-          <Badge variant="outline" className="h-4 rounded-sm px-1 text-[10px]">
-            {node.data.files}
-          </Badge>
+          {showChildCounts && node.data.kind !== "file" && (
+            <span className="shrink-0 text-[11px] text-muted-foreground">
+              ({visibleCount})
+            </span>
+          )}
         </Button>
       </div>
     </div>
   );
-
-  if (
-    node.data.kind !== "datasource" ||
-    (!onRemoveDataSource && !onRunDataSourcePlugins)
-  ) {
-    return row;
-  }
 
   return (
     <ContextMenu>
@@ -204,30 +216,43 @@ function EvidenceTreeNodeRow({
             onSelectNode(node.data);
           }}
         >
-          Open datasource
+          Open {getNodeKindLabel(node.data).toLowerCase()}
         </ContextMenuItem>
-        {onRunDataSourcePlugins && (
-          <ContextMenuItem
-            className="text-xs"
-            onSelect={() => {
-              onRunDataSourcePlugins(node.data);
-            }}
-          >
-            <Play className="size-3.5" aria-hidden="true" />
-            Run plugins...
-          </ContextMenuItem>
-        )}
-        <ContextMenuSeparator />
-        {onRemoveDataSource && (
-          <ContextMenuItem
-            className="text-xs text-destructive focus:text-destructive"
-            onSelect={() => {
-              onRemoveDataSource(node.data);
-            }}
-          >
-            <Trash2 className="size-3.5" aria-hidden="true" />
-            Remove datasource
-          </ContextMenuItem>
+        <ContextMenuItem
+          className="text-xs"
+          onSelect={() => {
+            node.close();
+          }}
+        >
+          <ChevronsDownUp className="size-3.5" aria-hidden="true" />
+          Collapse branch
+        </ContextMenuItem>
+        {node.data.kind === "datasource" && (
+          <>
+            <ContextMenuSeparator />
+            {onRunDataSourcePlugins && (
+              <ContextMenuItem
+                className="text-xs"
+                onSelect={() => {
+                  onRunDataSourcePlugins(node.data);
+                }}
+              >
+                <Play className="size-3.5" aria-hidden="true" />
+                Run plugins...
+              </ContextMenuItem>
+            )}
+            {onRemoveDataSource && (
+              <ContextMenuItem
+                className="text-xs text-destructive focus:text-destructive"
+                onSelect={() => {
+                  onRemoveDataSource(node.data);
+                }}
+              >
+                <Trash2 className="size-3.5" aria-hidden="true" />
+                Remove datasource
+              </ContextMenuItem>
+            )}
+          </>
         )}
       </ContextMenuContent>
     </ContextMenu>
@@ -244,15 +269,124 @@ export function FileTreeViewer({
 }: FileTreeViewerProps) {
   const treePanel = useElementSize<HTMLDivElement>();
   const treeRef = useRef<TreeApi<EvidenceTreeNode> | undefined>(undefined);
-  const treeData = rootNodes ?? (rootNode ? [rootNode] : []);
+  const selectedNodeRef = useRef<EvidenceTreeNode | null>(selectedDirectory);
+  const [selectedTreeNodeId, setSelectedTreeNodeId] = useState<string | null>(
+    selectedDirectory?.id ?? null,
+  );
+  const [backStack, setBackStack] = useState<EvidenceTreeNode[]>([]);
+  const [forwardStack, setForwardStack] = useState<EvidenceTreeNode[]>([]);
+  const [showChildCounts, setShowChildCounts] = useState(true);
+  const [showFileLeaves, setShowFileLeaves] = useState(false);
+  const sourceTreeData = useMemo(
+    () => rootNodes ?? (rootNode ? [rootNode] : []),
+    [rootNode, rootNodes],
+  );
+  const treeData = useMemo(
+    () => filterTreeForAutopsyView(sourceTreeData, { showFileLeaves }),
+    [showFileLeaves, sourceTreeData],
+  );
+
+  useEffect(() => {
+    selectedNodeRef.current = selectedDirectory;
+    setSelectedTreeNodeId(selectedDirectory?.id ?? null);
+  }, [selectedDirectory]);
+
+  useEffect(() => {
+    setBackStack([]);
+    setForwardStack([]);
+  }, [sourceTreeData]);
+
+  function selectNode(
+    node: EvidenceTreeNode,
+    options: { updateHistory: boolean } = { updateHistory: true },
+  ) {
+    const currentNode = selectedNodeRef.current;
+
+    if (
+      options.updateHistory &&
+      currentNode &&
+      currentNode.id !== node.id
+    ) {
+      setBackStack((currentBackStack) => [...currentBackStack, currentNode]);
+      setForwardStack([]);
+    }
+
+    selectedNodeRef.current = node;
+    setSelectedTreeNodeId(node.id);
+    onSelectNode(node);
+  }
+
+  function goBack() {
+    const previousNode = backStack[backStack.length - 1];
+
+    if (!previousNode) {
+      return;
+    }
+
+    const currentNode = selectedNodeRef.current;
+    setBackStack((currentBackStack) => currentBackStack.slice(0, -1));
+
+    if (currentNode && currentNode.id !== previousNode.id) {
+      setForwardStack((currentForwardStack) => [
+        ...currentForwardStack,
+        currentNode,
+      ]);
+    }
+
+    selectNode(previousNode, { updateHistory: false });
+  }
+
+  function goForward() {
+    const nextNode = forwardStack[forwardStack.length - 1];
+
+    if (!nextNode) {
+      return;
+    }
+
+    const currentNode = selectedNodeRef.current;
+    setForwardStack((currentForwardStack) => currentForwardStack.slice(0, -1));
+
+    if (currentNode && currentNode.id !== nextNode.id) {
+      setBackStack((currentBackStack) => [...currentBackStack, currentNode]);
+    }
+
+    selectNode(nextNode, { updateHistory: false });
+  }
 
   return (
     <section className="h-full min-h-0" aria-label="Directory tree">
-      <div className="flex h-8 items-center justify-between gap-2 border-b px-2">
-        <div className="text-xs font-medium uppercase text-muted-foreground">
-          Evidence Tree
-        </div>
+      <div className="flex h-8 items-center gap-1 border-b px-1.5">
         <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-6 rounded-sm"
+            disabled={backStack.length === 0}
+            aria-label="Back"
+            title="Back"
+            onClick={goBack}
+          >
+            <ArrowLeft className="size-3.5" aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-6 rounded-sm"
+            disabled={forwardStack.length === 0}
+            aria-label="Forward"
+            title="Forward"
+            onClick={goForward}
+          >
+            <ArrowRight className="size-3.5" aria-hidden="true" />
+          </Button>
+        </div>
+        <Separator orientation="vertical" className="mx-1 h-4" />
+        <div className="min-w-0 flex-1 truncate px-1 text-xs font-medium uppercase text-muted-foreground">
+          Data Sources
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
           <Button
             type="button"
             variant="ghost"
@@ -281,6 +415,44 @@ export function FileTreeViewer({
           >
             <ChevronsDownUp className="size-3.5" aria-hidden="true" />
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-6 rounded-sm"
+                aria-label="Tree view options"
+                title="View options"
+              >
+                <Settings2 className="size-3.5" aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-44">
+              <DropdownMenuCheckboxItem
+                className="text-xs"
+                checked={showChildCounts}
+                onCheckedChange={(checked) => {
+                  setShowChildCounts(checked === true);
+                }}
+              >
+                Show child counts
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                className="text-xs"
+                checked={showFileLeaves}
+                onCheckedChange={(checked) => {
+                  setShowFileLeaves(checked === true);
+                }}
+              >
+                Show file leaves
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <div className="px-2 py-1 text-[11px] text-muted-foreground">
+                Files are listed in the center pane by default.
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
       <div ref={treePanel.ref} className="h-[calc(100%-2rem)]">
@@ -292,17 +464,18 @@ export function FileTreeViewer({
             height={treePanel.size.height}
             rowHeight={28}
             indent={0}
-            openByDefault={false}
+            openByDefault
             disableDrag
             disableDrop
-            selection={selectedDirectory?.id ?? treeData[0]?.id}
-            className="py-1"
+            selection={selectedTreeNodeId ?? treeData[0]?.id}
+            className="bg-background py-1"
             aria-label="Evidence directory tree"
           >
             {(props) => (
               <EvidenceTreeNodeRow
                 {...props}
-                onSelectNode={onSelectNode}
+                showChildCounts={showChildCounts}
+                onSelectNode={selectNode}
                 onRemoveDataSource={onRemoveDataSource}
                 onRunDataSourcePlugins={onRunDataSourcePlugins}
               />
