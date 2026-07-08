@@ -1,4 +1,11 @@
-import { useMemo, useState, type CSSProperties } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import {
   AutoSizer,
@@ -318,6 +325,18 @@ function sortFileRows(rows: FileRow[], sort: SortState) {
   });
 }
 
+function isInteractiveEventTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(
+    target.closest(
+      "button,a,input,select,textarea,[role='button'],[role='menuitem']",
+    ),
+  );
+}
+
 function getNextSort(current: SortState, key: SortKey): SortState {
   if (current.key !== key) {
     return { key, direction: "asc" };
@@ -430,17 +449,71 @@ export function FileListViewer({
   onPreviousPage,
   onSelectEntry,
 }: FileListViewerProps) {
+  const listShellRef = useRef<HTMLElement | null>(null);
   const [sort, setSort] = useState<SortState>({
     key: "name",
     direction: "asc",
   });
   const fileRows = useMemo(() => createFileRows(entries), [entries]);
   const sortedRows = useMemo(() => sortFileRows(fileRows, sort), [fileRows, sort]);
+  const selectedRowIndex = useMemo(() => {
+    if (!selectedEntry) {
+      return -1;
+    }
+
+    return sortedRows.findIndex((row) => row.id === selectedEntry.id);
+  }, [selectedEntry, sortedRows]);
+
+  function focusFileList() {
+    listShellRef.current?.focus({ preventScroll: true });
+  }
+
+  function selectRowAtIndex(index: number) {
+    const boundedIndex = Math.max(0, Math.min(index, sortedRows.length - 1));
+    const nextRow = sortedRows[boundedIndex];
+
+    if (nextRow) {
+      onSelectEntry(nextRow.entry);
+    }
+  }
+
+  function handleFileListKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (
+      isLoading ||
+      sortedRows.length === 0 ||
+      isInteractiveEventTarget(event.target)
+    ) {
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      selectRowAtIndex(selectedRowIndex < 0 ? 0 : selectedRowIndex + 1);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      selectRowAtIndex(
+        selectedRowIndex < 0 ? sortedRows.length - 1 : selectedRowIndex - 1,
+      );
+    }
+  }
+
+  function handleFileListMouseDown(event: MouseEvent<HTMLElement>) {
+    if (!isInteractiveEventTarget(event.target)) {
+      focusFileList();
+    }
+  }
 
   return (
     <section
-      className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+      ref={listShellRef}
+      tabIndex={0}
+      className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden focus:outline-none"
       aria-label="Logical file table"
+      onKeyDown={handleFileListKeyDown}
+      onMouseDown={handleFileListMouseDown}
     >
       <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
         <div className="flex min-w-0 items-center gap-2">
@@ -570,12 +643,17 @@ export function FileListViewer({
                           row={row}
                           selectedEntry={selectedEntry}
                           style={props.style}
+                          onFocusList={focusFileList}
                           onOpenFolder={onOpenFolder}
                           onSelectEntry={onSelectEntry}
                         />
                       );
                     }}
                     overscanRowCount={12}
+                    scrollToAlignment="auto"
+                    scrollToIndex={
+                      selectedRowIndex >= 0 ? selectedRowIndex : undefined
+                    }
                     width={Math.max(width, 1198)}
                   />
                 )}
@@ -592,12 +670,14 @@ function FileListRow({
   row,
   selectedEntry,
   style,
+  onFocusList,
   onOpenFolder,
   onSelectEntry,
 }: {
   row: FileRow;
   selectedEntry: EvidenceDirectoryEntry | null;
   style: CSSProperties;
+  onFocusList: () => void;
   onOpenFolder: (entry: EvidenceDirectoryEntry) => void;
   onSelectEntry: (entry: EvidenceDirectoryEntry) => void;
 }) {
@@ -617,9 +697,11 @@ function FileListRow({
             gridTemplateColumns: fileListGridTemplateColumns,
           }}
           onClick={() => {
+            onFocusList();
             onSelectEntry(row.entry);
           }}
           onContextMenu={() => {
+            onFocusList();
             onSelectEntry(row.entry);
           }}
           onDoubleClick={() => {
