@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import type { EvidenceTreeNode } from "@/features/evidence/evidence-provider";
+import type { FileTagSummary } from "@/features/files/fileTagRepository";
 import { cn } from "@/lib/utils";
 
 type FileTreeViewerProps = {
@@ -45,6 +46,7 @@ type FileTreeViewerProps = {
   selectedDirectory: EvidenceTreeNode | null;
   selectedFileView?: FileViewSelection | null;
   fileViewCounts?: Record<string, number>;
+  tagSummaries?: FileTagSummary[];
   onSelectNode: (node: EvidenceTreeNode) => void;
   onSelectFileView?: (view: FileViewSelection) => void;
   onRemoveDataSource?: (node: EvidenceTreeNode) => void;
@@ -56,6 +58,7 @@ export type FileViewSelection = {
   name: string;
   description: string;
   count: number;
+  tagName?: string;
   childViews?: FileViewSelection[];
 };
 
@@ -148,11 +151,35 @@ function createFileViewNode(
   };
 }
 
+function createTagViewNode(summary: FileTagSummary): AutopsyTreeNode {
+  const encodedTagName = encodeURIComponent(summary.tagName);
+
+  return {
+    id: `autopsy:tag:${encodedTagName}`,
+    name: summary.tagName,
+    path: "",
+    kind: "view",
+    files: summary.count,
+    fileView: {
+      id: `tag:${encodedTagName}`,
+      name: summary.tagName,
+      description: `Files tagged ${summary.tagName}.`,
+      count: summary.count,
+      tagName: summary.tagName,
+    },
+  };
+}
+
 function buildAutopsyTree(
   sourceNodes: EvidenceTreeNode[],
-  options: { fileViewCounts: Record<string, number>; showFileLeaves: boolean },
+  options: {
+    fileViewCounts: Record<string, number>;
+    showFileLeaves: boolean;
+    tagSummaries: FileTagSummary[];
+  },
 ): AutopsyTreeNode[] {
   const dataSourceChildren = buildRealTreeNodes(sourceNodes, options);
+  const tagNodes = options.tagSummaries.map(createTagViewNode);
   const documentExtensionNodes = [
     createFileViewNode(
       "file-types:extension:documents:html",
@@ -481,7 +508,8 @@ function buildAutopsyTree(
       name: "Tags",
       path: "",
       kind: "group",
-      files: 0,
+      files: tagNodes.reduce((total, tagNode) => total + tagNode.files, 0),
+      children: tagNodes.length > 0 ? tagNodes : undefined,
     },
   ];
 }
@@ -707,6 +735,7 @@ export function FileTreeViewer({
   selectedDirectory,
   selectedFileView,
   fileViewCounts = {},
+  tagSummaries = [],
   onSelectNode,
   onSelectFileView,
   onRemoveDataSource,
@@ -729,13 +758,20 @@ export function FileTreeViewer({
     [rootNode, rootNodes],
   );
   const treeData = useMemo(
-    () => buildAutopsyTree(sourceTreeData, { fileViewCounts, showFileLeaves }),
-    [fileViewCounts, showFileLeaves, sourceTreeData],
+    () =>
+      buildAutopsyTree(sourceTreeData, {
+        fileViewCounts,
+        showFileLeaves,
+        tagSummaries,
+      }),
+    [fileViewCounts, showFileLeaves, sourceTreeData, tagSummaries],
   );
 
   useEffect(() => {
     if (selectedFileView) {
-      const fileViewNodeId = `autopsy:${selectedFileView.id}`;
+      const fileViewNodeId = selectedFileView.tagName
+        ? `autopsy:tag:${encodeURIComponent(selectedFileView.tagName)}`
+        : `autopsy:${selectedFileView.id}`;
       selectedNodeRef.current = findTreeNodeById(treeData, fileViewNodeId);
       setSelectedTreeNodeId(fileViewNodeId);
       return;

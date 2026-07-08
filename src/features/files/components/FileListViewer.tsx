@@ -18,23 +18,47 @@ import {
   ArrowLeft,
   ArrowUp,
   ArrowUpDown,
+  Bookmark,
   ChevronLeft,
   ChevronRight,
   File,
   FileCode2,
   FileImage,
+  Flag,
   FolderOpen,
+  MessageSquarePlus,
+  Plus,
+  Tag,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
   ContextMenu,
+  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import type { EvidenceDirectoryEntry } from "@/features/evidence/evidence-provider";
+import type {
+  FileTagGroup,
+  FileTagRecord,
+} from "@/features/files/fileTagRepository";
 import { cn } from "@/lib/utils";
 
 type FileListViewerProps = {
@@ -51,7 +75,15 @@ type FileListViewerProps = {
   onNextPage?: () => void;
   onOpenFolder: (entry: EvidenceDirectoryEntry) => void;
   onPreviousPage?: () => void;
+  onRemoveTag?: (entry: EvidenceDirectoryEntry, tagName: string) => void;
   onSelectEntry: (entry: EvidenceDirectoryEntry) => void;
+  onSetTag?: (input: {
+    entry: EvidenceDirectoryEntry;
+    tagName: string;
+    tagGroup: FileTagGroup;
+    comment?: string;
+  }) => void;
+  tagsByPath?: Record<string, FileTagRecord[]>;
 };
 
 type FileListPageInfo = {
@@ -102,6 +134,21 @@ const fileListGridTemplateColumns = "280px 320px 90px 96px 150px 170px 92px";
 
 function formatCount(value: number) {
   return new Intl.NumberFormat().format(value);
+}
+
+function normalizePath(path: string) {
+  return path.replace(/\\/g, "/");
+}
+
+function getTagsForEntry(
+  tagsByPath: Record<string, FileTagRecord[]>,
+  entry: EvidenceDirectoryEntry,
+) {
+  return tagsByPath[normalizePath(entry.path)] ?? [];
+}
+
+function hasTag(tags: FileTagRecord[], tagName: string) {
+  return tags.some((tag) => tag.tagName === tagName);
 }
 
 function formatPageRange(pageInfo: FileListPageInfo, visibleCount: number) {
@@ -366,8 +413,10 @@ function SortIcon({
   );
 }
 
-function FileNameCell({ row }: { row: FileRow }) {
+function FileNameCell({ row, tags }: { row: FileRow; tags: FileTagRecord[] }) {
   const Icon = getEntryIcon(row.entry);
+  const visibleTags = tags.slice(0, 2);
+  const hiddenTagCount = Math.max(0, tags.length - visibleTags.length);
 
   return (
     <div className="flex min-w-0 items-center gap-1.5">
@@ -376,6 +425,24 @@ function FileNameCell({ row }: { row: FileRow }) {
         aria-hidden="true"
       />
       <span className="min-w-0 truncate font-medium">{row.name}</span>
+      {visibleTags.map((tag) => (
+        <Badge
+          key={tag.tagName}
+          variant={tag.tagGroup === "bookmark" ? "default" : "secondary"}
+          className="h-4 shrink-0 rounded-sm px-1 text-[10px]"
+          title={tag.comment || tag.tagName}
+        >
+          {tag.tagName}
+        </Badge>
+      ))}
+      {hiddenTagCount > 0 && (
+        <Badge
+          variant="outline"
+          className="h-4 shrink-0 rounded-sm px-1 text-[10px]"
+        >
+          +{hiddenTagCount}
+        </Badge>
+      )}
     </div>
   );
 }
@@ -447,9 +514,18 @@ export function FileListViewer({
   onNextPage,
   onOpenFolder,
   onPreviousPage,
+  onRemoveTag,
   onSelectEntry,
+  onSetTag,
+  tagsByPath = {},
 }: FileListViewerProps) {
   const listShellRef = useRef<HTMLElement | null>(null);
+  const [tagDialog, setTagDialog] = useState<{
+    entry: EvidenceDirectoryEntry;
+    mode: "comment" | "new";
+  } | null>(null);
+  const [tagDialogName, setTagDialogName] = useState("");
+  const [tagDialogComment, setTagDialogComment] = useState("");
   const [sort, setSort] = useState<SortState>({
     key: "name",
     direction: "asc",
@@ -497,6 +573,29 @@ export function FileListViewer({
       selectRowAtIndex(
         selectedRowIndex < 0 ? sortedRows.length - 1 : selectedRowIndex - 1,
       );
+      return;
+    }
+
+    if (event.key.toLowerCase() === "b" && (event.ctrlKey || event.metaKey)) {
+      const selectedRow = selectedRowIndex >= 0 ? sortedRows[selectedRowIndex] : null;
+
+      if (!selectedRow || !onSetTag) {
+        return;
+      }
+
+      event.preventDefault();
+      const selectedRowTags = getTagsForEntry(tagsByPath, selectedRow.entry);
+
+      if (hasTag(selectedRowTags, "Bookmark")) {
+        onRemoveTag?.(selectedRow.entry, "Bookmark");
+        return;
+      }
+
+      onSetTag({
+        entry: selectedRow.entry,
+        tagName: "Bookmark",
+        tagGroup: "bookmark",
+      });
     }
   }
 
@@ -506,8 +605,41 @@ export function FileListViewer({
     }
   }
 
+  function openTagDialog(
+    entry: EvidenceDirectoryEntry,
+    mode: "comment" | "new",
+  ) {
+    onSelectEntry(entry);
+    setTagDialog({ entry, mode });
+    setTagDialogName(mode === "comment" ? "Comment" : "");
+    setTagDialogComment("");
+  }
+
+  function submitTagDialog() {
+    if (!tagDialog || !onSetTag) {
+      return;
+    }
+
+    const tagName = tagDialogName.trim();
+
+    if (!tagName) {
+      return;
+    }
+
+    onSetTag({
+      entry: tagDialog.entry,
+      tagName,
+      tagGroup: "custom",
+      comment: tagDialogComment,
+    });
+    setTagDialog(null);
+    setTagDialogName("");
+    setTagDialogComment("");
+  }
+
   return (
-    <section
+    <>
+      <section
       ref={listShellRef}
       tabIndex={0}
       className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden focus:outline-none"
@@ -645,7 +777,11 @@ export function FileListViewer({
                           style={props.style}
                           onFocusList={focusFileList}
                           onOpenFolder={onOpenFolder}
+                          onOpenTagDialog={openTagDialog}
+                          onRemoveTag={onRemoveTag}
                           onSelectEntry={onSelectEntry}
+                          onSetTag={onSetTag}
+                          tags={getTagsForEntry(tagsByPath, row.entry)}
                         />
                       );
                     }}
@@ -662,7 +798,76 @@ export function FileListViewer({
           )}
         </div>
       </div>
-    </section>
+      </section>
+
+      <Dialog
+        open={Boolean(tagDialog)}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            setTagDialog(null);
+          }
+        }}
+      >
+        <DialogContent className="w-[min(28rem,calc(100vw-2rem))] rounded-sm p-0">
+          <DialogHeader className="border-b px-3 py-2">
+            <DialogTitle className="text-sm">
+              {tagDialog?.mode === "new" ? "New Tag" : "Tag and Comment"}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {tagDialog?.entry.name ?? "Selected item"}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2 p-3 text-xs">
+            <label className="grid gap-1">
+              <span className="text-muted-foreground">Tag</span>
+              <Input
+                className="h-8 rounded-sm text-xs"
+                value={tagDialogName}
+                onChange={(event) => setTagDialogName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    submitTagDialog();
+                  }
+                }}
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-muted-foreground">Comment</span>
+              <Input
+                className="h-8 rounded-sm text-xs"
+                value={tagDialogComment}
+                onChange={(event) => setTagDialogComment(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    submitTagDialog();
+                  }
+                }}
+              />
+            </label>
+          </div>
+          <DialogFooter className="border-t p-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              className="h-7 rounded-sm px-2 text-xs"
+              onClick={() => setTagDialog(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              className="h-7 rounded-sm px-2 text-xs"
+              disabled={!tagDialogName.trim() || !onSetTag}
+              onClick={submitTagDialog}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -672,17 +877,54 @@ function FileListRow({
   style,
   onFocusList,
   onOpenFolder,
+  onOpenTagDialog,
+  onRemoveTag,
   onSelectEntry,
+  onSetTag,
+  tags,
 }: {
   row: FileRow;
   selectedEntry: EvidenceDirectoryEntry | null;
   style: CSSProperties;
   onFocusList: () => void;
   onOpenFolder: (entry: EvidenceDirectoryEntry) => void;
+  onOpenTagDialog: (
+    entry: EvidenceDirectoryEntry,
+    mode: "comment" | "new",
+  ) => void;
+  onRemoveTag?: (entry: EvidenceDirectoryEntry, tagName: string) => void;
   onSelectEntry: (entry: EvidenceDirectoryEntry) => void;
+  onSetTag?: (input: {
+    entry: EvidenceDirectoryEntry;
+    tagName: string;
+    tagGroup: FileTagGroup;
+    comment?: string;
+  }) => void;
+  tags: FileTagRecord[];
 }) {
   const sizeLabel = getEntrySizeLabel(row.entry);
   const modifiedLabel = formatModifiedTime(row.entry.modifiedMs);
+
+  function selectRowForTagAction() {
+    onFocusList();
+    onSelectEntry(row.entry);
+  }
+
+  function toggleTag(tagName: string, tagGroup: FileTagGroup, checked: boolean) {
+    selectRowForTagAction();
+
+    if (checked) {
+      onSetTag?.({ entry: row.entry, tagName, tagGroup });
+      return;
+    }
+
+    onRemoveTag?.(row.entry, tagName);
+  }
+
+  function openDialogTag(mode: "comment" | "new") {
+    selectRowForTagAction();
+    onOpenTagDialog(row.entry, mode);
+  }
 
   return (
     <ContextMenu>
@@ -711,7 +953,7 @@ function FileListRow({
           }}
         >
           <div className="min-w-0 px-2">
-            <FileNameCell row={row} />
+            <FileNameCell row={row} tags={tags} />
           </div>
           <div className="truncate px-2 text-muted-foreground">{row.path}</div>
           <div className="truncate px-2">{row.type}</div>
@@ -745,6 +987,89 @@ function FileListRow({
             Open Containing Folder
           </ContextMenuItem>
         )}
+        <ContextMenuSeparator />
+        <ContextMenuSub>
+          <ContextMenuSubTrigger className="text-xs">
+            <Tag className="size-3.5" aria-hidden="true" />
+            Tag
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-56">
+            <ContextMenuCheckboxItem
+              className="text-xs"
+              checked={hasTag(tags, "Bookmark")}
+              onCheckedChange={(checked) => {
+                toggleTag("Bookmark", "bookmark", checked === true);
+              }}
+            >
+              <Bookmark className="size-3.5" aria-hidden="true" />
+              Bookmark
+              <ContextMenuShortcut>Ctrl+B</ContextMenuShortcut>
+            </ContextMenuCheckboxItem>
+            <ContextMenuCheckboxItem
+              className="text-xs"
+              checked={hasTag(tags, "Follow Up")}
+              onCheckedChange={(checked) => {
+                toggleTag("Follow Up", "follow-up", checked === true);
+              }}
+            >
+              <Flag className="size-3.5" aria-hidden="true" />
+              Follow Up
+            </ContextMenuCheckboxItem>
+            <ContextMenuCheckboxItem
+              className="text-xs"
+              checked={hasTag(tags, "Notable Item (Notable)")}
+              onCheckedChange={(checked) => {
+                toggleTag(
+                  "Notable Item (Notable)",
+                  "notable",
+                  checked === true,
+                );
+              }}
+            >
+              <Tag className="size-3.5" aria-hidden="true" />
+              Notable Item (Notable)
+            </ContextMenuCheckboxItem>
+            <ContextMenuSub>
+              <ContextMenuSubTrigger className="text-xs">
+                <Tag className="size-3.5" aria-hidden="true" />
+                Project VIC
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="w-44">
+                {[0, 1, 2, 3, 4].map((categoryNumber) => {
+                  const tagName = `Project VIC: Category ${categoryNumber}`;
+
+                  return (
+                    <ContextMenuCheckboxItem
+                      key={tagName}
+                      className="text-xs"
+                      checked={hasTag(tags, tagName)}
+                      onCheckedChange={(checked) => {
+                        toggleTag(tagName, "project-vic", checked === true);
+                      }}
+                    >
+                      Category {categoryNumber}
+                    </ContextMenuCheckboxItem>
+                  );
+                })}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              className="text-xs"
+              onSelect={() => openDialogTag("comment")}
+            >
+              <MessageSquarePlus className="size-3.5" aria-hidden="true" />
+              Tag and Comment...
+            </ContextMenuItem>
+            <ContextMenuItem
+              className="text-xs"
+              onSelect={() => openDialogTag("new")}
+            >
+              <Plus className="size-3.5" aria-hidden="true" />
+              New Tag...
+            </ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
       </ContextMenuContent>
     </ContextMenu>
   );

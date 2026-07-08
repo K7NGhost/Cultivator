@@ -48,6 +48,15 @@ import {
   type FileViewSelection,
 } from "@/features/files/components/FileTreeViewer";
 import {
+  listFileTagsForPaths,
+  listFileTagSummaries,
+  listTaggedFileEntries,
+  removeFileTag,
+  upsertFileTag,
+  type FileTagRecord,
+  type FileTagSummary,
+} from "@/features/files/fileTagRepository";
+import {
   cancelDatasourcePluginRun,
   listPythonPlugins,
   runDatasourcePlugins,
@@ -143,6 +152,11 @@ export function FilesPage() {
   const [fileViewCounts, setFileViewCounts] = useState<Record<string, number>>(
     {},
   );
+  const [fileTagsByPath, setFileTagsByPath] = useState<
+    Record<string, FileTagRecord[]>
+  >({});
+  const [fileTagSummaries, setFileTagSummaries] = useState<FileTagSummary[]>([]);
+  const [fileTagRefreshKey, setFileTagRefreshKey] = useState(0);
   const [directoryHistory, setDirectoryHistory] = useState<EvidenceTreeNode[]>(
     [],
   );
@@ -303,6 +317,77 @@ export function FilesPage() {
 
     selectDataSourceRoot(dataSourceTreeNodes[0]);
   }, [dataSourceTreeNodes, listing, selectedDirectory, selectedFileView]);
+
+  useEffect(() => {
+    if (!activeCase) {
+      setFileTagsByPath({});
+      return;
+    }
+
+    const visiblePaths = visibleEntries.map((entry) => entry.path);
+
+    if (visiblePaths.length === 0) {
+      setFileTagsByPath({});
+      return;
+    }
+
+    let isCurrent = true;
+
+    listFileTagsForPaths(activeCase.databasePath, visiblePaths)
+      .then((tagsByPath) => {
+        if (isCurrent) {
+          setFileTagsByPath(tagsByPath);
+        }
+      })
+      .catch((caughtError) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setEntriesError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : String(caughtError),
+        );
+        setFileTagsByPath({});
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeCase, fileTagRefreshKey, visibleEntries]);
+
+  useEffect(() => {
+    if (!activeCase) {
+      setFileTagSummaries([]);
+      return;
+    }
+
+    let isCurrent = true;
+
+    listFileTagSummaries(activeCase.databasePath)
+      .then((summaries) => {
+        if (isCurrent) {
+          setFileTagSummaries(summaries);
+        }
+      })
+      .catch((caughtError) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setEntriesError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : String(caughtError),
+        );
+        setFileTagSummaries([]);
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeCase, fileTagRefreshKey]);
 
   useEffect(() => {
     selectedFileViewRef.current = selectedFileView;
@@ -603,7 +688,59 @@ export function FilesPage() {
     void loadDirectoryEntries(node, { pushHistory: true });
   }
 
+  async function loadTaggedFileView(view: FileViewSelection) {
+    if (!activeCase || !view.tagName) {
+      setEntriesError("Open a case before using tag views.");
+      return;
+    }
+
+    if (selectedDirectory) {
+      setDirectoryHistory((history) => [...history, selectedDirectory]);
+    }
+
+    setSelectedFileView(view);
+    selectedFileViewRef.current = view;
+    setSelectedDirectory(null);
+    setSelectedFileViewPageInfo(null);
+    setVisibleEntries([]);
+    setSelectedEntry(null);
+    setEntriesError(null);
+    setIsEntriesLoading(true);
+    setIsFileViewPageLoading(false);
+
+    try {
+      const entries = await listTaggedFileEntries(
+        activeCase.databasePath,
+        view.tagName,
+      );
+
+      if (selectedFileViewRef.current?.id !== view.id) {
+        return;
+      }
+
+      setVisibleEntries(entries);
+      setSelectedEntry(entries[0] ?? null);
+    } catch (caughtError) {
+      setEntriesError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : String(caughtError),
+      );
+      setVisibleEntries([]);
+      setSelectedEntry(null);
+    } finally {
+      if (selectedFileViewRef.current?.id === view.id) {
+        setIsEntriesLoading(false);
+      }
+    }
+  }
+
   function selectFileView(view: FileViewSelection) {
+    if (view.tagName) {
+      void loadTaggedFileView(view);
+      return;
+    }
+
     if (fileViewRoots.length === 0) {
       setSelectedFileView(view);
       selectedFileViewRef.current = view;
@@ -742,6 +879,79 @@ export function FilesPage() {
     void loadFileViewPage(
       selectedFileViewPageInfo.offset + selectedFileViewPageInfo.limit,
     );
+  }
+
+  async function handleSetFileTag(input: {
+    entry: EvidenceDirectoryEntry;
+    tagName: string;
+    tagGroup: FileTagRecord["tagGroup"];
+    comment?: string;
+  }) {
+    if (!activeCase) {
+      setEntriesError("Open a case before tagging files.");
+      return;
+    }
+
+    try {
+      await upsertFileTag({
+        caseDatabasePath: activeCase.databasePath,
+        entry: input.entry,
+        tagName: input.tagName,
+        tagGroup: input.tagGroup,
+        comment: input.comment,
+      });
+      setEntriesError(null);
+      if (selectedFileViewRef.current?.tagName === input.tagName) {
+        setVisibleEntries((currentEntries) => {
+          if (currentEntries.some((entry) => entry.path === input.entry.path)) {
+            return currentEntries;
+          }
+
+          return [...currentEntries, input.entry];
+        });
+      }
+      setFileTagRefreshKey((currentKey) => currentKey + 1);
+    } catch (caughtError) {
+      setEntriesError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : String(caughtError),
+      );
+    }
+  }
+
+  async function handleRemoveFileTag(
+    entry: EvidenceDirectoryEntry,
+    tagName: string,
+  ) {
+    if (!activeCase) {
+      setEntriesError("Open a case before tagging files.");
+      return;
+    }
+
+    try {
+      await removeFileTag({
+        caseDatabasePath: activeCase.databasePath,
+        filePath: entry.path,
+        tagName,
+      });
+      setEntriesError(null);
+      if (selectedFileViewRef.current?.tagName === tagName) {
+        setVisibleEntries((currentEntries) =>
+          currentEntries.filter((currentEntry) => currentEntry.path !== entry.path),
+        );
+        setSelectedEntry((currentEntry) =>
+          currentEntry?.path === entry.path ? null : currentEntry,
+        );
+      }
+      setFileTagRefreshKey((currentKey) => currentKey + 1);
+    } catch (caughtError) {
+      setEntriesError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : String(caughtError),
+      );
+    }
   }
 
   async function handleRemoveDataSource(node: EvidenceTreeNode) {
@@ -992,6 +1202,7 @@ export function FilesPage() {
             selectedDirectory={selectedDirectory}
             selectedFileView={selectedFileView}
             fileViewCounts={fileViewCounts}
+            tagSummaries={fileTagSummaries}
             onSelectNode={selectTreeNode}
             onSelectFileView={(view) => {
               selectFileView(view);
@@ -1041,7 +1252,14 @@ export function FilesPage() {
                 onNextPage={loadNextFileViewPage}
                 onOpenFolder={openFolderEntry}
                 onPreviousPage={loadPreviousFileViewPage}
+                onRemoveTag={(entry, tagName) => {
+                  void handleRemoveFileTag(entry, tagName);
+                }}
                 onSelectEntry={setSelectedEntry}
+                onSetTag={(input) => {
+                  void handleSetFileTag(input);
+                }}
+                tagsByPath={fileTagsByPath}
               />
             </ResizablePanel>
 
