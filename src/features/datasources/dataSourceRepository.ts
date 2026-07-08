@@ -28,6 +28,10 @@ type DataSourcePluginRow = {
   plugin_id: string;
 };
 
+type DataSourcePathCleanupRow = {
+  path: string;
+};
+
 function createId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -92,6 +96,109 @@ async function getCaseDatabase(databasePath: string) {
   }
 
   return databasePromises.get(normalizedPath)!;
+}
+
+async function ensureDataSourceDependencyTables(database: Database) {
+  await database.execute(`
+    CREATE TABLE IF NOT EXISTS plugin_jobs (
+      id TEXT PRIMARY KEY,
+      case_id TEXT NOT NULL,
+      datasource_id TEXT NOT NULL,
+      plugin_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      error TEXT
+    )
+  `);
+
+  await database.execute(`
+    CREATE TABLE IF NOT EXISTS plugin_results (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      plugin_id TEXT NOT NULL,
+      datasource_id TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      result_kind TEXT NOT NULL,
+      label TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (job_id) REFERENCES plugin_jobs (id)
+        ON DELETE CASCADE
+    )
+  `);
+
+  await database.execute(`
+    CREATE TABLE IF NOT EXISTS plugin_logs (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      plugin_id TEXT NOT NULL,
+      level TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (job_id) REFERENCES plugin_jobs (id)
+        ON DELETE CASCADE
+    )
+  `);
+
+  await database.execute(`
+    CREATE TABLE IF NOT EXISTS media_gallery_items (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      datasource_id TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      path TEXT NOT NULL,
+      name TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(datasource_id, path),
+      FOREIGN KEY (job_id) REFERENCES plugin_jobs (id)
+        ON DELETE CASCADE
+    )
+  `);
+
+  await database.execute(`
+    CREATE TABLE IF NOT EXISTS file_tags (
+      id TEXT PRIMARY KEY,
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      file_kind TEXT NOT NULL,
+      file_size INTEGER,
+      file_modified_ms INTEGER,
+      tag_name TEXT NOT NULL,
+      tag_group TEXT NOT NULL,
+      comment TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(file_path, tag_name)
+    )
+  `);
+}
+
+function escapeSqlLikePattern(value: string) {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+}
+
+function createPathDescendantLikePattern(path: string) {
+  return `${escapeSqlLikePattern(normalizePath(path).replace(/\/+$/, ""))}/%`;
+}
+
+async function deleteFileTagsForDataSourcePaths(
+  database: Database,
+  paths: string[],
+) {
+  for (const path of paths) {
+    const normalizedPath = normalizePath(path);
+
+    await database.execute(
+      `
+        DELETE FROM file_tags
+        WHERE file_path = $1
+           OR file_path LIKE $2 ESCAPE '\\'
+      `,
+      [normalizedPath, createPathDescendantLikePattern(normalizedPath)],
+    );
+  }
 }
 
 export async function createDataSource(
@@ -315,29 +422,106 @@ export async function removeDataSource(input: {
   dataSourceId: string;
 }): Promise<void> {
   const database = await getCaseDatabase(input.caseDatabasePath);
+  await ensureDataSourceDependencyTables(database);
 
-  await database.execute(
+  const pathRows = await database.select<DataSourcePathCleanupRow[]>(
     `
-      DELETE FROM data_source_plugins
+      SELECT path
+      FROM data_source_paths
       WHERE data_source_id = $1
     `,
     [input.dataSourceId],
   );
-  await database.execute(
+  const fallbackRows = await database.select<DataSourcePathCleanupRow[]>(
     `
-      DELETE FROM data_source_paths
-      WHERE data_source_id = $1
-    `,
-    [input.dataSourceId],
-  );
-  await database.execute(
-    `
-      DELETE FROM data_sources
+      SELECT path
+      FROM data_sources
       WHERE id = $1
         AND case_id = $2
+      LIMIT 1
     `,
     [input.dataSourceId, input.caseId],
   );
+  const cleanupPaths = Array.from(
+    new Set(
+      [...pathRows, ...fallbackRows]
+        .map((row) => normalizePath(row.path))
+        .filter(Boolean),
+    ),
+  );
+
+  await database.execute("BEGIN IMMEDIATE");
+
+  try {
+    // Datasource-owned evidence can be represented in several feature tables.
+    // Delete those rows first so the gallery, plugin output, and tags do not
+    // keep stale references after the datasource disappears from the tree.
+    await deleteFileTagsForDataSourcePaths(database, cleanupPaths);
+    await database.execute(
+      `
+        DELETE FROM media_gallery_items
+        WHERE datasource_id = $1
+      `,
+      [input.dataSourceId],
+    );
+    await database.execute(
+      `
+        DELETE FROM plugin_logs
+        WHERE job_id IN (
+          SELECT id
+          FROM plugin_jobs
+          WHERE datasource_id = $1
+        )
+      `,
+      [input.dataSourceId],
+    );
+    await database.execute(
+      `
+        DELETE FROM plugin_results
+        WHERE datasource_id = $1
+           OR job_id IN (
+             SELECT id
+             FROM plugin_jobs
+             WHERE datasource_id = $1
+           )
+      `,
+      [input.dataSourceId],
+    );
+    await database.execute(
+      `
+        DELETE FROM plugin_jobs
+        WHERE datasource_id = $1
+      `,
+      [input.dataSourceId],
+    );
+    await database.execute(
+      `
+        DELETE FROM data_source_plugins
+        WHERE data_source_id = $1
+      `,
+      [input.dataSourceId],
+    );
+    await database.execute(
+      `
+        DELETE FROM data_source_paths
+        WHERE data_source_id = $1
+      `,
+      [input.dataSourceId],
+    );
+    await database.execute(
+      `
+        DELETE FROM data_sources
+        WHERE id = $1
+          AND case_id = $2
+      `,
+      [input.dataSourceId, input.caseId],
+    );
+
+    await database.execute("COMMIT");
+  } catch (caughtError) {
+    await database.execute("ROLLBACK").catch(() => undefined);
+    throw caughtError;
+  }
 
   notifyDataSourcesChanged(input.caseId);
 }

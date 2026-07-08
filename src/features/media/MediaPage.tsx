@@ -28,7 +28,10 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCases } from "@/features/cases/case-provider";
-import { listDataSources } from "@/features/datasources/dataSourceRepository";
+import {
+  listDataSources,
+  subscribeToDataSourcesChanged,
+} from "@/features/datasources/dataSourceRepository";
 import type { DataSourceRecord } from "@/features/datasources/types";
 import { listMediaGallery } from "@/features/media/mediaRepository";
 import type { MediaGalleryResult, MediaItem } from "@/features/media/types";
@@ -128,6 +131,18 @@ export function MediaPage() {
     return () => {
       isCurrent = false;
     };
+  }, [activeCase, refreshKey]);
+
+  useEffect(() => {
+    if (!activeCase) {
+      return;
+    }
+
+    return subscribeToDataSourcesChanged((caseId) => {
+      if (caseId === activeCase.id) {
+        setRefreshKey((key) => key + 1);
+      }
+    });
   }, [activeCase]);
 
   useEffect(() => {
