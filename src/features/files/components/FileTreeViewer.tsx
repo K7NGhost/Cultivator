@@ -71,6 +71,50 @@ type AutopsyTreeNode = Omit<EvidenceTreeNode, "children" | "kind"> & {
   fileView?: FileViewSelection;
 };
 
+type TreeOpenState = Record<string, boolean>;
+
+const FILE_TREE_OPEN_STATE_STORAGE_KEY = "cultivator.fileTree.openState";
+
+function loadFileTreeOpenState(): TreeOpenState {
+  if (typeof localStorage === "undefined") {
+    return {};
+  }
+
+  const storedValue = localStorage.getItem(FILE_TREE_OPEN_STATE_STORAGE_KEY);
+
+  if (!storedValue) {
+    return {};
+  }
+
+  try {
+    const parsedValue = JSON.parse(storedValue);
+
+    if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsedValue).filter(
+        (entry): entry is [string, boolean] =>
+          typeof entry[0] === "string" && typeof entry[1] === "boolean",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveFileTreeOpenState(openState: TreeOpenState) {
+  if (typeof localStorage === "undefined") {
+    return;
+  }
+
+  localStorage.setItem(
+    FILE_TREE_OPEN_STATE_STORAGE_KEY,
+    JSON.stringify(openState),
+  );
+}
+
 function useElementSize<TElement extends HTMLElement>() {
   const ref = useRef<TElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -753,6 +797,8 @@ export function FileTreeViewer({
   const [forwardStack, setForwardStack] = useState<AutopsyTreeNode[]>([]);
   const [showChildCounts, setShowChildCounts] = useState(true);
   const [showFileLeaves, setShowFileLeaves] = useState(false);
+  const [treeOpenState, setTreeOpenState] =
+    useState<TreeOpenState>(loadFileTreeOpenState);
   const sourceTreeData = useMemo(
     () => rootNodes ?? (rootNode ? [rootNode] : []),
     [rootNode, rootNodes],
@@ -791,6 +837,19 @@ export function FileTreeViewer({
     setBackStack([]);
     setForwardStack([]);
   }, [sourceTreeData]);
+
+  useEffect(() => {
+    saveFileTreeOpenState(treeOpenState);
+  }, [treeOpenState]);
+
+  function handleTreeToggle(id: string) {
+    // react-arborist only reports the toggled node id. The tree defaults to
+    // open nodes, so an absent value means "open" until the user closes it.
+    setTreeOpenState((currentOpenState) => ({
+      ...currentOpenState,
+      [id]: !(currentOpenState[id] ?? true),
+    }));
+  }
 
   function selectNode(
     node: AutopsyTreeNode,
@@ -969,6 +1028,8 @@ export function FileTreeViewer({
             rowHeight={28}
             indent={0}
             openByDefault
+            initialOpenState={treeOpenState}
+            onToggle={handleTreeToggle}
             disableDrag
             disableDrop
             selection={selectedTreeNodeId ?? treeData[0]?.id}
