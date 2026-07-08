@@ -29,7 +29,6 @@ type FilePreviewViewerProps = {
   isLoading: boolean;
   onActiveTabChange: (tab: FilePreviewTab) => void;
   selectedEntry: EvidenceDirectoryEntry | null;
-  textPreview: string[];
 };
 
 export type FilePreviewTab = "file" | "text" | "hex";
@@ -474,7 +473,6 @@ export function FilePreviewViewer({
   isLoading,
   onActiveTabChange,
   selectedEntry,
-  textPreview,
 }: FilePreviewViewerProps) {
   return (
     <section
@@ -526,8 +524,7 @@ export function FilePreviewViewer({
           className="m-0 min-h-0 min-w-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
         >
           <TextPreviewViewer
-            lines={textPreview}
-            isLoading={isLoading}
+            path={selectedEntry?.kind === "file" ? selectedEntry.path : null}
             emptyText={
               selectedEntry?.kind === "directory"
                 ? "Select a file to preview text."

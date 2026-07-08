@@ -101,7 +101,6 @@ export function FilesPage() {
   );
   const [selectedEntry, setSelectedEntry] =
     useState<EvidenceDirectoryEntry | null>(null);
-  const [textPreview, setTextPreview] = useState<string[]>([]);
   const [hexPreview, setHexPreview] = useState<string[]>([]);
   const [filePreview, setFilePreview] = useState<FileFormatPreview | null>(null);
   const [entriesError, setEntriesError] = useState<string | null>(null);
@@ -244,7 +243,6 @@ export function FilesPage() {
 
   useEffect(() => {
     if (!selectedEntry || selectedEntry.kind !== "file") {
-      setTextPreview([]);
       setHexPreview([]);
       setFilePreview(null);
       setPreviewError(null);
@@ -255,33 +253,8 @@ export function FilesPage() {
     let isCurrent = true;
     setIsPreviewLoading(true);
     setPreviewError(null);
-    setTextPreview([]);
     setHexPreview([]);
     setFilePreview(null);
-
-    const textPreviewRequest = invoke<string[]>("read_text_preview", {
-      path: selectedEntry.path,
-      line: 1,
-    })
-      .then((nextTextPreview) => {
-        if (!isCurrent) {
-          return;
-        }
-
-        setTextPreview(nextTextPreview);
-      })
-      .catch((caughtError) => {
-        if (!isCurrent) {
-          return;
-        }
-
-        setPreviewError(
-          caughtError instanceof Error
-            ? caughtError.message
-            : String(caughtError),
-        );
-        setTextPreview([]);
-      });
 
     const filePreviewRequest = invoke<FileFormatPreview | null>(
       "read_file_format_preview",
@@ -316,7 +289,7 @@ export function FilesPage() {
         setFilePreview(null);
       });
 
-    Promise.allSettled([textPreviewRequest, filePreviewRequest]).finally(() => {
+    Promise.allSettled([filePreviewRequest]).finally(() => {
       if (isCurrent) {
         setIsPreviewLoading(false);
       }
@@ -765,7 +738,6 @@ export function FilesPage() {
                 isLoading={isPreviewLoading}
                 onActiveTabChange={setActivePreviewTab}
                 selectedEntry={selectedEntry}
-                textPreview={textPreview}
               />
             </ResizablePanel>
           </ResizablePanelGroup>

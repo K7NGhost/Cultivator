@@ -25,14 +25,13 @@ use std::{
 use tauri::Emitter;
 
 mod plugins;
-mod text_preview;
+pub mod preview;
+#[path = "tauri/commands.rs"]
+mod tauri_commands;
 
 const MAX_TREE_DEPTH: usize = 12;
 const MAX_DIRECTORY_CHILDREN: usize = 500;
 const MAX_LIST_ENTRIES: usize = 1_000;
-const MAX_HEX_PREVIEW_BYTES: usize = 512;
-const MAX_HEX_FILE_BYTES: usize = 64 * 1024;
-const MAX_FILE_FORMAT_PREVIEW_BYTES: usize = 64 * 1024;
 const SEARCH_BATCH_FILE_LIMIT: u64 = 64;
 const SEARCH_BATCH_MATCH_LIMIT: usize = 2_048;
 const SEARCH_BATCH_INTERVAL: Duration = Duration::from_millis(100);
@@ -130,22 +129,6 @@ struct SearchSummaries {
     search_id: String,
     files: Vec<SearchFileSummary>,
     elapsed_ms: u128,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FileFormatPreview {
-    kind: String,
-    label: String,
-    details: Vec<FileFormatDetail>,
-    media_path: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FileFormatDetail {
-    label: String,
-    value: String,
 }
 
 #[derive(Serialize)]
@@ -1335,59 +1318,6 @@ fn trim_line_ending_bytes(bytes: &[u8]) -> &[u8] {
 }
 
 #[tauri::command]
-fn read_hex_preview(path: String) -> Result<Vec<String>, String> {
-    let bytes = read_file_prefix(Path::new(&path), MAX_HEX_PREVIEW_BYTES)?;
-
-    Ok(format_hex_lines(&bytes, Some(MAX_HEX_PREVIEW_BYTES / 16)))
-}
-
-#[tauri::command]
-fn read_hex_file(path: String) -> Result<Vec<String>, String> {
-    let metadata =
-        fs::metadata(&path).map_err(|error| format!("Failed to read file metadata: {error}"))?;
-    let bytes = read_file_prefix(Path::new(&path), MAX_HEX_FILE_BYTES)?;
-    let mut lines = format_hex_lines(&bytes, None);
-
-    if metadata.len() > bytes.len() as u64 {
-        lines.push(format!(
-            "... preview limited to {} of {} bytes",
-            format_byte_count(bytes.len() as u64),
-            format_byte_count(metadata.len())
-        ));
-    }
-
-    Ok(lines)
-}
-
-#[tauri::command]
-fn read_file_format_preview(path: String) -> Result<Option<FileFormatPreview>, String> {
-    let bytes = read_file_prefix(Path::new(&path), MAX_FILE_FORMAT_PREVIEW_BYTES)?;
-
-    if bytes.starts_with(b"SQLite format 3\0") {
-        return Ok(Some(sqlite_file_format_preview(&bytes)));
-    }
-
-    if let Some(image_preview) = image_file_format_preview(&path, &bytes) {
-        return Ok(Some(image_preview));
-    }
-
-    Ok(None)
-}
-
-pub(crate) fn read_file_prefix(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String> {
-    let mut file = fs::File::open(path)
-        .map_err(|error| format!("Failed to open file '{}': {error}", path.display()))?;
-    let mut bytes = Vec::with_capacity(max_bytes);
-
-    Read::by_ref(&mut file)
-        .take(max_bytes as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("Failed to read file preview '{}': {error}", path.display()))?;
-
-    Ok(bytes)
-}
-
-#[tauri::command]
 async fn list_sqlite_tables(path: String) -> Result<Vec<SqliteTableSummary>, String> {
     let pool = open_readonly_sqlite_database(&path).await?;
     let rows = sqlx::query(
@@ -1458,235 +1388,6 @@ async fn read_sqlite_table_rows(
         rows: values,
         total_rows,
     })
-}
-
-fn sqlite_file_format_preview(bytes: &[u8]) -> FileFormatPreview {
-    let mut details = vec![FileFormatDetail {
-        label: "Magic".to_string(),
-        value: "SQLite format 3".to_string(),
-    }];
-
-    if bytes.len() >= 100 {
-        let raw_page_size = u16::from_be_bytes([bytes[16], bytes[17]]);
-        let page_size = if raw_page_size == 1 {
-            65_536
-        } else {
-            raw_page_size as u32
-        };
-        let page_count = u32::from_be_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]);
-        let schema_version = u32::from_be_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]);
-        let text_encoding = match u32::from_be_bytes([bytes[56], bytes[57], bytes[58], bytes[59]]) {
-            1 => "UTF-8",
-            2 => "UTF-16le",
-            3 => "UTF-16be",
-            _ => "Unknown",
-        };
-
-        details.extend([
-            FileFormatDetail {
-                label: "Page size".to_string(),
-                value: format!("{page_size} bytes"),
-            },
-            FileFormatDetail {
-                label: "Page count".to_string(),
-                value: page_count.to_string(),
-            },
-            FileFormatDetail {
-                label: "Schema version".to_string(),
-                value: schema_version.to_string(),
-            },
-            FileFormatDetail {
-                label: "Text encoding".to_string(),
-                value: text_encoding.to_string(),
-            },
-        ]);
-    }
-
-    FileFormatPreview {
-        kind: "sqlite".to_string(),
-        label: "SQLite Database".to_string(),
-        details,
-        media_path: None,
-    }
-}
-
-fn image_file_format_preview(path: &str, bytes: &[u8]) -> Option<FileFormatPreview> {
-    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-        return Some(FileFormatPreview {
-            kind: "jpeg".to_string(),
-            label: "JPEG Image".to_string(),
-            details: jpeg_image_details(bytes),
-            media_path: Some(path.to_string()),
-        });
-    }
-
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Some(FileFormatPreview {
-            kind: "png".to_string(),
-            label: "PNG Image".to_string(),
-            details: png_image_details(bytes),
-            media_path: Some(path.to_string()),
-        });
-    }
-
-    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        return Some(FileFormatPreview {
-            kind: "gif".to_string(),
-            label: "GIF Image".to_string(),
-            details: gif_image_details(bytes),
-            media_path: Some(path.to_string()),
-        });
-    }
-
-    if bytes.starts_with(b"BM") {
-        return Some(FileFormatPreview {
-            kind: "bmp".to_string(),
-            label: "BMP Image".to_string(),
-            details: bmp_image_details(bytes),
-            media_path: Some(path.to_string()),
-        });
-    }
-
-    None
-}
-
-fn png_image_details(bytes: &[u8]) -> Vec<FileFormatDetail> {
-    let mut details = vec![FileFormatDetail {
-        label: "Magic".to_string(),
-        value: "PNG".to_string(),
-    }];
-
-    if bytes.len() >= 24 {
-        details.extend([
-            FileFormatDetail {
-                label: "Width".to_string(),
-                value: u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]).to_string(),
-            },
-            FileFormatDetail {
-                label: "Height".to_string(),
-                value: u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]).to_string(),
-            },
-        ]);
-    }
-
-    details
-}
-
-fn gif_image_details(bytes: &[u8]) -> Vec<FileFormatDetail> {
-    let mut details = vec![FileFormatDetail {
-        label: "Magic".to_string(),
-        value: String::from_utf8_lossy(&bytes[..6.min(bytes.len())]).to_string(),
-    }];
-
-    if bytes.len() >= 10 {
-        details.extend([
-            FileFormatDetail {
-                label: "Width".to_string(),
-                value: u16::from_le_bytes([bytes[6], bytes[7]]).to_string(),
-            },
-            FileFormatDetail {
-                label: "Height".to_string(),
-                value: u16::from_le_bytes([bytes[8], bytes[9]]).to_string(),
-            },
-        ]);
-    }
-
-    details
-}
-
-fn bmp_image_details(bytes: &[u8]) -> Vec<FileFormatDetail> {
-    let mut details = vec![FileFormatDetail {
-        label: "Magic".to_string(),
-        value: "BMP".to_string(),
-    }];
-
-    if bytes.len() >= 26 {
-        details.extend([
-            FileFormatDetail {
-                label: "Width".to_string(),
-                value: i32::from_le_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]).to_string(),
-            },
-            FileFormatDetail {
-                label: "Height".to_string(),
-                value: i32::from_le_bytes([bytes[22], bytes[23], bytes[24], bytes[25]]).to_string(),
-            },
-        ]);
-    }
-
-    details
-}
-
-fn jpeg_image_details(bytes: &[u8]) -> Vec<FileFormatDetail> {
-    let mut details = vec![FileFormatDetail {
-        label: "Magic".to_string(),
-        value: "JPEG".to_string(),
-    }];
-
-    if let Some((width, height)) = jpeg_dimensions(bytes) {
-        details.extend([
-            FileFormatDetail {
-                label: "Width".to_string(),
-                value: width.to_string(),
-            },
-            FileFormatDetail {
-                label: "Height".to_string(),
-                value: height.to_string(),
-            },
-        ]);
-    }
-
-    details
-}
-
-fn jpeg_dimensions(bytes: &[u8]) -> Option<(u16, u16)> {
-    let mut index = 2;
-
-    while index + 9 < bytes.len() {
-        if bytes[index] != 0xff {
-            index += 1;
-            continue;
-        }
-
-        while index < bytes.len() && bytes[index] == 0xff {
-            index += 1;
-        }
-
-        if index >= bytes.len() {
-            return None;
-        }
-
-        let marker = bytes[index];
-        index += 1;
-
-        if marker == 0xd8 || marker == 0xd9 || (0xd0..=0xd7).contains(&marker) {
-            continue;
-        }
-
-        if index + 2 > bytes.len() {
-            return None;
-        }
-
-        let segment_length = u16::from_be_bytes([bytes[index], bytes[index + 1]]) as usize;
-
-        if segment_length < 2 || index + segment_length > bytes.len() {
-            return None;
-        }
-
-        if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
-            if index + 7 > bytes.len() {
-                return None;
-            }
-
-            let height = u16::from_be_bytes([bytes[index + 3], bytes[index + 4]]);
-            let width = u16::from_be_bytes([bytes[index + 5], bytes[index + 6]]);
-
-            return Some((width, height));
-        }
-
-        index += segment_length;
-    }
-
-    None
 }
 
 async fn open_readonly_sqlite_database(path: &str) -> Result<SqlitePool, String> {
@@ -1792,37 +1493,6 @@ fn sqlite_cell_to_json_value(
             .map(JsonValue::from)
             .map_err(|error| format!("Failed to decode SQLite text: {error}")),
     }
-}
-
-fn format_hex_lines(bytes: &[u8], max_rows: Option<usize>) -> Vec<String> {
-    let mut lines = Vec::new();
-    let row_limit = max_rows.unwrap_or(usize::MAX);
-
-    for (row_index, chunk) in bytes.chunks(16).take(row_limit).enumerate() {
-        let offset = row_index * 16;
-        let hex = chunk
-            .iter()
-            .enumerate()
-            .map(|(index, byte)| {
-                let separator = if index == 7 { "  " } else { " " };
-                format!("{byte:02x}{separator}")
-            })
-            .collect::<String>();
-        let ascii = chunk
-            .iter()
-            .map(|byte| {
-                if byte.is_ascii_graphic() || *byte == b' ' {
-                    *byte as char
-                } else {
-                    '.'
-                }
-            })
-            .collect::<String>();
-
-        lines.push(format!("{offset:08x}  {hex:<49} {ascii}"));
-    }
-
-    lines
 }
 
 fn build_tree_node(path: &Path, depth: usize) -> Result<DirectoryTreeNode, String> {
@@ -1962,23 +1632,6 @@ fn emit_worker_output(stdout: &Arc<Mutex<io::Stdout>>, output: &SearchWorkerOutp
     }
 }
 
-pub(crate) fn format_byte_count(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit_index = 0usize;
-
-    while value >= 1024.0 && unit_index + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit_index += 1;
-    }
-
-    if unit_index == 0 {
-        format!("{bytes} {}", UNITS[unit_index])
-    } else {
-        format!("{value:.1} {}", UNITS[unit_index])
-    }
-}
-
 fn display_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -2088,10 +1741,12 @@ pub fn run() {
             search_files,
             cancel_search,
             read_search_match_details,
-            text_preview::read_text_preview,
-            read_hex_preview,
-            read_hex_file,
-            read_file_format_preview,
+            tauri_commands::read_text_preview,
+            tauri_commands::open_text_preview,
+            tauri_commands::read_text_preview_lines,
+            tauri_commands::read_hex_preview,
+            tauri_commands::read_hex_file,
+            tauri_commands::read_file_format_preview,
             list_sqlite_tables,
             read_sqlite_table_rows
         ])
