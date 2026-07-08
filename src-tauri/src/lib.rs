@@ -32,12 +32,78 @@ mod tauri_commands;
 const MAX_TREE_DEPTH: usize = 12;
 const MAX_DIRECTORY_CHILDREN: usize = 500;
 const MAX_LIST_ENTRIES: usize = 1_000;
+const MAX_FILE_VIEW_ENTRIES: usize = 10_000;
 const SEARCH_BATCH_FILE_LIMIT: u64 = 64;
 const SEARCH_BATCH_MATCH_LIMIT: usize = 2_048;
 const SEARCH_BATCH_INTERVAL: Duration = Duration::from_millis(100);
 const SEARCH_PROGRESS_EVENT: &str = "search-progress";
 const SEARCH_SUMMARIES_EVENT: &str = "search-summaries";
 const SEARCH_WORKER_FLAG: &str = "--cultivator-search-worker";
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "psd", "nef", "tiff", "bmp", "tcc", "tif", "webp",
+];
+const VIDEO_EXTENSIONS: &[&str] = &[
+    "asf", "mov", "m1v", "m2v", "m4v", "mp4", "mpeg", "mpg", "mpe", "rm", "wmv", "mpv", "flv",
+    "swf",
+];
+const AUDIO_EXTENSIONS: &[&str] = &[
+    "aiff", "aif", "flac", "wav", "m4a", "ape", "wma", "mp2", "mp1", "mp3", "aac", "mp4", "m4p",
+    "m1a", "m2a", "m4r", "mpa", "m3u", "mid", "midi", "ogg",
+];
+const ARCHIVE_EXTENSIONS: &[&str] = &[
+    "zip", "rar", "7zip", "7z", "arj", "tar", "gzip", "bzip", "bzip2", "cab", "jar", "cpio", "ar",
+    "gz", "tgz", "bz2",
+];
+const DATABASE_EXTENSIONS: &[&str] = &["db", "db3", "sqlite", "sqlite3"];
+const DOCUMENT_EXTENSIONS: &[&str] = &[
+    "htm", "html", "doc", "docx", "odt", "xls", "xlsx", "ppt", "pptx", "pdf", "txt", "rtf",
+];
+const EXECUTABLE_EXTENSIONS: &[&str] = &[
+    "exe", "msi", "cmd", "com", "bat", "reg", "scr", "dll", "ini",
+];
+const ALL_FILE_VIEW_IDS: &[&str] = &[
+    "file-types:extension:images",
+    "file-types:extension:videos",
+    "file-types:extension:audio",
+    "file-types:extension:archives",
+    "file-types:extension:databases",
+    "file-types:extension:documents",
+    "file-types:extension:documents:html",
+    "file-types:extension:documents:office",
+    "file-types:extension:documents:pdf",
+    "file-types:extension:documents:text",
+    "file-types:extension:documents:rtf",
+    "file-types:extension:executables",
+    "file-types:extension:executables:exe",
+    "file-types:extension:executables:msi",
+    "file-types:extension:executables:dll",
+    "file-types:extension:executables:bat",
+    "file-types:extension:executables:cmd",
+    "file-types:extension:executables:com",
+    "file-types:extension:executables:reg",
+    "file-types:extension:executables:scr",
+    "file-types:extension:executables:ini",
+    "file-types:mime:image",
+    "file-types:mime:image:jpeg",
+    "file-types:mime:image:png",
+    "file-types:mime:image:gif",
+    "file-types:mime:image:webp",
+    "file-types:mime:video",
+    "file-types:mime:video:mp4",
+    "file-types:mime:audio",
+    "file-types:mime:audio:mpeg",
+    "file-types:mime:text",
+    "file-types:mime:text:plain",
+    "file-types:mime:text:html",
+    "file-types:mime:application",
+    "file-types:mime:application:pdf",
+    "file-types:mime:application:zip",
+    "deleted:file-system",
+    "deleted:all",
+    "file-size:50-200mb",
+    "file-size:200mb-1gb",
+    "file-size:1gb-plus",
+];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,7 +116,7 @@ struct DirectoryTreeNode {
     children: Option<Vec<DirectoryTreeNode>>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DirectoryEntry {
     id: String,
@@ -69,6 +135,23 @@ struct DirectoryListing {
     root_name: String,
     tree: DirectoryTreeNode,
     entries: Vec<DirectoryEntry>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileViewIndex {
+    entries: HashMap<String, Vec<DirectoryEntry>>,
+    counts: HashMap<String, usize>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileViewEntriesPage {
+    entries: Vec<DirectoryEntry>,
+    total_count: usize,
+    offset: usize,
+    limit: usize,
+    has_next_page: bool,
 }
 
 #[derive(Serialize)]
@@ -428,6 +511,37 @@ fn describe_paths(paths: Vec<String>) -> Result<Vec<DirectoryEntry>, String> {
     }
 
     Ok(entries)
+}
+
+#[tauri::command]
+async fn list_file_view_entries(
+    roots: Vec<String>,
+    view_id: String,
+) -> Result<Vec<DirectoryEntry>, String> {
+    tokio::task::spawn_blocking(move || list_file_view_entries_impl(roots, &view_id))
+        .await
+        .map_err(|error| format!("Failed to join file view scan task: {error}"))?
+}
+
+#[tauri::command]
+async fn list_file_view_entries_page(
+    roots: Vec<String>,
+    view_id: String,
+    offset: usize,
+    limit: Option<usize>,
+) -> Result<FileViewEntriesPage, String> {
+    tokio::task::spawn_blocking(move || {
+        list_file_view_entries_page_impl(roots, &view_id, offset, limit)
+    })
+    .await
+    .map_err(|error| format!("Failed to join file view page scan task: {error}"))?
+}
+
+#[tauri::command]
+async fn build_file_view_index(roots: Vec<String>) -> Result<FileViewIndex, String> {
+    tokio::task::spawn_blocking(move || build_file_view_index_impl(roots))
+        .await
+        .map_err(|error| format!("Failed to join file view index task: {error}"))?
 }
 
 #[tauri::command]
@@ -1547,6 +1661,298 @@ fn list_immediate_entries(path: &Path) -> Result<Vec<DirectoryEntry>, String> {
     Ok(entries)
 }
 
+fn list_file_view_entries_impl(
+    roots: Vec<String>,
+    view_id: &str,
+) -> Result<Vec<DirectoryEntry>, String> {
+    Ok(list_file_view_entries_page_impl(roots, view_id, 0, Some(MAX_FILE_VIEW_ENTRIES))?.entries)
+}
+
+fn list_file_view_entries_page_impl(
+    roots: Vec<String>,
+    view_id: &str,
+    offset: usize,
+    limit: Option<usize>,
+) -> Result<FileViewEntriesPage, String> {
+    let limit = limit
+        .unwrap_or(MAX_FILE_VIEW_ENTRIES)
+        .clamp(1, MAX_FILE_VIEW_ENTRIES);
+    let mut entries = Vec::new();
+    let mut total_count = 0usize;
+    let mut seen_paths = HashSet::new();
+
+    for root in roots {
+        let root = PathBuf::from(root);
+
+        if !root.exists() {
+            continue;
+        }
+
+        let walker = WalkBuilder::new(root)
+            .hidden(false)
+            .ignore(false)
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .build();
+
+        for result in walker {
+            let Ok(entry) = result else {
+                continue;
+            };
+            let path = entry.path();
+
+            if !path.is_file() || !seen_paths.insert(path.to_path_buf()) {
+                continue;
+            }
+
+            let Ok(metadata) = fs::metadata(path) else {
+                continue;
+            };
+
+            if !file_matches_view(path, metadata.len(), view_id) {
+                continue;
+            }
+
+            let matched_index = total_count;
+            total_count += 1;
+
+            if matched_index < offset || entries.len() >= limit {
+                continue;
+            }
+
+            if let Ok(directory_entry) = build_directory_entry(path) {
+                entries.push(directory_entry);
+            }
+        }
+    }
+
+    // Autopsy keeps result views bounded by page. We sort the current page for a
+    // predictable table without retaining every matching file in memory.
+    sort_directory_entries(&mut entries);
+
+    Ok(FileViewEntriesPage {
+        entries,
+        total_count,
+        offset,
+        limit,
+        has_next_page: offset.saturating_add(limit) < total_count,
+    })
+}
+
+fn build_file_view_index_impl(roots: Vec<String>) -> Result<FileViewIndex, String> {
+    let mut view_entries = file_view_index_template();
+    let mut view_counts = file_view_count_template();
+    let mut seen_paths = HashSet::new();
+
+    for root in roots {
+        let root = PathBuf::from(root);
+
+        if !root.exists() {
+            continue;
+        }
+
+        let walker = WalkBuilder::new(root)
+            .hidden(false)
+            .ignore(false)
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .build();
+
+        for result in walker {
+            let Ok(entry) = result else {
+                continue;
+            };
+            let path = entry.path();
+
+            if !path.is_file() || !seen_paths.insert(path.to_path_buf()) {
+                continue;
+            }
+
+            let Ok(metadata) = fs::metadata(path) else {
+                continue;
+            };
+            let matching_view_ids = matching_file_view_ids(path, metadata.len());
+
+            if matching_view_ids.is_empty() {
+                continue;
+            }
+
+            let Ok(directory_entry) = build_directory_entry(path) else {
+                continue;
+            };
+
+            for view_id in matching_view_ids {
+                if let Some(count) = view_counts.get_mut(view_id) {
+                    *count += 1;
+                }
+
+                if let Some(entries) = view_entries.get_mut(view_id) {
+                    if entries.len() < MAX_FILE_VIEW_ENTRIES {
+                        entries.push(directory_entry.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    for entries in view_entries.values_mut() {
+        sort_directory_entries(entries);
+    }
+
+    Ok(FileViewIndex {
+        entries: view_entries,
+        counts: view_counts,
+    })
+}
+
+fn file_view_index_template() -> HashMap<String, Vec<DirectoryEntry>> {
+    ALL_FILE_VIEW_IDS
+        .iter()
+        .map(|view_id| (view_id.to_string(), Vec::new()))
+        .collect()
+}
+
+fn file_view_count_template() -> HashMap<String, usize> {
+    ALL_FILE_VIEW_IDS
+        .iter()
+        .map(|view_id| (view_id.to_string(), 0))
+        .collect()
+}
+
+fn sort_directory_entries(entries: &mut [DirectoryEntry]) {
+    entries.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.path.cmp(&right.path))
+    });
+}
+
+fn matching_file_view_ids(path: &Path, size: u64) -> Vec<&'static str> {
+    ALL_FILE_VIEW_IDS
+        .iter()
+        .copied()
+        .filter(|view_id| file_matches_view(path, size, view_id))
+        .collect()
+}
+
+fn file_matches_view(path: &Path, size: u64, view_id: &str) -> bool {
+    match view_id {
+        "file-types:extension:images" => extension_is(path, IMAGE_EXTENSIONS),
+        "file-types:extension:videos" => extension_is(path, VIDEO_EXTENSIONS),
+        "file-types:extension:audio" => extension_is(path, AUDIO_EXTENSIONS),
+        "file-types:extension:archives" => extension_is(path, ARCHIVE_EXTENSIONS),
+        "file-types:extension:databases" => extension_is(path, DATABASE_EXTENSIONS),
+        "file-types:extension:documents" => extension_is(path, DOCUMENT_EXTENSIONS),
+        "file-types:extension:documents:html" => extension_is(path, &["htm", "html"]),
+        "file-types:extension:documents:office" => {
+            extension_is(path, &["doc", "docx", "odt", "xls", "xlsx", "ppt", "pptx"])
+        }
+        "file-types:extension:documents:pdf" => extension_is(path, &["pdf"]),
+        "file-types:extension:documents:text" => extension_is(path, &["txt"]),
+        "file-types:extension:documents:rtf" => extension_is(path, &["rtf"]),
+        "file-types:extension:executables" => extension_is(path, EXECUTABLE_EXTENSIONS),
+        "file-types:extension:executables:exe" => extension_is(path, &["exe"]),
+        "file-types:extension:executables:msi" => extension_is(path, &["msi"]),
+        "file-types:extension:executables:dll" => extension_is(path, &["dll"]),
+        "file-types:extension:executables:bat" => extension_is(path, &["bat"]),
+        "file-types:extension:executables:cmd" => extension_is(path, &["cmd"]),
+        "file-types:extension:executables:com" => extension_is(path, &["com"]),
+        "file-types:extension:executables:reg" => extension_is(path, &["reg"]),
+        "file-types:extension:executables:scr" => extension_is(path, &["scr"]),
+        "file-types:extension:executables:ini" => extension_is(path, &["ini"]),
+        "file-types:mime:image" => {
+            inferred_mime_type(path).is_some_and(|mime| mime.starts_with("image/"))
+        }
+        "file-types:mime:video" => {
+            inferred_mime_type(path).is_some_and(|mime| mime.starts_with("video/"))
+        }
+        "file-types:mime:audio" => {
+            inferred_mime_type(path).is_some_and(|mime| mime.starts_with("audio/"))
+        }
+        "file-types:mime:text" => {
+            inferred_mime_type(path).is_some_and(|mime| mime.starts_with("text/"))
+        }
+        "file-types:mime:application" => {
+            inferred_mime_type(path).is_some_and(|mime| mime.starts_with("application/"))
+        }
+        "file-types:mime:image:jpeg" => inferred_mime_type(path) == Some("image/jpeg"),
+        "file-types:mime:image:png" => inferred_mime_type(path) == Some("image/png"),
+        "file-types:mime:image:gif" => inferred_mime_type(path) == Some("image/gif"),
+        "file-types:mime:image:webp" => inferred_mime_type(path) == Some("image/webp"),
+        "file-types:mime:video:mp4" => inferred_mime_type(path) == Some("video/mp4"),
+        "file-types:mime:audio:mpeg" => inferred_mime_type(path) == Some("audio/mpeg"),
+        "file-types:mime:text:plain" => inferred_mime_type(path) == Some("text/plain"),
+        "file-types:mime:text:html" => inferred_mime_type(path) == Some("text/html"),
+        "file-types:mime:application:pdf" => inferred_mime_type(path) == Some("application/pdf"),
+        "file-types:mime:application:zip" => inferred_mime_type(path) == Some("application/zip"),
+        "deleted:all" | "deleted:file-system" => looks_like_deleted_file(path),
+        "file-size:50-200mb" => (50_000_000..200_000_000).contains(&size),
+        "file-size:200mb-1gb" => (200_000_000..1_000_000_000).contains(&size),
+        "file-size:1gb-plus" => size >= 1_000_000_000,
+        _ => false,
+    }
+}
+
+fn extension_is(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            extensions
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+        .unwrap_or(false)
+}
+
+fn inferred_mime_type(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+
+    match extension.as_str() {
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "png" => Some("image/png"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "tif" | "tiff" => Some("image/tiff"),
+        "mp4" | "m4v" => Some("video/mp4"),
+        "mov" => Some("video/quicktime"),
+        "avi" => Some("video/x-msvideo"),
+        "mkv" => Some("video/x-matroska"),
+        "mp3" => Some("audio/mpeg"),
+        "wav" => Some("audio/wav"),
+        "flac" => Some("audio/flac"),
+        "txt" | "log" => Some("text/plain"),
+        "htm" | "html" => Some("text/html"),
+        "csv" => Some("text/csv"),
+        "json" => Some("application/json"),
+        "pdf" => Some("application/pdf"),
+        "zip" => Some("application/zip"),
+        "7z" => Some("application/x-7z-compressed"),
+        "rar" => Some("application/vnd.rar"),
+        "sqlite" | "db" => Some("application/vnd.sqlite3"),
+        "exe" | "dll" | "com" => Some("application/vnd.microsoft.portable-executable"),
+        "bat" | "cmd" => Some("text/x-msdos-batch"),
+        _ => None,
+    }
+}
+
+fn looks_like_deleted_file(path: &Path) -> bool {
+    let normalized = path.to_string_lossy().to_ascii_lowercase();
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+
+    normalized.contains("$recycle.bin")
+        || normalized.contains("/.trash")
+        || normalized.contains("\\.trash")
+        || file_name.starts_with("$i")
+        || file_name.starts_with("$r")
+}
+
 fn build_directory_entry(path: &Path) -> Result<DirectoryEntry, String> {
     let metadata = fs::metadata(path)
         .map_err(|error| format!("Failed to read path metadata '{}': {error}", path.display()))?;
@@ -1722,6 +2128,9 @@ pub fn run() {
             list_directory,
             list_directory_entries,
             describe_paths,
+            list_file_view_entries,
+            list_file_view_entries_page,
+            build_file_view_index,
             list_python_plugins,
             python_plugin_directory,
             open_python_plugin_directory,

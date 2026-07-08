@@ -16,6 +16,7 @@ import {
   FolderOpen,
   Play,
   Settings2,
+  Tags,
   Trash2,
 } from "lucide-react";
 
@@ -42,9 +43,29 @@ type FileTreeViewerProps = {
   rootNode: EvidenceTreeNode | null;
   rootNodes?: EvidenceTreeNode[];
   selectedDirectory: EvidenceTreeNode | null;
+  selectedFileView?: FileViewSelection | null;
+  fileViewCounts?: Record<string, number>;
   onSelectNode: (node: EvidenceTreeNode) => void;
+  onSelectFileView?: (view: FileViewSelection) => void;
   onRemoveDataSource?: (node: EvidenceTreeNode) => void;
   onRunDataSourcePlugins?: (node: EvidenceTreeNode) => void;
+};
+
+export type FileViewSelection = {
+  id: string;
+  name: string;
+  description: string;
+  count: number;
+  childViews?: FileViewSelection[];
+};
+
+type AutopsyTreeNodeKind = EvidenceTreeNode["kind"] | "group" | "view";
+
+type AutopsyTreeNode = Omit<EvidenceTreeNode, "children" | "kind"> & {
+  children?: AutopsyTreeNode[];
+  kind: AutopsyTreeNodeKind;
+  sourceNode?: EvidenceTreeNode;
+  fileView?: FileViewSelection;
 };
 
 function useElementSize<TElement extends HTMLElement>() {
@@ -73,30 +94,435 @@ function useElementSize<TElement extends HTMLElement>() {
   return { ref, size };
 }
 
-function filterTreeForAutopsyView(
+function buildRealTreeNodes(
   nodes: EvidenceTreeNode[],
   options: { showFileLeaves: boolean },
-): EvidenceTreeNode[] {
-  const visibleNodes: EvidenceTreeNode[] = [];
+): AutopsyTreeNode[] {
+  const visibleNodes: AutopsyTreeNode[] = [];
 
   for (const node of nodes) {
     if (node.kind === "file" && !options.showFileLeaves) {
       continue;
     }
 
-    const children = filterTreeForAutopsyView(node.children ?? [], options);
+    const children = buildRealTreeNodes(node.children ?? [], options);
 
     visibleNodes.push({
       ...node,
       children: children.length > 0 ? children : undefined,
+      sourceNode: node,
     });
   }
 
   return visibleNodes;
 }
 
-function getNodeIcon(node: EvidenceTreeNode) {
+function createFileViewNode(
+  id: string,
+  name: string,
+  description: string,
+  counts: Record<string, number>,
+  children?: AutopsyTreeNode[],
+): AutopsyTreeNode {
+  const childViews = children
+    ?.map((child) => child.fileView)
+    .filter((view): view is FileViewSelection => Boolean(view));
+  const count = childViews?.length
+    ? childViews.reduce((total, child) => total + child.count, 0)
+    : counts[id] ?? 0;
+
+  return {
+    id: `autopsy:${id}`,
+    name,
+    path: "",
+    kind: "view",
+    files: count,
+    children,
+    fileView: {
+      id,
+      name,
+      description,
+      count,
+      childViews,
+    },
+  };
+}
+
+function buildAutopsyTree(
+  sourceNodes: EvidenceTreeNode[],
+  options: { fileViewCounts: Record<string, number>; showFileLeaves: boolean },
+): AutopsyTreeNode[] {
+  const dataSourceChildren = buildRealTreeNodes(sourceNodes, options);
+  const documentExtensionNodes = [
+    createFileViewNode(
+      "file-types:extension:documents:html",
+      "HTML",
+      "Files with .htm or .html extensions.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:documents:office",
+      "Office",
+      "Files with common Office document extensions.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:documents:pdf",
+      "PDF",
+      "Files with a .pdf extension.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:documents:text",
+      "Plain Text",
+      "Files with a .txt extension.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:documents:rtf",
+      "RTF",
+      "Files with a .rtf extension.",
+      options.fileViewCounts,
+    ),
+  ];
+  const executableExtensionNodes = [
+    createFileViewNode(
+      "file-types:extension:executables:exe",
+      ".exe",
+      "Windows executable files.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:executables:msi",
+      ".msi",
+      "Windows installer packages.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:executables:dll",
+      ".dll",
+      "Windows dynamic libraries.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:executables:bat",
+      ".bat",
+      "Windows batch scripts.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:executables:cmd",
+      ".cmd",
+      "Windows command scripts.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:executables:com",
+      ".com",
+      "DOS executable files.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:executables:reg",
+      ".reg",
+      "Windows registry scripts.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:executables:scr",
+      ".scr",
+      "Windows screen saver executables.",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:executables:ini",
+      ".ini",
+      "Windows initialization files.",
+      options.fileViewCounts,
+    ),
+  ];
+  const extensionNodes = [
+    createFileViewNode(
+      "file-types:extension:images",
+      "Images",
+      ".jpg, .jpeg, .png, .psd, .nef, .tiff, .bmp, .tcc, .tif, .webp",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:videos",
+      "Videos",
+      ".asf, .mov, .m1v, .m2v, .m4v, .mp4, .mpeg, .mpg, .mpe, .rm, .wmv, .mpv, .flv, .swf",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:audio",
+      "Audio",
+      ".aiff, .aif, .flac, .wav, .m4a, .ape, .wma, .mp2, .mp1, .mp3, .aac, .mp4, .m4p, .m1a, .m2a, .m4r, .mpa, .m3u, .mid, .midi, .ogg",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:archives",
+      "Archives",
+      ".zip, .rar, .7zip, .7z, .arj, .tar, .gzip, .bzip, .bzip2, .cab, .jar, .cpio, .ar, .gz, .tgz, .bz2",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:databases",
+      "Databases",
+      ".db, .db3, .sqlite, .sqlite3",
+      options.fileViewCounts,
+    ),
+    createFileViewNode(
+      "file-types:extension:documents",
+      "Documents",
+      ".htm, .html, .doc, .docx, .odt, .xls, .xlsx, .ppt, .pptx, .pdf, .txt, .rtf",
+      options.fileViewCounts,
+      documentExtensionNodes,
+    ),
+    createFileViewNode(
+      "file-types:extension:executables",
+      "Executable",
+      ".exe, .msi, .cmd, .com, .bat, .reg, .scr, .dll, .ini",
+      options.fileViewCounts,
+      executableExtensionNodes,
+    ),
+  ];
+  const mimeNodes = [
+    createFileViewNode(
+      "file-types:mime:image",
+      "image",
+      "Image MIME types.",
+      options.fileViewCounts,
+      [
+        createFileViewNode(
+          "file-types:mime:image:jpeg",
+          "jpeg",
+          "JPEG image files.",
+          options.fileViewCounts,
+        ),
+        createFileViewNode(
+          "file-types:mime:image:png",
+          "png",
+          "PNG image files.",
+          options.fileViewCounts,
+        ),
+        createFileViewNode(
+          "file-types:mime:image:gif",
+          "gif",
+          "GIF image files.",
+          options.fileViewCounts,
+        ),
+        createFileViewNode(
+          "file-types:mime:image:webp",
+          "webp",
+          "WebP image files.",
+          options.fileViewCounts,
+        ),
+      ],
+    ),
+    createFileViewNode(
+      "file-types:mime:video",
+      "video",
+      "Video MIME types.",
+      options.fileViewCounts,
+      [
+        createFileViewNode(
+          "file-types:mime:video:mp4",
+          "mp4",
+          "MP4 video files.",
+          options.fileViewCounts,
+        ),
+      ],
+    ),
+    createFileViewNode(
+      "file-types:mime:audio",
+      "audio",
+      "Audio MIME types.",
+      options.fileViewCounts,
+      [
+        createFileViewNode(
+          "file-types:mime:audio:mpeg",
+          "mpeg",
+          "MP3 audio files.",
+          options.fileViewCounts,
+        ),
+      ],
+    ),
+    createFileViewNode(
+      "file-types:mime:text",
+      "text",
+      "Text MIME types.",
+      options.fileViewCounts,
+      [
+        createFileViewNode(
+          "file-types:mime:text:plain",
+          "plain",
+          "Plain text files.",
+          options.fileViewCounts,
+        ),
+        createFileViewNode(
+          "file-types:mime:text:html",
+          "html",
+          "HTML text files.",
+          options.fileViewCounts,
+        ),
+      ],
+    ),
+    createFileViewNode(
+      "file-types:mime:application",
+      "application",
+      "Application MIME types.",
+      options.fileViewCounts,
+      [
+        createFileViewNode(
+          "file-types:mime:application:pdf",
+          "pdf",
+          "PDF application files.",
+          options.fileViewCounts,
+        ),
+        createFileViewNode(
+          "file-types:mime:application:zip",
+          "zip",
+          "ZIP archive files.",
+          options.fileViewCounts,
+        ),
+      ],
+    ),
+  ];
+
+  return [
+    {
+      id: "autopsy:data-sources",
+      name: "Data Sources",
+      path: "",
+      kind: "group",
+      files: dataSourceChildren.length,
+      children: dataSourceChildren,
+    },
+    {
+      id: "autopsy:file-views",
+      name: "File Views",
+      path: "",
+      kind: "group",
+      files: 3,
+      children: [
+        createFileViewNode(
+          "file-types",
+          "File Types",
+          "Files grouped by extension and inferred MIME type.",
+          options.fileViewCounts,
+          [
+            createFileViewNode(
+              "file-types:extension",
+              "By Extension",
+              "Files grouped by Autopsy-style extension categories.",
+              options.fileViewCounts,
+              extensionNodes,
+            ),
+            createFileViewNode(
+              "file-types:mime",
+              "By MIME Type",
+              "Files grouped by inferred MIME type.",
+              options.fileViewCounts,
+              mimeNodes,
+            ),
+          ],
+        ),
+        createFileViewNode(
+          "deleted",
+          "Deleted Files",
+          "Files that Cultivator can infer as deleted from available filesystem data.",
+          options.fileViewCounts,
+          [
+            createFileViewNode(
+              "deleted:file-system",
+              "File System",
+              "Deleted files identified by filesystem metadata where available.",
+              options.fileViewCounts,
+            ),
+            createFileViewNode(
+              "deleted:all",
+              "All",
+              "All deleted-file markers Cultivator can infer from the source paths.",
+              options.fileViewCounts,
+            ),
+          ],
+        ),
+        createFileViewNode(
+          "file-size",
+          "File Size",
+          "Files grouped by Autopsy file-size ranges.",
+          options.fileViewCounts,
+          [
+            createFileViewNode(
+              "file-size:50-200mb",
+              "50 - 200MB",
+              "Files from 50,000,000 bytes up to 200,000,000 bytes.",
+              options.fileViewCounts,
+            ),
+            createFileViewNode(
+              "file-size:200mb-1gb",
+              "200MB - 1GB",
+              "Files from 200,000,000 bytes up to 1,000,000,000 bytes.",
+              options.fileViewCounts,
+            ),
+            createFileViewNode(
+              "file-size:1gb-plus",
+              "1GB+",
+              "Files at or above 1,000,000,000 bytes.",
+              options.fileViewCounts,
+            ),
+          ],
+        ),
+      ],
+    },
+    {
+      id: "autopsy:tags",
+      name: "Tags",
+      path: "",
+      kind: "group",
+      files: 0,
+    },
+  ];
+}
+
+function evidenceNodeToAutopsyNode(node: EvidenceTreeNode): AutopsyTreeNode {
+  return {
+    ...node,
+    children: undefined,
+    sourceNode: node,
+  };
+}
+
+function findTreeNodeById(
+  nodes: AutopsyTreeNode[],
+  id: string,
+): AutopsyTreeNode | null {
+  for (const node of nodes) {
+    if (node.id === id) {
+      return node;
+    }
+
+    const childMatch = findTreeNodeById(node.children ?? [], id);
+
+    if (childMatch) {
+      return childMatch;
+    }
+  }
+
+  return null;
+}
+
+function getNodeIcon(node: AutopsyTreeNode) {
   switch (node.kind) {
+    case "group":
+      return node.id === "autopsy:tags" ? Tags : FolderOpen;
+    case "view":
+      if (node.name === "Deleted Files") {
+        return Trash2;
+      }
+
+      return node.children?.length ? FolderOpen : Folder;
     case "datasource":
       return Database;
     case "file":
@@ -106,8 +532,14 @@ function getNodeIcon(node: EvidenceTreeNode) {
   }
 }
 
-function getNodeIconClassName(node: EvidenceTreeNode) {
+function getNodeIconClassName(node: AutopsyTreeNode) {
   switch (node.kind) {
+    case "group":
+      return node.id === "autopsy:tags"
+        ? "text-sky-600 dark:text-sky-300"
+        : "text-primary";
+    case "view":
+      return "text-muted-foreground";
     case "datasource":
       return "text-primary";
     case "file":
@@ -117,8 +549,12 @@ function getNodeIconClassName(node: EvidenceTreeNode) {
   }
 }
 
-function getNodeKindLabel(node: EvidenceTreeNode) {
+function getNodeKindLabel(node: AutopsyTreeNode) {
   switch (node.kind) {
+    case "group":
+      return "Category";
+    case "view":
+      return "View";
     case "datasource":
       return "Datasource";
     case "file":
@@ -128,7 +564,7 @@ function getNodeKindLabel(node: EvidenceTreeNode) {
   }
 }
 
-function getNodeVisibleCount(node: EvidenceTreeNode) {
+function getNodeVisibleCount(node: AutopsyTreeNode) {
   return node.childCount ?? node.files;
 }
 
@@ -139,9 +575,9 @@ function EvidenceTreeNodeRow({
   onSelectNode,
   onRemoveDataSource,
   onRunDataSourcePlugins,
-}: NodeRendererProps<EvidenceTreeNode> & {
+}: NodeRendererProps<AutopsyTreeNode> & {
   showChildCounts: boolean;
-  onSelectNode: (node: EvidenceTreeNode) => void;
+  onSelectNode: (node: AutopsyTreeNode) => void;
   onRemoveDataSource?: (node: EvidenceTreeNode) => void;
   onRunDataSourcePlugins?: (node: EvidenceTreeNode) => void;
 }) {
@@ -195,7 +631,9 @@ function EvidenceTreeNodeRow({
           <span className="min-w-0 truncate text-left">
             {node.data.name}
           </span>
-          {showChildCounts && node.data.kind !== "file" && (
+          {showChildCounts &&
+            node.data.kind !== "file" &&
+            (node.data.kind !== "view" || visibleCount > 0) && (
             <span className="shrink-0 text-[11px] text-muted-foreground">
               ({visibleCount})
             </span>
@@ -234,7 +672,9 @@ function EvidenceTreeNodeRow({
               <ContextMenuItem
                 className="text-xs"
                 onSelect={() => {
-                  onRunDataSourcePlugins(node.data);
+                  if (node.data.sourceNode) {
+                    onRunDataSourcePlugins(node.data.sourceNode);
+                  }
                 }}
               >
                 <Play className="size-3.5" aria-hidden="true" />
@@ -245,7 +685,9 @@ function EvidenceTreeNodeRow({
               <ContextMenuItem
                 className="text-xs text-destructive focus:text-destructive"
                 onSelect={() => {
-                  onRemoveDataSource(node.data);
+                  if (node.data.sourceNode) {
+                    onRemoveDataSource(node.data.sourceNode);
+                  }
                 }}
               >
                 <Trash2 className="size-3.5" aria-hidden="true" />
@@ -263,18 +705,23 @@ export function FileTreeViewer({
   rootNode,
   rootNodes,
   selectedDirectory,
+  selectedFileView,
+  fileViewCounts = {},
   onSelectNode,
+  onSelectFileView,
   onRemoveDataSource,
   onRunDataSourcePlugins,
 }: FileTreeViewerProps) {
   const treePanel = useElementSize<HTMLDivElement>();
-  const treeRef = useRef<TreeApi<EvidenceTreeNode> | undefined>(undefined);
-  const selectedNodeRef = useRef<EvidenceTreeNode | null>(selectedDirectory);
+  const treeRef = useRef<TreeApi<AutopsyTreeNode> | undefined>(undefined);
+  const selectedNodeRef = useRef<AutopsyTreeNode | null>(
+    selectedDirectory ? evidenceNodeToAutopsyNode(selectedDirectory) : null,
+  );
   const [selectedTreeNodeId, setSelectedTreeNodeId] = useState<string | null>(
     selectedDirectory?.id ?? null,
   );
-  const [backStack, setBackStack] = useState<EvidenceTreeNode[]>([]);
-  const [forwardStack, setForwardStack] = useState<EvidenceTreeNode[]>([]);
+  const [backStack, setBackStack] = useState<AutopsyTreeNode[]>([]);
+  const [forwardStack, setForwardStack] = useState<AutopsyTreeNode[]>([]);
   const [showChildCounts, setShowChildCounts] = useState(true);
   const [showFileLeaves, setShowFileLeaves] = useState(false);
   const sourceTreeData = useMemo(
@@ -282,14 +729,27 @@ export function FileTreeViewer({
     [rootNode, rootNodes],
   );
   const treeData = useMemo(
-    () => filterTreeForAutopsyView(sourceTreeData, { showFileLeaves }),
-    [showFileLeaves, sourceTreeData],
+    () => buildAutopsyTree(sourceTreeData, { fileViewCounts, showFileLeaves }),
+    [fileViewCounts, showFileLeaves, sourceTreeData],
   );
 
   useEffect(() => {
-    selectedNodeRef.current = selectedDirectory;
-    setSelectedTreeNodeId(selectedDirectory?.id ?? null);
-  }, [selectedDirectory]);
+    if (selectedFileView) {
+      const fileViewNodeId = `autopsy:${selectedFileView.id}`;
+      selectedNodeRef.current = findTreeNodeById(treeData, fileViewNodeId);
+      setSelectedTreeNodeId(fileViewNodeId);
+      return;
+    }
+
+    if (selectedDirectory) {
+      selectedNodeRef.current = evidenceNodeToAutopsyNode(selectedDirectory);
+      setSelectedTreeNodeId(selectedDirectory.id);
+      return;
+    }
+
+    selectedNodeRef.current = null;
+    setSelectedTreeNodeId(null);
+  }, [selectedDirectory, selectedFileView, treeData]);
 
   useEffect(() => {
     setBackStack([]);
@@ -297,7 +757,7 @@ export function FileTreeViewer({
   }, [sourceTreeData]);
 
   function selectNode(
-    node: EvidenceTreeNode,
+    node: AutopsyTreeNode,
     options: { updateHistory: boolean } = { updateHistory: true },
   ) {
     const currentNode = selectedNodeRef.current;
@@ -313,7 +773,15 @@ export function FileTreeViewer({
 
     selectedNodeRef.current = node;
     setSelectedTreeNodeId(node.id);
-    onSelectNode(node);
+
+    if (node.fileView) {
+      onSelectFileView?.(node.fileView);
+      return;
+    }
+
+    if (node.sourceNode) {
+      onSelectNode(node.sourceNode);
+    }
   }
 
   function goBack() {
@@ -384,7 +852,7 @@ export function FileTreeViewer({
         </div>
         <Separator orientation="vertical" className="mx-1 h-4" />
         <div className="min-w-0 flex-1 truncate px-1 text-xs font-medium uppercase text-muted-foreground">
-          Data Sources
+          Directory Tree
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Button

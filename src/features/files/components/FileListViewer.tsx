@@ -1,10 +1,18 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
+import {
+  AutoSizer,
+  List,
+  type ListRowProps,
+} from "react-virtualized";
+import "react-virtualized/styles.css";
 import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
   ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
   File,
   FileCode2,
   FileImage,
@@ -19,14 +27,6 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import type { EvidenceDirectoryEntry } from "@/features/evidence/evidence-provider";
 import { cn } from "@/lib/utils";
 
@@ -34,10 +34,24 @@ type FileListViewerProps = {
   entries: EvidenceDirectoryEntry[];
   isLoading: boolean;
   selectedEntry: EvidenceDirectoryEntry | null;
+  title?: string;
+  statusLabel?: string;
+  emptyLabel?: string;
   canGoBack: boolean;
+  pageInfo?: FileListPageInfo | null;
+  isPageLoading?: boolean;
   onGoBack: () => void;
+  onNextPage?: () => void;
   onOpenFolder: (entry: EvidenceDirectoryEntry) => void;
+  onPreviousPage?: () => void;
   onSelectEntry: (entry: EvidenceDirectoryEntry) => void;
+};
+
+type FileListPageInfo = {
+  offset: number;
+  limit: number;
+  totalCount: number;
+  hasNextPage: boolean;
 };
 
 type FileRow = {
@@ -46,9 +60,7 @@ type FileRow = {
   name: string;
   path: string;
   type: string;
-  sizeLabel: string;
   sizeValue: number;
-  modifiedLabel: string;
   modifiedValue: number;
   plugin: string;
   status: string;
@@ -79,6 +91,22 @@ const columns: Array<{
   { key: "plugin", label: "Plugin", className: "w-[170px] min-w-[170px]" },
   { key: "status", label: "Status", className: "w-[92px] min-w-[92px]" },
 ];
+const fileListGridTemplateColumns = "280px 320px 90px 96px 150px 170px 92px";
+
+function formatCount(value: number) {
+  return new Intl.NumberFormat().format(value);
+}
+
+function formatPageRange(pageInfo: FileListPageInfo, visibleCount: number) {
+  if (pageInfo.totalCount === 0) {
+    return "0 of 0";
+  }
+
+  const start = pageInfo.offset + 1;
+  const end = Math.min(pageInfo.offset + visibleCount, pageInfo.totalCount);
+
+  return `${formatCount(start)}-${formatCount(end)} of ${formatCount(pageInfo.totalCount)}`;
+}
 
 function formatFileSize(size?: number) {
   if (size === undefined) {
@@ -113,6 +141,10 @@ function formatModifiedTime(modifiedMs?: number) {
 }
 
 function getEntryType(entry: EvidenceDirectoryEntry) {
+  if (entry.id.startsWith("file-view:")) {
+    return "File View";
+  }
+
   if (entry.kind === "directory") {
     return "Folder";
   }
@@ -125,7 +157,7 @@ function getEntryType(entry: EvidenceDirectoryEntry) {
 }
 
 function getEntryPlugin(entry: EvidenceDirectoryEntry) {
-  if (entry.kind === "directory") {
+  if (entry.kind === "directory" || entry.id.startsWith("file-view:")) {
     return "-";
   }
 
@@ -139,6 +171,26 @@ function getEntryPlugin(entry: EvidenceDirectoryEntry) {
     default:
       return "-";
   }
+}
+
+function getEntrySizeLabel(entry: EvidenceDirectoryEntry) {
+  if (entry.id.startsWith("file-view:")) {
+    return `${formatCount(entry.childCount ?? 0)} files`;
+  }
+
+  if (entry.kind === "directory") {
+    return `${formatCount(entry.childCount ?? 0)} items`;
+  }
+
+  return formatFileSize(entry.size);
+}
+
+function getEntryStatus(entry: EvidenceDirectoryEntry) {
+  if (entry.id.startsWith("file-view:")) {
+    return "View";
+  }
+
+  return entry.kind === "directory" ? "Folder" : "Indexed";
 }
 
 function getEntryIcon(entry: Pick<EvidenceDirectoryEntry, "kind" | "name">) {
@@ -216,15 +268,10 @@ function createFileRows(entries: EvidenceDirectoryEntry[]): FileRow[] {
     name: entry.name,
     path: entry.path,
     type: getEntryType(entry),
-    sizeLabel:
-      entry.kind === "directory"
-        ? `${entry.childCount ?? 0} items`
-        : formatFileSize(entry.size),
     sizeValue: entry.kind === "directory" ? 0 : (entry.size ?? 0),
-    modifiedLabel: formatModifiedTime(entry.modifiedMs),
     modifiedValue: entry.modifiedMs ?? 0,
     plugin: getEntryPlugin(entry),
-    status: entry.kind === "directory" ? "Folder" : "Indexed",
+    status: getEntryStatus(entry),
   }));
 }
 
@@ -255,6 +302,10 @@ function getSortValue(row: FileRow, key: SortKey) {
 }
 
 function sortFileRows(rows: FileRow[], sort: SortState) {
+  if (sort.key === "name" && sort.direction === "asc") {
+    return rows;
+  }
+
   return [...rows].sort((left, right) => {
     const leftValue = getSortValue(left, sort.key);
     const rightValue = getSortValue(right, sort.key);
@@ -324,6 +375,18 @@ function StatusBadge({ row }: { row: FileRow }) {
   );
 }
 
+function PageLoadingSpinner({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-block animate-spin rounded-full border-muted-foreground/30 border-t-foreground",
+        className ?? "size-4 border-2",
+      )}
+      aria-hidden="true"
+    />
+  );
+}
+
 function getContainingFolderPath(entry: EvidenceDirectoryEntry) {
   if (entry.kind === "directory") {
     return entry.path;
@@ -355,9 +418,16 @@ export function FileListViewer({
   entries,
   isLoading,
   selectedEntry,
+  title = "Logical Files",
+  statusLabel = "Directory-only acquisition",
+  emptyLabel = "No files in this directory",
   canGoBack,
+  pageInfo = null,
+  isPageLoading = false,
   onGoBack,
+  onNextPage,
   onOpenFolder,
+  onPreviousPage,
   onSelectEntry,
 }: FileListViewerProps) {
   const [sort, setSort] = useState<SortState>({
@@ -369,13 +439,13 @@ export function FileListViewer({
 
   return (
     <section
-      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+      className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
       aria-label="Logical file table"
     >
       <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
         <div className="flex min-w-0 items-center gap-2">
           <h1 className="text-xs font-medium uppercase text-muted-foreground">
-            Logical Files
+            {title}
           </h1>
           <Button
             type="button"
@@ -389,21 +459,79 @@ export function FileListViewer({
             Back
           </Button>
         </div>
-        <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
-          {isLoading ? "Loading folder" : "Directory-only acquisition"}
-        </Badge>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {pageInfo && (
+            <div className="flex items-center gap-1">
+              <Badge variant="outline" className="h-5 rounded-sm text-[11px]">
+                {formatPageRange(pageInfo, entries.length)}
+              </Badge>
+              {isPageLoading && (
+                <div
+                  className="grid size-6 place-items-center"
+                  role="status"
+                  aria-label="Loading page"
+                >
+                  <PageLoadingSpinner />
+                </div>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-6 rounded-sm"
+                disabled={pageInfo.offset === 0 || isPageLoading}
+                onClick={onPreviousPage}
+                title="Previous page"
+              >
+                <ChevronLeft className="size-3" aria-hidden="true" />
+                <span className="sr-only">Previous page</span>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-6 rounded-sm"
+                disabled={!pageInfo.hasNextPage || isPageLoading}
+                onClick={onNextPage}
+                title="Next page"
+              >
+                <ChevronRight className="size-3" aria-hidden="true" />
+                <span className="sr-only">Next page</span>
+              </Button>
+            </div>
+          )}
+          <Badge
+            variant="secondary"
+            className="h-5 rounded-sm text-[11px]"
+          >
+            {isPageLoading ? "Loading page" : isLoading ? "Loading" : statusLabel}
+          </Badge>
+        </div>
       </div>
 
-      <Table
-        containerClassName="min-h-0 flex-1 overflow-auto"
-        className="min-w-[1198px] table-fixed text-xs"
-      >
-        <TableHeader className="sticky top-0 z-10 bg-muted">
-          <TableRow className="hover:bg-muted">
+      {isLoading && (
+        <div
+          className="absolute inset-0 z-30 grid place-items-center bg-background/70 backdrop-blur-[1px]"
+          role="status"
+          aria-label="Loading file list"
+        >
+          <div className="flex flex-col items-center gap-3 rounded-sm border bg-background/95 px-5 py-4 text-xs text-muted-foreground shadow-md">
+            <PageLoadingSpinner className="size-12 border-4" />
+            <span>{isPageLoading ? "Loading page" : "Loading file list"}</span>
+          </div>
+        </div>
+      )}
+
+      <div className="relative min-h-0 flex-1 overflow-auto">
+        <div className="flex h-full min-w-[1198px] flex-col text-xs">
+          <div
+            className="sticky top-0 z-10 grid h-7 border-b bg-muted"
+            style={{ gridTemplateColumns: fileListGridTemplateColumns }}
+          >
             {columns.map((column) => (
-              <TableHead
+              <div
                 key={column.key}
-                className={cn("h-7 px-2", column.className)}
+                className={cn("min-w-0 px-2", column.className)}
               >
                 <Button
                   type="button"
@@ -417,75 +545,125 @@ export function FileListViewer({
                   <span className="truncate">{column.label}</span>
                   <SortIcon columnKey={column.key} sort={sort} />
                 </Button>
-              </TableHead>
+              </div>
             ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {sortedRows.map((row) => (
-            <ContextMenu key={row.id}>
-              <ContextMenuTrigger asChild>
-                <TableRow
-                  data-state={
-                    selectedEntry?.id === row.id ? "selected" : undefined
-                  }
-                  className="h-8 cursor-default"
-                  onClick={() => {
-                    onSelectEntry(row.entry);
-                  }}
-                  onContextMenu={() => {
-                    onSelectEntry(row.entry);
-                  }}
-                  onDoubleClick={() => {
-                    if (row.entry.kind === "directory") {
-                      onOpenFolder(row.entry);
-                    }
-                  }}
-                >
-                  <TableCell className="h-8 p-0">
-                    <FileNameCell row={row} />
-                  </TableCell>
-                  <TableCell className="h-8 truncate p-0 text-muted-foreground">
-                    {row.path}
-                  </TableCell>
-                  <TableCell className="h-8 p-0">{row.type}</TableCell>
-                  <TableCell className="h-8 p-0">{row.sizeLabel}</TableCell>
-                  <TableCell className="h-8 p-0">
-                    {row.modifiedLabel}
-                  </TableCell>
-                  <TableCell className="h-8 truncate p-0 text-muted-foreground">
-                    {row.plugin}
-                  </TableCell>
-                  <TableCell className="h-8 p-0">
-                    <StatusBadge row={row} />
-                  </TableCell>
-                </TableRow>
-              </ContextMenuTrigger>
-              <ContextMenuContent className="w-48">
-                <ContextMenuItem
-                  className="text-xs"
-                  onSelect={() => {
-                    void openContainingFolder(row.entry);
-                  }}
-                >
-                  <FolderOpen className="size-3.5" aria-hidden="true" />
-                  Open Containing Folder
-                </ContextMenuItem>
-              </ContextMenuContent>
-            </ContextMenu>
-          ))}
+          </div>
           {sortedRows.length === 0 && (
-            <TableRow>
-              <TableCell
-                colSpan={columns.length}
-                className="h-20 text-center text-xs text-muted-foreground"
-              >
-                {isLoading ? "Loading folder" : "No files in this directory"}
-              </TableCell>
-            </TableRow>
+            <div className="grid h-20 place-items-center text-center text-xs text-muted-foreground">
+              {isLoading ? "Loading" : emptyLabel}
+            </div>
           )}
-        </TableBody>
-      </Table>
+          {sortedRows.length > 0 && (
+            <div className="min-h-0 flex-1">
+              <AutoSizer>
+                {({ height, width }) => (
+                  <List
+                    height={height}
+                    rowCount={sortedRows.length}
+                    rowHeight={32}
+                    rowRenderer={(props: ListRowProps) => {
+                      const row = sortedRows[props.index];
+
+                      return (
+                        <FileListRow
+                          key={props.key}
+                          row={row}
+                          selectedEntry={selectedEntry}
+                          style={props.style}
+                          onOpenFolder={onOpenFolder}
+                          onSelectEntry={onSelectEntry}
+                        />
+                      );
+                    }}
+                    overscanRowCount={12}
+                    width={Math.max(width, 1198)}
+                  />
+                )}
+              </AutoSizer>
+            </div>
+          )}
+        </div>
+      </div>
     </section>
+  );
+}
+
+function FileListRow({
+  row,
+  selectedEntry,
+  style,
+  onOpenFolder,
+  onSelectEntry,
+}: {
+  row: FileRow;
+  selectedEntry: EvidenceDirectoryEntry | null;
+  style: CSSProperties;
+  onOpenFolder: (entry: EvidenceDirectoryEntry) => void;
+  onSelectEntry: (entry: EvidenceDirectoryEntry) => void;
+}) {
+  const sizeLabel = getEntrySizeLabel(row.entry);
+  const modifiedLabel = formatModifiedTime(row.entry.modifiedMs);
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          data-state={selectedEntry?.id === row.id ? "selected" : undefined}
+          className={cn(
+            "grid h-8 cursor-default items-center border-b text-xs hover:bg-muted/50 data-[state=selected]:bg-accent",
+          )}
+          style={{
+            ...style,
+            gridTemplateColumns: fileListGridTemplateColumns,
+          }}
+          onClick={() => {
+            onSelectEntry(row.entry);
+          }}
+          onContextMenu={() => {
+            onSelectEntry(row.entry);
+          }}
+          onDoubleClick={() => {
+            if (row.entry.kind === "directory") {
+              onOpenFolder(row.entry);
+            }
+          }}
+        >
+          <div className="min-w-0 px-2">
+            <FileNameCell row={row} />
+          </div>
+          <div className="truncate px-2 text-muted-foreground">{row.path}</div>
+          <div className="truncate px-2">{row.type}</div>
+          <div className="truncate px-2">{sizeLabel}</div>
+          <div className="truncate px-2">{modifiedLabel}</div>
+          <div className="truncate px-2 text-muted-foreground">{row.plugin}</div>
+          <div className="px-2">
+            <StatusBadge row={row} />
+          </div>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-48">
+        {row.entry.kind === "directory" ? (
+          <ContextMenuItem
+            className="text-xs"
+            onSelect={() => {
+              onOpenFolder(row.entry);
+            }}
+          >
+            <FolderOpen className="size-3.5" aria-hidden="true" />
+            Open
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem
+            className="text-xs"
+            onSelect={() => {
+              void openContainingFolder(row.entry);
+            }}
+          >
+            <FolderOpen className="size-3.5" aria-hidden="true" />
+            Open Containing Folder
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

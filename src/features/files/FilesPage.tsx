@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle, Plus, Play, Search } from "lucide-react";
 
@@ -43,7 +43,10 @@ import {
   type FileFormatPreview,
   type FilePreviewTab,
 } from "@/features/files/components/FilePreviewViewer";
-import { FileTreeViewer } from "@/features/files/components/FileTreeViewer";
+import {
+  FileTreeViewer,
+  type FileViewSelection,
+} from "@/features/files/components/FileTreeViewer";
 import {
   cancelDatasourcePluginRun,
   listPythonPlugins,
@@ -88,11 +91,58 @@ const pluginTargetFilters: Array<{
   { target: "other", label: "Other" },
 ];
 
+type FileViewIndex = {
+  entries: Record<string, EvidenceDirectoryEntry[]>;
+  counts: Record<string, number>;
+};
+
+const FILE_VIEW_PAGE_SIZE = 10_000;
+
+type FileViewPageInfo = {
+  offset: number;
+  limit: number;
+  totalCount: number;
+  hasNextPage: boolean;
+};
+
+type FileViewEntriesPage = FileViewPageInfo & {
+  entries: EvidenceDirectoryEntry[];
+};
+
+function createFileViewPageInfo(
+  view: FileViewSelection,
+  entriesById: Record<string, EvidenceDirectoryEntry[]>,
+  counts: Record<string, number>,
+): FileViewPageInfo | null {
+  if (view.childViews?.length) {
+    return null;
+  }
+
+  const entries = entriesById[view.id] ?? [];
+  const totalCount = counts[view.id] ?? view.count ?? entries.length;
+
+  return {
+    offset: 0,
+    limit: FILE_VIEW_PAGE_SIZE,
+    totalCount,
+    hasNextPage: entries.length < totalCount,
+  };
+}
+
 export function FilesPage() {
   const { error, isLoading, listing } = useEvidence();
   const { activeCase } = useCases();
   const [selectedDirectory, setSelectedDirectory] =
     useState<EvidenceTreeNode | null>(null);
+  const [selectedFileView, setSelectedFileView] =
+    useState<FileViewSelection | null>(null);
+  const selectedFileViewRef = useRef<FileViewSelection | null>(null);
+  const [fileViewEntriesById, setFileViewEntriesById] = useState<
+    Record<string, EvidenceDirectoryEntry[]>
+  >({});
+  const [fileViewCounts, setFileViewCounts] = useState<Record<string, number>>(
+    {},
+  );
   const [directoryHistory, setDirectoryHistory] = useState<EvidenceTreeNode[]>(
     [],
   );
@@ -120,6 +170,7 @@ export function FilesPage() {
   >("all");
   const [isDataSourcesLoading, setIsDataSourcesLoading] = useState(false);
   const [isEntriesLoading, setIsEntriesLoading] = useState(false);
+  const [isFileViewPageLoading, setIsFileViewPageLoading] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [isPluginsLoading, setIsPluginsLoading] = useState(false);
   const [isRunningPlugins, setIsRunningPlugins] = useState(false);
@@ -127,9 +178,19 @@ export function FilesPage() {
   const [dataSourceRefreshKey, setDataSourceRefreshKey] = useState(0);
   const [activePreviewTab, setActivePreviewTab] =
     useState<FilePreviewTab>("text");
+  const [selectedFileViewPageInfo, setSelectedFileViewPageInfo] =
+    useState<FileViewPageInfo | null>(null);
   const treeRootNodes = useMemo(() => {
     return [...dataSourceTreeNodes, ...(listing?.tree ? [listing.tree] : [])];
   }, [dataSourceTreeNodes, listing?.tree]);
+  const fileViewRoots = useMemo(() => {
+    const roots = [
+      ...dataSources.flatMap((dataSource) => dataSource.paths),
+      ...(listing?.rootPath ? [listing.rootPath] : []),
+    ];
+
+    return Array.from(new Set(roots));
+  }, [dataSources, listing?.rootPath]);
   const visiblePlugins = useMemo(() => {
     const normalizedFilter = pluginFilter.trim().toLowerCase();
 
@@ -165,6 +226,9 @@ export function FilesPage() {
     setSelectedDirectory(listing?.tree ?? null);
     setVisibleEntries(listing?.entries ?? []);
     setSelectedEntry(listing?.entries[0] ?? null);
+    setSelectedFileView(null);
+    selectedFileViewRef.current = null;
+    setSelectedFileViewPageInfo(null);
     setDirectoryHistory([]);
     setEntriesError(null);
     setPreviewError(null);
@@ -233,12 +297,122 @@ export function FilesPage() {
   }, [activeCase]);
 
   useEffect(() => {
-    if (listing || selectedDirectory || !dataSourceTreeNodes[0]) {
+    if (listing || selectedDirectory || selectedFileView || !dataSourceTreeNodes[0]) {
       return;
     }
 
     selectDataSourceRoot(dataSourceTreeNodes[0]);
-  }, [dataSourceTreeNodes, listing, selectedDirectory]);
+  }, [dataSourceTreeNodes, listing, selectedDirectory, selectedFileView]);
+
+  useEffect(() => {
+    selectedFileViewRef.current = selectedFileView;
+  }, [selectedFileView]);
+
+  function clearFileViewPageLoadingAfterPaint(viewId: string) {
+    window.requestAnimationFrame(() => {
+      if (selectedFileViewRef.current?.id === viewId) {
+        setIsFileViewPageLoading(false);
+      }
+    });
+  }
+
+  function clearFileViewIndexLoadingAfterPaint(viewId: string) {
+    window.requestAnimationFrame(() => {
+      if (selectedFileViewRef.current?.id === viewId) {
+        setIsEntriesLoading(false);
+      }
+    });
+  }
+
+  useEffect(() => {
+    if (fileViewRoots.length === 0) {
+      setFileViewEntriesById({});
+      setFileViewCounts({});
+      setSelectedFileViewPageInfo(null);
+      setIsFileViewPageLoading(false);
+      return;
+    }
+
+    let isCurrent = true;
+    let deferredSelectedViewRenderId: string | null = null;
+    setEntriesError(null);
+    if (selectedFileViewRef.current) {
+      setIsEntriesLoading(true);
+    }
+
+    invoke<FileViewIndex>("build_file_view_index", {
+      roots: fileViewRoots,
+    })
+      .then((index) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setFileViewEntriesById(index.entries);
+        setFileViewCounts(index.counts);
+        const currentView = selectedFileViewRef.current;
+
+        if (currentView) {
+          const refreshedView = applyFileViewCounts(currentView, index.counts);
+          setSelectedFileView(refreshedView);
+          selectedFileViewRef.current = refreshedView;
+
+          setSelectedFileViewPageInfo(
+            createFileViewPageInfo(refreshedView, index.entries, index.counts),
+          );
+
+          if (refreshedView.childViews?.length) {
+            const entries = refreshedView.childViews.map(fileViewToDirectoryEntry);
+            setVisibleEntries(entries);
+            setSelectedEntry(entries[0] ?? null);
+          } else {
+            const entries = index.entries[refreshedView.id] ?? [];
+            deferredSelectedViewRenderId = refreshedView.id;
+
+            window.requestAnimationFrame(() => {
+              if (!isCurrent || selectedFileViewRef.current?.id !== refreshedView.id) {
+                return;
+              }
+
+              // Large file-view pages can contain 10,000 rows. Defer attaching
+              // them until after the loading overlay has rendered, then clear the
+              // overlay on the next paint so the UI does not feel stuck on click.
+              setVisibleEntries(entries);
+              setSelectedEntry(entries[0] ?? null);
+              clearFileViewIndexLoadingAfterPaint(refreshedView.id);
+            });
+          }
+        }
+      })
+      .catch((caughtError) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setFileViewEntriesById({});
+        setFileViewCounts({});
+        setSelectedFileViewPageInfo(null);
+        setEntriesError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : String(caughtError),
+        );
+      })
+      .finally(() => {
+        if (isCurrent) {
+          if (
+            selectedFileViewRef.current &&
+            selectedFileViewRef.current.id !== deferredSelectedViewRenderId
+          ) {
+            setIsEntriesLoading(false);
+          }
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [fileViewRoots]);
 
   useEffect(() => {
     if (!selectedEntry || selectedEntry.kind !== "file") {
@@ -313,6 +487,9 @@ export function FilesPage() {
       setDirectoryHistory((history) => [...history, selectedDirectory]);
     }
 
+    setSelectedFileView(null);
+    selectedFileViewRef.current = null;
+    setSelectedFileViewPageInfo(null);
     setSelectedDirectory(node);
     setEntriesError(null);
     setIsEntriesLoading(true);
@@ -338,6 +515,21 @@ export function FilesPage() {
   }
 
   function openFolderEntry(entry: EvidenceDirectoryEntry) {
+    const fileViewId = entry.id.startsWith("file-view:")
+      ? entry.id.slice("file-view:".length)
+      : null;
+
+    if (fileViewId && selectedFileView?.childViews) {
+      const childView = selectedFileView.childViews.find(
+        (view) => view.id === fileViewId,
+      );
+
+      if (childView) {
+        selectFileView(childView);
+        return;
+      }
+    }
+
     void loadDirectoryEntries(
       {
         id: entry.id,
@@ -358,6 +550,9 @@ export function FilesPage() {
     }
 
     setDirectoryHistory((history) => history.slice(0, -1));
+    setSelectedFileView(null);
+    selectedFileViewRef.current = null;
+    setSelectedFileViewPageInfo(null);
 
     if (previousDirectory.kind === "datasource") {
       selectDataSourceRoot(previousDirectory);
@@ -379,6 +574,9 @@ export function FilesPage() {
 
     const entries = (node.children ?? []).map(treeNodeToDirectoryEntry);
 
+    setSelectedFileView(null);
+    selectedFileViewRef.current = null;
+    setSelectedFileViewPageInfo(null);
     setSelectedDirectory(node);
     setVisibleEntries(entries);
     setSelectedEntry(entries[0] ?? null);
@@ -387,6 +585,10 @@ export function FilesPage() {
   }
 
   function selectTreeNode(node: EvidenceTreeNode) {
+    setSelectedFileView(null);
+    selectedFileViewRef.current = null;
+    setSelectedFileViewPageInfo(null);
+
     if (node.kind === "datasource") {
       selectDataSourceRoot(node, { pushHistory: true });
       return;
@@ -399,6 +601,147 @@ export function FilesPage() {
     }
 
     void loadDirectoryEntries(node, { pushHistory: true });
+  }
+
+  function selectFileView(view: FileViewSelection) {
+    if (fileViewRoots.length === 0) {
+      setSelectedFileView(view);
+      selectedFileViewRef.current = view;
+      setSelectedDirectory(null);
+      setSelectedFileViewPageInfo(null);
+      setVisibleEntries([]);
+      setSelectedEntry(null);
+      setEntriesError("Add or open a data source before using file views.");
+      return;
+    }
+
+    if (selectedDirectory) {
+      setDirectoryHistory((history) => [...history, selectedDirectory]);
+    }
+
+    setSelectedFileView(view);
+    selectedFileViewRef.current = view;
+    setSelectedDirectory(null);
+    setEntriesError(null);
+
+    if (view.childViews?.length) {
+      const entries = view.childViews.map(fileViewToDirectoryEntry);
+      setIsEntriesLoading(false);
+      setIsFileViewPageLoading(false);
+      setSelectedFileViewPageInfo(null);
+      setVisibleEntries(entries);
+      setSelectedEntry(entries[0] ?? null);
+      return;
+    }
+
+    setIsEntriesLoading(false);
+    setIsFileViewPageLoading(true);
+    setSelectedFileViewPageInfo(
+      createFileViewPageInfo(view, fileViewEntriesById, fileViewCounts),
+    );
+    setVisibleEntries([]);
+    setSelectedEntry(null);
+
+    const cachedEntries = fileViewEntriesById[view.id];
+
+    if (cachedEntries) {
+      window.requestAnimationFrame(() => {
+        if (selectedFileViewRef.current?.id !== view.id) {
+          return;
+        }
+
+        // File-view leaf nodes use prebuilt 10,000-row pages. Rendering them on
+        // the click stack blocks the spinner, so the page data is attached after
+        // the loading state has had a frame to paint.
+        setVisibleEntries(cachedEntries);
+        setSelectedEntry(cachedEntries[0] ?? null);
+        clearFileViewPageLoadingAfterPaint(view.id);
+      });
+      return;
+    }
+
+    void loadFileViewPage(0);
+  }
+
+  async function loadFileViewPage(offset: number) {
+    const view = selectedFileViewRef.current;
+
+    if (!view || view.childViews?.length || fileViewRoots.length === 0) {
+      return;
+    }
+
+    const requestedOffset = Math.max(0, offset);
+
+    setIsFileViewPageLoading(true);
+    setEntriesError(null);
+    let clearLoadingAfterPaint = false;
+
+    try {
+      const page = await invoke<FileViewEntriesPage>(
+        "list_file_view_entries_page",
+        {
+          roots: fileViewRoots,
+          viewId: view.id,
+          offset: requestedOffset,
+          limit: FILE_VIEW_PAGE_SIZE,
+        },
+      );
+
+      if (selectedFileViewRef.current?.id !== view.id) {
+        return;
+      }
+
+      setVisibleEntries(page.entries);
+      setSelectedEntry(page.entries[0] ?? null);
+      setFileViewCounts((counts) => ({
+        ...counts,
+        [view.id]: page.totalCount,
+      }));
+      setSelectedFileViewPageInfo({
+        offset: page.offset,
+        limit: page.limit,
+        totalCount: page.totalCount,
+        hasNextPage: page.hasNextPage,
+      });
+      clearLoadingAfterPaint = true;
+    } catch (caughtError) {
+      setEntriesError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : String(caughtError),
+      );
+    } finally {
+      if (selectedFileViewRef.current?.id === view.id) {
+        if (clearLoadingAfterPaint) {
+          clearFileViewPageLoadingAfterPaint(view.id);
+        } else {
+          setIsFileViewPageLoading(false);
+        }
+      }
+    }
+  }
+
+  function loadPreviousFileViewPage() {
+    if (!selectedFileViewPageInfo) {
+      return;
+    }
+
+    void loadFileViewPage(
+      Math.max(
+        0,
+        selectedFileViewPageInfo.offset - selectedFileViewPageInfo.limit,
+      ),
+    );
+  }
+
+  function loadNextFileViewPage() {
+    if (!selectedFileViewPageInfo?.hasNextPage) {
+      return;
+    }
+
+    void loadFileViewPage(
+      selectedFileViewPageInfo.offset + selectedFileViewPageInfo.limit,
+    );
   }
 
   async function handleRemoveDataSource(node: EvidenceTreeNode) {
@@ -421,6 +764,8 @@ export function FilesPage() {
         setSelectedDirectory(null);
         setVisibleEntries([]);
         setSelectedEntry(null);
+        setSelectedFileView(null);
+        selectedFileViewRef.current = null;
         setDirectoryHistory([]);
       }
     } catch (caughtError) {
@@ -608,6 +953,12 @@ export function FilesPage() {
           <span>{listing ? "1 directory mounted" : "0 directories mounted"}</span>
           <Separator orientation="vertical" className="h-4" />
           <span>{visibleEntries.length} visible entries</span>
+          {selectedFileView && (
+            <>
+              <Separator orientation="vertical" className="h-4" />
+              <span>View: {selectedFileView.name}</span>
+            </>
+          )}
         </div>
       </section>
       <DataSourceWizardDialog
@@ -639,7 +990,12 @@ export function FilesPage() {
             rootNode={listing?.tree ?? null}
             rootNodes={treeRootNodes}
             selectedDirectory={selectedDirectory}
+            selectedFileView={selectedFileView}
+            fileViewCounts={fileViewCounts}
             onSelectNode={selectTreeNode}
+            onSelectFileView={(view) => {
+              selectFileView(view);
+            }}
             onRemoveDataSource={(node) => {
               void handleRemoveDataSource(node);
             }}
@@ -665,11 +1021,26 @@ export function FilesPage() {
             >
               <FileListViewer
                 entries={visibleEntries}
-                isLoading={isEntriesLoading}
+                isLoading={isEntriesLoading || isFileViewPageLoading}
                 selectedEntry={selectedEntry}
+                title={selectedFileView?.name}
+                statusLabel={
+                  selectedFileView
+                    ? "Autopsy file view"
+                    : "Directory-only acquisition"
+                }
+                emptyLabel={
+                  selectedFileView
+                    ? "No files match this view"
+                    : "No files in this directory"
+                }
                 canGoBack={directoryHistory.length > 0}
+                pageInfo={selectedFileViewPageInfo}
+                isPageLoading={isFileViewPageLoading}
                 onGoBack={goBackDirectory}
+                onNextPage={loadNextFileViewPage}
                 onOpenFolder={openFolderEntry}
+                onPreviousPage={loadPreviousFileViewPage}
                 onSelectEntry={setSelectedEntry}
               />
             </ResizablePanel>
@@ -922,7 +1293,11 @@ export function FilesPage() {
         </span>
         <span>Evidence: {listing?.rootName ?? "none"}</span>
         <span>Datasources: {dataSourceTreeNodes.length}</span>
-        <span>Folder: {selectedDirectory?.name ?? "none"}</span>
+        <span>
+          {selectedFileView
+            ? `View: ${selectedFileView.name}`
+            : `Folder: ${selectedDirectory?.name ?? "none"}`}
+        </span>
         <span>Files indexed: {visibleEntries.length}</span>
         <span>Plugin jobs: 0 running</span>
       </footer>
@@ -1009,5 +1384,33 @@ function treeNodeToDirectoryEntry(
     size: node.size,
     modifiedMs: node.modifiedMs,
     childCount: node.childCount ?? node.files,
+  };
+}
+
+function fileViewToDirectoryEntry(view: FileViewSelection): EvidenceDirectoryEntry {
+  return {
+    id: `file-view:${view.id}`,
+    name: view.name,
+    path: view.description,
+    kind: "directory",
+    childCount: view.count,
+  };
+}
+
+function applyFileViewCounts(
+  view: FileViewSelection,
+  counts: Record<string, number>,
+): FileViewSelection {
+  const childViews = view.childViews?.map((childView) =>
+    applyFileViewCounts(childView, counts),
+  );
+  const count = childViews?.length
+    ? childViews.reduce((total, childView) => total + childView.count, 0)
+    : counts[view.id] ?? view.count;
+
+  return {
+    ...view,
+    count,
+    childViews,
   };
 }
