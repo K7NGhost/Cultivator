@@ -1746,6 +1746,8 @@ pub fn run() {
             tauri_commands::read_text_preview_lines,
             tauri_commands::read_hex_preview,
             tauri_commands::read_hex_file,
+            tauri_commands::open_hex_preview,
+            tauri_commands::read_hex_preview_page,
             tauri_commands::read_file_format_preview,
             list_sqlite_tables,
             read_sqlite_table_rows

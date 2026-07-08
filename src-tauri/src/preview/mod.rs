@@ -55,20 +55,3 @@ pub(crate) fn read_file_prefix(path: &Path, max_bytes: usize) -> Result<Vec<u8>,
 
     Ok(bytes)
 }
-
-pub(crate) fn format_byte_count(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit_index = 0usize;
-
-    while value >= 1024.0 && unit_index + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit_index += 1;
-    }
-
-    if unit_index == 0 {
-        format!("{bytes} {}", UNITS[unit_index])
-    } else {
-        format!("{value:.1} {}", UNITS[unit_index])
-    }
-}

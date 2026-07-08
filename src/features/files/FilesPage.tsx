@@ -101,7 +101,6 @@ export function FilesPage() {
   );
   const [selectedEntry, setSelectedEntry] =
     useState<EvidenceDirectoryEntry | null>(null);
-  const [hexPreview, setHexPreview] = useState<string[]>([]);
   const [filePreview, setFilePreview] = useState<FileFormatPreview | null>(null);
   const [entriesError, setEntriesError] = useState<string | null>(null);
   const [dataSourceError, setDataSourceError] = useState<string | null>(null);
@@ -243,7 +242,6 @@ export function FilesPage() {
 
   useEffect(() => {
     if (!selectedEntry || selectedEntry.kind !== "file") {
-      setHexPreview([]);
       setFilePreview(null);
       setPreviewError(null);
       setIsPreviewLoading(false);
@@ -253,7 +251,6 @@ export function FilesPage() {
     let isCurrent = true;
     setIsPreviewLoading(true);
     setPreviewError(null);
-    setHexPreview([]);
     setFilePreview(null);
 
     const filePreviewRequest = invoke<FileFormatPreview | null>(
@@ -299,53 +296,6 @@ export function FilesPage() {
       isCurrent = false;
     };
   }, [selectedEntry]);
-
-  useEffect(() => {
-    if (
-      activePreviewTab !== "hex" ||
-      !selectedEntry ||
-      selectedEntry.kind !== "file"
-    ) {
-      return;
-    }
-
-    let isCurrent = true;
-    setIsPreviewLoading(true);
-    setPreviewError(null);
-    setHexPreview([]);
-
-    invoke<string[]>("read_hex_file", {
-      path: selectedEntry.path,
-    })
-      .then((nextHexPreview) => {
-        if (!isCurrent) {
-          return;
-        }
-
-        setHexPreview(nextHexPreview);
-      })
-      .catch((caughtError) => {
-        if (!isCurrent) {
-          return;
-        }
-
-        setPreviewError(
-          caughtError instanceof Error
-            ? caughtError.message
-            : String(caughtError),
-        );
-        setHexPreview([]);
-      })
-      .finally(() => {
-        if (isCurrent) {
-          setIsPreviewLoading(false);
-        }
-      });
-
-    return () => {
-      isCurrent = false;
-    };
-  }, [activePreviewTab, selectedEntry]);
 
   async function loadDirectoryEntries(
     node: EvidenceTreeNode,
@@ -734,7 +684,6 @@ export function FilesPage() {
               <FilePreviewViewer
                 activeTab={activePreviewTab}
                 filePreview={filePreview}
-                hexPreview={hexPreview}
                 isLoading={isPreviewLoading}
                 onActiveTabChange={setActivePreviewTab}
                 selectedEntry={selectedEntry}

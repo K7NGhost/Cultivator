@@ -1,10 +1,4 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import {
-  AutoSizer,
-  List,
-  type ListRowProps,
-} from "react-virtualized";
-import "react-virtualized/styles.css";
 import { ChevronLeft, ChevronRight, Database, FileCode2, Hexagon } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -19,13 +13,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { EvidenceDirectoryEntry } from "@/features/evidence/evidence-provider";
+import { HexPreviewViewer } from "@/features/files/components/HexPreviewViewer";
 import { TextPreviewViewer } from "@/features/files/components/TextPreviewViewer";
 import { cn } from "@/lib/utils";
 
 type FilePreviewViewerProps = {
   activeTab: FilePreviewTab;
   filePreview: FileFormatPreview | null;
-  hexPreview: string[];
   isLoading: boolean;
   onActiveTabChange: (tab: FilePreviewTab) => void;
   selectedEntry: EvidenceDirectoryEntry | null;
@@ -54,50 +48,6 @@ type SqliteTableRows = {
   rows: unknown[][];
   totalRows: number;
 };
-
-type HexLinesListProps = {
-  emptyText: string;
-  isLoading: boolean;
-  lines: string[];
-};
-
-function HexLinesList({
-  emptyText,
-  isLoading,
-  lines,
-}: HexLinesListProps) {
-  if (lines.length === 0) {
-    return (
-      <div className="p-2 font-mono text-xs text-muted-foreground">
-        {isLoading ? "Loading preview..." : emptyText}
-      </div>
-    );
-  }
-
-  return (
-    <AutoSizer>
-      {({ height, width }) => (
-        <List
-          className="font-mono text-xs"
-          width={width}
-          height={height}
-          rowCount={lines.length}
-          rowHeight={20}
-          overscanRowCount={20}
-          rowRenderer={({ index, key, style }: ListRowProps) => (
-            <div
-              key={key}
-              style={style}
-              className="overflow-hidden whitespace-pre px-2 leading-5"
-            >
-              {lines[index]}
-            </div>
-          )}
-        />
-      )}
-    </AutoSizer>
-  );
-}
 
 function FileFormatPanel({
   filePreview,
@@ -469,7 +419,6 @@ function formatSqliteCell(value: unknown) {
 export function FilePreviewViewer({
   activeTab,
   filePreview,
-  hexPreview,
   isLoading,
   onActiveTabChange,
   selectedEntry,
@@ -548,9 +497,8 @@ export function FilePreviewViewer({
           value="hex"
           className="m-0 min-h-0 min-w-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
         >
-          <HexLinesList
-            lines={hexPreview}
-            isLoading={isLoading}
+          <HexPreviewViewer
+            path={selectedEntry?.kind === "file" ? selectedEntry.path : null}
             emptyText={
               selectedEntry?.kind === "directory"
                 ? "Select a file to preview hex."

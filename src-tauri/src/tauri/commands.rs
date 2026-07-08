@@ -30,6 +30,21 @@ pub async fn read_hex_file(path: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+pub async fn open_hex_preview(
+    path: String,
+) -> Result<crate::preview::hex::HexPreviewSummary, String> {
+    crate::preview::hex::open(path).await
+}
+
+#[tauri::command]
+pub async fn read_hex_preview_page(
+    path: String,
+    page_index: u64,
+) -> Result<crate::preview::hex::HexPreviewPage, String> {
+    crate::preview::hex::read_page(path, page_index).await
+}
+
+#[tauri::command]
 pub async fn read_file_format_preview(
     path: String,
 ) -> Result<Option<crate::preview::FileFormatPreview>, String> {
