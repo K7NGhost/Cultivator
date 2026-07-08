@@ -5,6 +5,7 @@ pub mod hex;
 pub mod image;
 pub mod strings;
 pub mod text;
+pub mod video;
 
 pub use text::{
     open as open_text_preview_impl, preview as read_text_preview_impl,
@@ -38,6 +39,10 @@ pub async fn file_format_preview(path: String) -> Result<Option<FileFormatPrevie
 
     if let Some(image_preview) = image::preview(&path, &bytes) {
         return Ok(Some(image_preview));
+    }
+
+    if let Some(video_preview) = video::preview(&path, &bytes) {
+        return Ok(Some(video_preview));
     }
 
     Ok(None)
