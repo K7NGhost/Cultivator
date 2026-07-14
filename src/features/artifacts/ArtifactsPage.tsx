@@ -864,6 +864,7 @@ export function ArtifactsPage() {
   const [artifacts, setArtifacts] = useState<StoredArtifactRecord[]>([]);
   const [plugins, setPlugins] = useState<PythonPlugin[]>([]);
   const [datasources, setDatasources] = useState<DataSourceRecord[]>([]);
+  const [selectedDatasourceId, setSelectedDatasourceId] = useState("all");
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(
     null,
   );
@@ -887,22 +888,31 @@ export function ArtifactsPage() {
   const datasourceMap = useMemo(() => {
     return new Map(datasources.map((datasource) => [datasource.id, datasource]));
   }, [datasources]);
+  const visibleArtifacts = useMemo(
+    () =>
+      selectedDatasourceId === "all"
+        ? artifacts
+        : artifacts.filter(
+            (artifact) => artifact.datasourceId === selectedDatasourceId,
+          ),
+    [artifacts, selectedDatasourceId],
+  );
   const categories = useMemo(() => {
-    return artifacts.reduce((counts, artifact) => {
+    return visibleArtifacts.reduce((counts, artifact) => {
       const category = getPayloadCategory(artifact);
 
       counts.set(category, (counts.get(category) ?? 0) + 1);
 
       return counts;
     }, new Map<string, number>());
-  }, [artifacts]);
+  }, [visibleArtifacts]);
   const artifactEntryCount = useMemo(
-    () => getArtifactEntriesCount(artifacts),
-    [artifacts],
+    () => getArtifactEntriesCount(visibleArtifacts),
+    [visibleArtifacts],
   );
   const artifactTree = useMemo(
-    () => buildArtifactTree(artifacts, showEmptyArtifacts),
-    [artifacts, showEmptyArtifacts],
+    () => buildArtifactTree(visibleArtifacts, showEmptyArtifacts),
+    [visibleArtifacts, showEmptyArtifacts],
   );
   const selectedArtifactNode =
     findArtifactNodeById(artifactTree, selectedArtifactNodeId) ??
@@ -919,6 +929,7 @@ export function ArtifactsPage() {
       setArtifacts([]);
       setPlugins([]);
       setDatasources([]);
+      setSelectedDatasourceId("all");
       setSelectedArtifactId(null);
       setSelectedArtifactNodeId(null);
       setLoadState({ error: null, isLoading: false });
@@ -937,6 +948,12 @@ export function ArtifactsPage() {
       setArtifacts(nextArtifacts);
       setPlugins(nextPlugins);
       setDatasources(nextDatasources);
+      setSelectedDatasourceId((currentId) =>
+        currentId === "all" ||
+        nextDatasources.some((datasource) => datasource.id === currentId)
+          ? currentId
+          : "all",
+      );
       setSelectedArtifactId((currentId) => {
         if (nextArtifacts.some((artifact) => artifact.id === currentId)) {
           return currentId;
@@ -1028,9 +1045,56 @@ export function ArtifactsPage() {
           <RefreshCw className="size-3.5" aria-hidden="true" />
           Refresh
         </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              className="h-7 max-w-56 justify-between gap-2 rounded-sm px-2 text-xs"
+              disabled={!activeCase || datasources.length === 0}
+            >
+              <Database className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">
+                {selectedDatasourceId === "all"
+                  ? "All datasources"
+                  : datasourceMap.get(selectedDatasourceId)?.name ??
+                    "All datasources"}
+              </span>
+              <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-56">
+            <DropdownMenuItem onSelect={() => setSelectedDatasourceId("all")}>
+              <Check
+                className={cn(
+                  "size-3.5",
+                  selectedDatasourceId !== "all" && "opacity-0",
+                )}
+                aria-hidden="true"
+              />
+              All datasources
+            </DropdownMenuItem>
+            {datasources.map((datasource) => (
+              <DropdownMenuItem
+                key={datasource.id}
+                onSelect={() => setSelectedDatasourceId(datasource.id)}
+              >
+                <Check
+                  className={cn(
+                    "size-3.5",
+                    selectedDatasourceId !== datasource.id && "opacity-0",
+                  )}
+                  aria-hidden="true"
+                />
+                <span className="truncate">{datasource.name}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
           <span>
-            {formatEntryHitLabel(artifactEntryCount, artifacts.length)}
+            {formatEntryHitLabel(artifactEntryCount, visibleArtifacts.length)}
           </span>
           <Separator orientation="vertical" className="h-4" />
           <span>{categories.size.toLocaleString()} categories</span>
@@ -1050,14 +1114,14 @@ export function ArtifactsPage() {
       >
         <ResizablePanel defaultSize="38%" minSize="24%">
           <ArtifactTreeViewer
-            artifacts={artifacts}
+            artifacts={visibleArtifacts}
             entryCount={artifactEntryCount}
             showEmptyArtifacts={showEmptyArtifacts}
             treeData={artifactTree}
             selectedTreeNodeId={selectedArtifactNode?.id ?? null}
             emptyText={
               activeCase
-                ? artifacts.length > 0
+                ? visibleArtifacts.length > 0
                   ? "No artifacts with entries are visible."
                   : "No artifacts have been created by plugins yet."
                 : "Create or select a case before viewing artifacts."

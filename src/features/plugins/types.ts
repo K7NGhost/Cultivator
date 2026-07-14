@@ -32,5 +32,6 @@ export type PluginLogRecord = {
 
 export type PluginRunSummary = {
   datasourceId: string;
+  datasourcePathsUpdated: boolean;
   jobs: PluginJobRecord[];
 };

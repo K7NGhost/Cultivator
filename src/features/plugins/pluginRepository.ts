@@ -11,9 +11,12 @@ import type {
 export const archiveExtractorPluginId = "archive-extractor";
 
 export function pluginRunUpdatedDatasourcePaths(summary: PluginRunSummary) {
-  return summary.jobs.some(
-    (job) =>
-      job.pluginId === archiveExtractorPluginId && job.status === "complete",
+  return (
+    summary.datasourcePathsUpdated ||
+    summary.jobs.some(
+      (job) =>
+        job.pluginId === archiveExtractorPluginId && job.status === "complete",
+    )
   );
 }
 

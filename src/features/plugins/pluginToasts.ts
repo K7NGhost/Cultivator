@@ -292,13 +292,30 @@ function ensureProgressListener() {
     const progress = event.payload;
     const run = activeRuns.get(progress.runId);
     if (!run || progress.total <= 0) return;
+    const reportedProgress = {
+      ...progress,
+      completed: Math.min(progress.completed, progress.total),
+    };
+    const hasJob = run.jobs.some((job) => job.pluginId === progress.pluginId);
     activeRuns.set(progress.runId, {
       ...run,
-      jobs: run.jobs.map((job) =>
-        job.pluginId === progress.pluginId
-          ? { ...job, progress: { ...progress, completed: Math.min(progress.completed, progress.total) } }
-          : job,
-      ),
+      jobs: hasJob
+        ? run.jobs.map((job) =>
+            job.pluginId === progress.pluginId
+              ? { ...job, progress: reportedProgress }
+              : job,
+          )
+        : [
+            {
+              pluginId: progress.pluginId,
+              pluginName:
+                progress.pluginId === "archive-extractor"
+                  ? "Archive Extractor"
+                  : progress.pluginId,
+              progress: reportedProgress,
+            },
+            ...run.jobs,
+          ],
     });
     notifyIngestToastSubscribers();
   });

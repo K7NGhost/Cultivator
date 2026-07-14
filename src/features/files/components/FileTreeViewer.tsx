@@ -636,7 +636,8 @@ function getNodeIconClassName(node: AutopsyTreeNode) {
 function isZipTreeNode(node: AutopsyTreeNode) {
   return (
     (node.kind === "file" || node.kind === "directory") &&
-    (/\.zip$/i.test(node.name) || /\.zip$/i.test(node.path ?? ""))
+    (/\.(zip|tar|gz|tar\.gz|tgz)$/i.test(node.name) ||
+      /\.(zip|tar|gz|tar\.gz|tgz)$/i.test(node.path ?? ""))
   );
 }
 

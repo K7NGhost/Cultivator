@@ -312,6 +312,7 @@ pub struct PluginLogRecord {
 pub struct PluginRunSummary {
     pub datasource_id: String,
     pub jobs: Vec<PluginJobRecord>,
+    pub datasource_paths_updated: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1055,10 +1056,19 @@ pub async fn list_plugin_artifacts(
             label,
             payload,
             created_at
-          FROM plugin_results
-          WHERE plugin_id != $1
-            AND result_kind NOT IN ($2, $3)
-          ORDER BY created_at DESC
+          FROM plugin_results AS result
+          WHERE result.plugin_id != $1
+            AND result.result_kind NOT IN ($2, $3)
+            AND result.job_id = (
+              SELECT job.id
+              FROM plugin_jobs AS job
+              WHERE job.datasource_id = result.datasource_id
+                AND job.plugin_id = result.plugin_id
+                AND job.status = 'complete'
+              ORDER BY job.started_at DESC, job.id DESC
+              LIMIT 1
+            )
+          ORDER BY result.created_at DESC
           LIMIT 5000
         "#,
     )
@@ -1440,6 +1450,20 @@ pub fn cancel_plugin_run(run_id: String) -> Result<bool, String> {
     Ok(true)
 }
 
+fn is_direct_supported_archive_path(path: &str) -> bool {
+    let path = Path::new(path);
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    path.is_file()
+        && (name.ends_with(".zip")
+            || name.ends_with(".tar")
+            || name.ends_with(".tar.gz")
+            || name.ends_with(".tgz")
+            || name.ends_with(".gz"))
+}
+
 pub async fn run_datasource_plugins(
     app_handle: AppHandle,
     case_database_path: String,
@@ -1459,12 +1483,37 @@ pub async fn run_datasource_plugins(
         .collect::<HashMap<_, _>>();
     let requested_plugin_ids = plugin_ids.unwrap_or_else(|| datasource.plugin_ids.clone());
     let mut jobs = Vec::new();
-
-    if requested_plugin_ids
+    let should_prepare_zip_input = requested_plugin_ids
         .iter()
-        .any(|plugin_id| plugin_id == builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID)
-        && !is_plugin_run_cancelled(run_id.as_deref())?
-    {
+        .any(|plugin_id| plugin_id != builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID)
+        && datasource
+            .paths
+            .iter()
+            .any(|path| is_direct_supported_archive_path(path));
+    let archive_extractor_requested = requested_plugin_ids
+        .iter()
+        .any(|plugin_id| plugin_id == builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID);
+    let archive_entry_manifests = should_prepare_zip_input
+        .then(|| {
+            requested_plugin_ids
+                .iter()
+                .filter(|plugin_id| plugin_id.as_str() != builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID)
+                .filter_map(|plugin_id| {
+                    if plugin_id == builtin::IMAGE_METADATA_PLUGIN_ID {
+                        Some(builtin::image_metadata_manifest())
+                    } else {
+                        plugin_map
+                            .get(plugin_id)
+                            .map(|plugin| plugin.manifest.clone())
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|_| !archive_extractor_requested);
+
+    let mut datasource_paths_updated = false;
+
+    if archive_extractor_requested && !is_plugin_run_cancelled(run_id.as_deref())? {
         jobs.push(
             run_archive_extractor_stage(
                 &app_handle,
@@ -1472,9 +1521,21 @@ pub async fn run_datasource_plugins(
                 &mut datasource,
                 &case_folder_path,
                 run_id.as_deref(),
+                None,
             )
             .await?,
         );
+        datasource_paths_updated = jobs.last().is_some_and(|job| job.status == "complete");
+    } else if should_prepare_zip_input && !is_plugin_run_cancelled(run_id.as_deref())? {
+        datasource_paths_updated = prepare_archive_inputs(
+            &app_handle,
+            &pool,
+            &mut datasource,
+            &case_folder_path,
+            run_id.as_deref(),
+            archive_entry_manifests.unwrap_or_default(),
+        )
+        .await?;
     }
 
     #[cfg(feature = "python-plugins")]
@@ -1727,7 +1788,61 @@ pub async fn run_datasource_plugins(
     Ok(PluginRunSummary {
         datasource_id,
         jobs,
+        datasource_paths_updated,
     })
+}
+
+async fn prepare_archive_inputs(
+    app_handle: &AppHandle,
+    pool: &SqlitePool,
+    datasource: &mut DatasourceForPlugins,
+    case_folder_path: &str,
+    run_id: Option<&str>,
+    selected_manifests: Vec<PythonPluginManifest>,
+) -> Result<bool, String> {
+    let execution_paths = datasource.paths.clone();
+    let output_root = archive_extractor_output_root(case_folder_path, &datasource.id);
+    let progress_app_handle = app_handle.clone();
+    let progress_run_id = run_id.unwrap_or_default().to_string();
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        builtin::execute_archive_extractor_with_progress(
+            execution_paths,
+            output_root,
+            Some(selected_manifests),
+            |progress| {
+                if progress.total_entries == 0 {
+                    return;
+                }
+                let _ = progress_app_handle.emit(
+                    "plugin-progress",
+                    PluginProgressEvent {
+                        run_id: progress_run_id.clone(),
+                        plugin_id: builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID.to_string(),
+                        completed: progress.completed_entries,
+                        total: progress.total_entries,
+                        message: Some(format!("Reading {}", progress.current_archive)),
+                        eta_seconds: None,
+                    },
+                );
+            },
+        )
+    })
+    .await
+    .map_err(|error| format!("Archive preparation worker failed: {error}"))??;
+
+    if output.extracted_files == 0 {
+        return Ok(false);
+    }
+
+    add_datasource_path_if_missing(pool, &datasource.id, &output.output_root).await?;
+    if !datasource
+        .paths
+        .iter()
+        .any(|path| path == &output.output_root)
+    {
+        datasource.paths.push(output.output_root);
+    }
+    Ok(true)
 }
 
 async fn finish_python_plugin_job(
@@ -1750,7 +1865,7 @@ async fn finish_python_plugin_job(
             });
 
             insert_plugin_logs(pool, job_id, plugin_id, &logs).await?;
-            insert_plugin_results(pool, job_id, datasource_id, plugin_id, &output.records).await?;
+            replace_plugin_results(pool, job_id, datasource_id, plugin_id, &output.records).await?;
             complete_plugin_job(pool, job_id).await?;
         }
         Err(message) => {
@@ -1767,6 +1882,7 @@ async fn run_archive_extractor_stage(
     datasource: &mut DatasourceForPlugins,
     case_folder_path: &str,
     run_id: Option<&str>,
+    selected_manifests: Option<Vec<PythonPluginManifest>>,
 ) -> Result<PluginJobRecord, String> {
     let job = create_plugin_job(pool, datasource, builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID).await?;
     let execution_paths = datasource.paths.clone();
@@ -1774,22 +1890,27 @@ async fn run_archive_extractor_stage(
     let progress_app_handle = app_handle.clone();
     let progress_run_id = run_id.unwrap_or_default().to_string();
     let output = tauri::async_runtime::spawn_blocking(move || {
-        builtin::execute_archive_extractor_with_progress(execution_paths, output_root, |progress| {
-            if progress.total_entries == 0 {
-                return;
-            }
-            let _ = progress_app_handle.emit(
-                "plugin-progress",
-                PluginProgressEvent {
-                    run_id: progress_run_id.clone(),
-                    plugin_id: builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID.to_string(),
-                    completed: progress.completed_entries,
-                    total: progress.total_entries,
-                    message: Some(format!("Extracting {}", progress.current_archive)),
-                    eta_seconds: None,
-                },
-            );
-        })
+        builtin::execute_archive_extractor_with_progress(
+            execution_paths,
+            output_root,
+            selected_manifests,
+            |progress| {
+                if progress.total_entries == 0 {
+                    return;
+                }
+                let _ = progress_app_handle.emit(
+                    "plugin-progress",
+                    PluginProgressEvent {
+                        run_id: progress_run_id.clone(),
+                        plugin_id: builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID.to_string(),
+                        completed: progress.completed_entries,
+                        total: progress.total_entries,
+                        message: Some(format!("Extracting {}", progress.current_archive)),
+                        eta_seconds: None,
+                    },
+                );
+            },
+        )
     })
     .await
     .map_err(|error| format!("Archive extractor worker failed: {error}"))?;
@@ -1839,7 +1960,7 @@ async fn finish_archive_extractor_job(
             let mut logs = vec![PendingPluginLog {
                 level: "info".to_string(),
                 message: format!(
-                    "Scanned {} files, found {} ZIP archives, and extracted {} files to {}.",
+                    "Scanned {} files, found {} supported archives, and extracted {} files to {}.",
                     summary.scanned_files,
                     summary.archive_count,
                     summary.extracted_files,
@@ -1860,7 +1981,7 @@ async fn finish_archive_extractor_job(
             if summary.archive_count == 0 {
                 logs.push(PendingPluginLog {
                     level: "warn".to_string(),
-                    message: "No ZIP archives were found in the selected datasource paths."
+                    message: "No ZIP, TAR, GZ, TAR.GZ, or TGZ archives were found in the selected datasource paths."
                         .to_string(),
                 });
             }
@@ -1870,31 +1991,20 @@ async fn finish_archive_extractor_job(
                 message: message.clone(),
             }));
 
-            let records = if summary.archive_count > 0 {
-                vec![PluginResultRecord {
-                    file_path: summary.output_root.clone(),
-                    result_kind: "archive_extraction".to_string(),
-                    label: "Archive extraction".to_string(),
-                    payload: serde_json::json!({
-                        "category": "files",
-                        "icon": "archive",
-                        "kind": "archive_extraction",
-                        "outputRoot": summary.output_root,
-                        "scannedFiles": summary.scanned_files,
-                        "archiveCount": summary.archive_count,
-                        "extractedFiles": summary.extracted_files,
-                        "extractedBytes": summary.extracted_bytes,
-                        "skippedEntries": summary.skipped_entries,
-                        "archives": summary.archives,
-                        "errors": summary.errors,
-                    }),
-                }]
-            } else {
-                Vec::new()
-            };
-
             insert_plugin_logs(pool, job_id, plugin_id, &logs).await?;
-            insert_plugin_results(pool, job_id, datasource_id, plugin_id, &records).await?;
+            sqlx::query(
+                r#"
+                  DELETE FROM plugin_results
+                  WHERE datasource_id = $1
+                    AND plugin_id = $2
+                    AND result_kind = 'archive_extraction'
+                "#,
+            )
+            .bind(datasource_id)
+            .bind(plugin_id)
+            .execute(pool)
+            .await
+            .map_err(|error| format!("Failed to remove legacy archive results: {error}"))?;
             complete_plugin_job(pool, job_id).await?;
         }
         Err(message) => {
@@ -2705,13 +2815,16 @@ fn enumerate_datasource_files(
     datasource: &DatasourceForPlugins,
 ) -> Result<Vec<TargetFile>, String> {
     let mut files = Vec::new();
+    let mut seen_paths = HashSet::new();
 
     for source_path in &datasource.paths {
         let path = PathBuf::from(source_path);
 
         if path.is_file() {
             if let Ok(target_file) = target_file_from_path(&path) {
-                files.push(target_file);
+                if seen_paths.insert(normalize_case_database_path(&target_file.path)) {
+                    files.push(target_file);
+                }
             }
             continue;
         }
@@ -2735,7 +2848,9 @@ fn enumerate_datasource_files(
 
             if entry_path.is_file() {
                 if let Ok(target_file) = target_file_from_path(&entry_path) {
-                    files.push(target_file);
+                    if seen_paths.insert(normalize_case_database_path(&target_file.path)) {
+                        files.push(target_file);
+                    }
                 }
             }
         }
@@ -4848,13 +4963,31 @@ async fn load_plugin_job(pool: &SqlitePool, job_id: &str) -> Result<PluginJobRec
     })
 }
 
-async fn insert_plugin_results(
+async fn replace_plugin_results(
     pool: &SqlitePool,
     job_id: &str,
     datasource_id: &str,
     plugin_id: &str,
     records: &[PluginResultRecord],
 ) -> Result<(), String> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| format!("Failed to start plugin result replacement: {error}"))?;
+
+    sqlx::query(
+        r#"
+          DELETE FROM plugin_results
+          WHERE datasource_id = $1
+            AND plugin_id = $2
+        "#,
+    )
+    .bind(datasource_id)
+    .bind(plugin_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| format!("Failed to remove previous plugin results: {error}"))?;
+
     for record in records {
         if LEGACY_DEMO_ARTIFACT_KINDS.contains(&record.result_kind.as_str()) {
             continue;
@@ -4863,15 +4996,8 @@ async fn insert_plugin_results(
         sqlx::query(
             r#"
               INSERT INTO plugin_results (
-                id,
-                job_id,
-                plugin_id,
-                datasource_id,
-                file_path,
-                result_kind,
-                label,
-                payload,
-                created_at
+                id, job_id, plugin_id, datasource_id, file_path,
+                result_kind, label, payload, created_at
               )
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
@@ -4885,12 +5011,15 @@ async fn insert_plugin_results(
         .bind(&record.label)
         .bind(record.payload.to_string())
         .bind(now_iso_like())
-        .execute(pool)
+        .execute(&mut *transaction)
         .await
-        .map_err(|error| format!("Failed to insert plugin result: {error}"))?;
+        .map_err(|error| format!("Failed to insert replacement plugin result: {error}"))?;
     }
 
-    Ok(())
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Failed to finish plugin result replacement: {error}"))
 }
 
 async fn replace_media_gallery_items(
