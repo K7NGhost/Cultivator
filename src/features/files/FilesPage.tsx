@@ -174,6 +174,7 @@ export function FilesPage() {
     EvidenceTreeNode[]
   >([]);
   const [dataSources, setDataSources] = useState<DataSourceRecord[]>([]);
+  const [fileViewDataSourceId, setFileViewDataSourceId] = useState("all");
   const [pluginRunDataSource, setPluginRunDataSource] =
     useState<DataSourceRecord | null>(null);
   const [availablePlugins, setAvailablePlugins] = useState<PythonPlugin[]>([]);
@@ -199,13 +200,20 @@ export function FilesPage() {
     return [...dataSourceTreeNodes, ...(listing?.tree ? [listing.tree] : [])];
   }, [dataSourceTreeNodes, listing?.tree]);
   const fileViewRoots = useMemo(() => {
+    if (fileViewDataSourceId !== "all") {
+      return (
+        dataSources.find((dataSource) => dataSource.id === fileViewDataSourceId)
+          ?.paths ?? []
+      );
+    }
+
     const roots = [
       ...dataSources.flatMap((dataSource) => dataSource.paths),
       ...(listing?.rootPath ? [listing.rootPath] : []),
     ];
 
     return Array.from(new Set(roots));
-  }, [dataSources, listing?.rootPath]);
+  }, [dataSources, fileViewDataSourceId, listing?.rootPath]);
   const visiblePlugins = useMemo(() => {
     const normalizedFilter = pluginFilter.trim().toLowerCase();
 
@@ -252,6 +260,7 @@ export function FilesPage() {
   useEffect(() => {
     if (!activeCase) {
       setDataSources([]);
+      setFileViewDataSourceId("all");
       setDataSourceTreeNodes([]);
       setDataSourceError(null);
       setIsDataSourcesLoading(false);
@@ -273,6 +282,12 @@ export function FilesPage() {
         }
 
         setDataSources(dataSources);
+        setFileViewDataSourceId((currentId) =>
+          currentId === "all" ||
+          dataSources.some((dataSource) => dataSource.id === currentId)
+            ? currentId
+            : "all",
+        );
         setDataSourceTreeNodes(nextNodes);
       })
       .catch((caughtError) => {
@@ -1206,7 +1221,13 @@ export function FilesPage() {
             selectedDirectory={selectedDirectory}
             selectedFileView={selectedFileView}
             fileViewCounts={fileViewCounts}
+            fileViewDataSources={dataSources.map((dataSource) => ({
+              id: dataSource.id,
+              name: dataSource.name,
+            }))}
+            selectedFileViewDataSourceId={fileViewDataSourceId}
             tagSummaries={fileTagSummaries}
+            onSelectFileViewDataSource={setFileViewDataSourceId}
             onSelectNode={selectTreeNode}
             onSelectFileView={(view) => {
               selectFileView(view);

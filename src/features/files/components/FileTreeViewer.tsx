@@ -10,6 +10,7 @@ import {
   ArrowRight,
   ChevronsDownUp,
   ChevronsUpDown,
+  ChevronDown,
   ChevronRight,
   Database,
   ExternalLink,
@@ -50,9 +51,12 @@ type FileTreeViewerProps = {
   selectedDirectory: EvidenceTreeNode | null;
   selectedFileView?: FileViewSelection | null;
   fileViewCounts?: Record<string, number>;
+  fileViewDataSources?: Array<{ id: string; name: string }>;
+  selectedFileViewDataSourceId?: string;
   tagSummaries?: FileTagSummary[];
   onSelectNode: (node: EvidenceTreeNode) => void;
   onSelectFileView?: (view: FileViewSelection) => void;
+  onSelectFileViewDataSource?: (datasourceId: string) => void;
   onRemoveDataSource?: (node: EvidenceTreeNode) => void;
   onRunDataSourcePlugins?: (node: EvidenceTreeNode) => void;
 };
@@ -845,9 +849,12 @@ export function FileTreeViewer({
   selectedDirectory,
   selectedFileView,
   fileViewCounts = {},
+  fileViewDataSources = [],
+  selectedFileViewDataSourceId = "all",
   tagSummaries = [],
   onSelectNode,
   onSelectFileView,
+  onSelectFileViewDataSource,
   onRemoveDataSource,
   onRunDataSourcePlugins,
 }: FileTreeViewerProps) {
@@ -1015,6 +1022,50 @@ export function FileTreeViewer({
         <div className="min-w-0 flex-1 truncate px-1 text-xs font-medium uppercase text-muted-foreground">
           Directory Tree
         </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="h-6 max-w-40 gap-1 rounded-sm px-1.5 text-[11px] font-normal"
+              disabled={fileViewDataSources.length === 0}
+              title="Choose datasource for File Views"
+            >
+              <Database className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">
+                {selectedFileViewDataSourceId === "all"
+                  ? "All datasources"
+                  : fileViewDataSources.find(
+                        (datasource) =>
+                          datasource.id === selectedFileViewDataSourceId,
+                      )?.name ?? "All datasources"}
+              </span>
+              <ChevronDown className="size-3 shrink-0" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-48">
+            <DropdownMenuCheckboxItem
+              className="text-xs"
+              checked={selectedFileViewDataSourceId === "all"}
+              onCheckedChange={() => onSelectFileViewDataSource?.("all")}
+            >
+              All datasources
+            </DropdownMenuCheckboxItem>
+            {fileViewDataSources.map((datasource) => (
+              <DropdownMenuCheckboxItem
+                key={datasource.id}
+                className="text-xs"
+                checked={selectedFileViewDataSourceId === datasource.id}
+                onCheckedChange={() =>
+                  onSelectFileViewDataSource?.(datasource.id)
+                }
+              >
+                {datasource.name}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div className="flex shrink-0 items-center gap-1">
           <Button
             type="button"
