@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   Tree,
   type NodeRendererProps,
@@ -11,10 +12,12 @@ import {
   ChevronsUpDown,
   ChevronRight,
   Database,
+  ExternalLink,
   File,
   FileArchive,
   Folder,
   FolderOpen,
+  FolderSearch,
   Play,
   Settings2,
   Tags,
@@ -744,6 +747,36 @@ function EvidenceTreeNodeRow({
         >
           Open {getNodeKindLabel(node.data).toLowerCase()}
         </ContextMenuItem>
+        {(node.data.kind === "file" || node.data.kind === "directory") &&
+          node.data.path && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                className="text-xs"
+                onSelect={() => {
+                  void openTreeNodePath(node.data);
+                }}
+              >
+                {node.data.kind === "file" ? (
+                  <ExternalLink className="size-3.5" aria-hidden="true" />
+                ) : (
+                  <FolderOpen className="size-3.5" aria-hidden="true" />
+                )}
+                {node.data.kind === "file" ? "Open file" : "Open folder"}
+              </ContextMenuItem>
+              <ContextMenuItem
+                className="text-xs"
+                onSelect={() => {
+                  void revealTreeNodePath(node.data);
+                }}
+              >
+                <FolderSearch className="size-3.5" aria-hidden="true" />
+                {node.data.kind === "file"
+                  ? "Open containing folder"
+                  : "Open folder location"}
+              </ContextMenuItem>
+            </>
+          )}
         <ContextMenuItem
           className="text-xs"
           onSelect={() => {
@@ -787,6 +820,22 @@ function EvidenceTreeNodeRow({
       </ContextMenuContent>
     </ContextMenu>
   );
+}
+
+async function openTreeNodePath(node: AutopsyTreeNode) {
+  try {
+    await openPath(node.path);
+  } catch (error) {
+    console.error(`Failed to open ${node.path}`, error);
+  }
+}
+
+async function revealTreeNodePath(node: AutopsyTreeNode) {
+  try {
+    await revealItemInDir(node.path);
+  } catch (error) {
+    console.error(`Failed to reveal ${node.path}`, error);
+  }
 }
 
 export function FileTreeViewer({

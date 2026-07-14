@@ -1212,6 +1212,46 @@ pub async fn remove_datasource(
     .await
     .map_err(|error| format!("Failed to load datasource for removal: {error}"))?;
 
+    if fallback_rows.is_empty() {
+        return Err(format!(
+            "Datasource '{datasource_id}' was not found in case '{case_id}'."
+        ));
+    }
+
+    let artifact_rows = sqlx::query(
+        r#"
+          SELECT file_path
+          FROM plugin_results
+          WHERE datasource_id = $1
+             OR job_id IN (
+               SELECT id
+               FROM plugin_jobs
+               WHERE datasource_id = $1
+             )
+        "#,
+    )
+    .bind(&datasource_id)
+    .fetch_all(&pool)
+    .await
+    .map_err(|error| format!("Failed to load datasource artifact paths: {error}"))?;
+
+    let case_folder = PathBuf::from(&case_database_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "Case database path has no parent folder.".to_string())?;
+    let artifacts_root = case_folder.join("artifacts");
+    let mut generated_artifact_paths = artifact_rows
+        .into_iter()
+        .filter_map(|row| {
+            let path: String = row.get("file_path");
+            (!path.trim().is_empty()).then(|| PathBuf::from(path))
+        })
+        .collect::<HashSet<_>>();
+    generated_artifact_paths.insert(archive_extractor_output_root(
+        &case_folder.to_string_lossy(),
+        &datasource_id,
+    ));
+
     let mut cleanup_paths = HashSet::new();
 
     for row in path_rows.iter().chain(fallback_rows.iter()) {
@@ -1335,6 +1375,55 @@ pub async fn remove_datasource(
         .commit()
         .await
         .map_err(|error| format!("Failed to finish datasource removal: {error}"))?;
+
+    remove_datasource_artifact_paths(&artifacts_root, generated_artifact_paths)?;
+
+    Ok(())
+}
+
+fn remove_datasource_artifact_paths(
+    artifacts_root: &Path,
+    paths: HashSet<PathBuf>,
+) -> Result<(), String> {
+    if !artifacts_root.exists() {
+        return Ok(());
+    }
+
+    let canonical_root = fs::canonicalize(artifacts_root).map_err(|error| {
+        format!(
+            "Failed to resolve case artifacts directory '{}': {error}",
+            artifacts_root.display()
+        )
+    })?;
+
+    for path in paths {
+        if !path.exists() {
+            continue;
+        }
+
+        let canonical_path = fs::canonicalize(&path).map_err(|error| {
+            format!(
+                "Failed to resolve artifact path '{}': {error}",
+                path.display()
+            )
+        })?;
+
+        if canonical_path == canonical_root || !canonical_path.starts_with(&canonical_root) {
+            continue;
+        }
+
+        if canonical_path.is_dir() {
+            fs::remove_dir_all(&canonical_path)
+        } else {
+            fs::remove_file(&canonical_path)
+        }
+        .map_err(|error| {
+            format!(
+                "Failed to remove datasource artifact '{}': {error}",
+                canonical_path.display()
+            )
+        })?;
+    }
 
     Ok(())
 }
