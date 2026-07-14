@@ -37,7 +37,10 @@ import {
 } from "@/components/ui/table";
 import { buildCultivatorApiReferenceForLlms } from "@/features/artifacts/llmApiReference";
 import { useCases } from "@/features/cases/case-provider";
-import { listDataSources } from "@/features/datasources/dataSourceRepository";
+import {
+  listDataSources,
+  notifyDataSourcesChanged,
+} from "@/features/datasources/dataSourceRepository";
 import type { DataSourceRecord } from "@/features/datasources/types";
 import {
   getStoredCreatePluginMode,
@@ -53,6 +56,7 @@ import {
   listPythonPlugins,
   openPythonPluginFolder,
   openPythonPluginFolderInVscode,
+  pluginRunUpdatedDatasourcePaths,
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
 import { createPluginRunId } from "@/features/plugins/pluginToasts";
@@ -323,6 +327,9 @@ export function PluginsPage() {
         runId,
       });
       setJobs((currentJobs) => mergePluginJobs(currentJobs, summary.jobs));
+      if (pluginRunUpdatedDatasourcePaths(summary)) {
+        notifyDataSourcesChanged(activeCase.id);
+      }
       await refreshPluginsPage();
     } catch (caughtError) {
       setLoadState({

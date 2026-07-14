@@ -8,6 +8,15 @@ import type {
   PythonPlugin,
 } from "@/features/plugins/types";
 
+export const archiveExtractorPluginId = "archive-extractor";
+
+export function pluginRunUpdatedDatasourcePaths(summary: PluginRunSummary) {
+  return summary.jobs.some(
+    (job) =>
+      job.pluginId === archiveExtractorPluginId && job.status === "complete",
+  );
+}
+
 export async function listPythonPlugins(): Promise<PythonPlugin[]> {
   return invoke<PythonPlugin[]>("list_python_plugins");
 }

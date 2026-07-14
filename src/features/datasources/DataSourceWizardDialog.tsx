@@ -28,7 +28,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import type { CaseRecord } from "@/features/cases/types";
-import { createDataSource } from "@/features/datasources/dataSourceRepository";
+import {
+  createDataSource,
+  notifyDataSourcesChanged,
+} from "@/features/datasources/dataSourceRepository";
 import type {
   DataSourceRecord,
   DataSourcePlugin,
@@ -36,8 +39,10 @@ import type {
   DataSourceType,
 } from "@/features/datasources/types";
 import {
+  archiveExtractorPluginId,
   cancelDatasourcePluginRun,
   listPythonPlugins,
+  pluginRunUpdatedDatasourcePaths,
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
 import {
@@ -113,19 +118,24 @@ function getPluginTargetLabel(target: DataSourcePluginTarget) {
 function runDatasourcePluginsInBackground(input: {
   activeCase: CaseRecord;
   datasource: DataSourceRecord;
+  pluginIds: string[];
   pluginMap: Map<string, PythonPlugin>;
 }) {
+  if (input.pluginIds.length === 0) {
+    return;
+  }
+
   const runId = createPluginRunId();
   const toastId = showPluginRunStartedToast({
     datasourceName: input.datasource.name,
-    jobs: input.datasource.pluginIds.map((pluginId) => ({
+    jobs: input.pluginIds.map((pluginId) => ({
       pluginId,
       pluginName: input.pluginMap.get(pluginId)?.name ?? pluginId,
     })),
     onCancel: async () => {
       await cancelDatasourcePluginRun(runId);
     },
-    pluginCount: input.datasource.pluginIds.length,
+    pluginCount: input.pluginIds.length,
     runId,
   });
 
@@ -133,6 +143,7 @@ function runDatasourcePluginsInBackground(input: {
     caseDatabasePath: input.activeCase.databasePath,
     caseFolderPath: input.activeCase.folderPath,
     datasourceId: input.datasource.id,
+    pluginIds: input.pluginIds,
     runId,
   })
     .then((summary) => {
@@ -143,6 +154,9 @@ function runDatasourcePluginsInBackground(input: {
         summary,
         toastId,
       });
+      if (pluginRunUpdatedDatasourcePaths(summary)) {
+        notifyDataSourcesChanged(input.activeCase.id);
+      }
     })
     .catch((caughtError: unknown) => {
       showPluginRunFailedToast({
@@ -152,6 +166,16 @@ function runDatasourcePluginsInBackground(input: {
         toastId,
       });
     });
+}
+
+function isDeferredUntilExplicitDatasourceRun(pluginId: string) {
+  return pluginId === archiveExtractorPluginId;
+}
+
+function getImportRunnablePluginIds(pluginIds: string[]) {
+  return pluginIds.filter(
+    (pluginId) => !isDeferredUntilExplicitDatasourceRun(pluginId),
+  );
 }
 
 export function DataSourceWizardDialog({
@@ -182,6 +206,11 @@ export function DataSourceWizardDialog({
       selectedPluginIds.includes(plugin.id),
     );
   }, [availablePlugins, selectedPluginIds]);
+  const selectedPluginsRunOnImport = useMemo(() => {
+    return selectedPlugins.filter(
+      (plugin) => !isDeferredUntilExplicitDatasourceRun(plugin.id),
+    );
+  }, [selectedPlugins]);
   const visiblePlugins = useMemo(() => {
     const normalizedFilter = pluginFilter.trim().toLowerCase();
 
@@ -361,15 +390,19 @@ export function DataSourceWizardDialog({
         plugins: selectedPlugins,
       });
       const activeCaseSnapshot = activeCase;
+      const importRunnablePluginIds = getImportRunnablePluginIds(
+        createdDatasource.pluginIds,
+      );
       const pluginMapSnapshot = new Map(pluginMap);
 
       resetWizard();
       onOpenChange(false);
 
-      if (createdDatasource.pluginIds.length > 0) {
+      if (importRunnablePluginIds.length > 0) {
         runDatasourcePluginsInBackground({
           activeCase: activeCaseSnapshot,
           datasource: createdDatasource,
+          pluginIds: importRunnablePluginIds,
           pluginMap: pluginMapSnapshot,
         });
       }
@@ -708,7 +741,11 @@ export function DataSourceWizardDialog({
                               togglePlugin(activePlugin, checked === true);
                             }}
                           />
-                          <span>Run plugin</span>
+                          <span>
+                            {isDeferredUntilExplicitDatasourceRun(activePlugin.id)
+                              ? "Add to datasource"
+                              : "Run on import"}
+                          </span>
                         </label>
 
                         <Separator />
@@ -771,14 +808,14 @@ export function DataSourceWizardDialog({
                 void finishWizard();
               }}
             >
-              {selectedPlugins.length > 0 ? (
+              {selectedPluginsRunOnImport.length > 0 ? (
                 <Play className="size-3.5" aria-hidden="true" />
               ) : (
                 <CheckCircle2 className="size-3.5" aria-hidden="true" />
               )}
               {isSaving
                 ? "Adding..."
-                : selectedPlugins.length > 0
+                : selectedPluginsRunOnImport.length > 0
                   ? "Add & run plugins"
                   : "Add datasource"}
             </Button>

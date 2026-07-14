@@ -23,6 +23,7 @@ import { Separator } from "@/components/ui/separator";
 import { useCases } from "@/features/cases/case-provider";
 import {
   listDataSources,
+  notifyDataSourcesChanged,
   removeDataSource,
   subscribeToDataSourcesChanged,
 } from "@/features/datasources/dataSourceRepository";
@@ -59,6 +60,7 @@ import {
 import {
   cancelDatasourcePluginRun,
   listPythonPlugins,
+  pluginRunUpdatedDatasourcePaths,
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
 import {
@@ -106,7 +108,6 @@ type FileViewIndex = {
 };
 
 const FILE_VIEW_PAGE_SIZE = 10_000;
-
 type FileViewPageInfo = {
   offset: number;
   limit: number;
@@ -1065,6 +1066,9 @@ export function FilesPage() {
         summary,
         toastId,
       });
+      if (pluginRunUpdatedDatasourcePaths(summary)) {
+        notifyDataSourcesChanged(activeCase.id);
+      }
     } catch (caughtError) {
       showPluginRunFailedToast({
         datasourceName: runDataSource.name,
@@ -1529,9 +1533,21 @@ async function buildDataSourceTreeNode(
   const entries = await invoke<EvidenceDirectoryEntry[]>("describe_paths", {
     paths: dataSource.paths,
   });
-  const children = await Promise.all(
+  const pathNodes = await Promise.all(
     entries.map((entry) => buildDataSourcePathTreeNode(dataSource, entry)),
   );
+  const children = entries.flatMap((entry, index) => {
+    const node = pathNodes[index];
+
+    if (!isArchiveExtractorOutputPath(dataSource, entry.path)) {
+      return [node];
+    }
+
+    return (node.children ?? []).map((archiveNode) => ({
+      ...archiveNode,
+      name: getArchiveTreeNodeName(archiveNode.name),
+    }));
+  });
 
   return {
     id: `datasource:${dataSource.id}`,
@@ -1552,7 +1568,6 @@ async function buildDataSourcePathTreeNode(
       const listing = await invoke<EvidenceDirectoryListing>("list_directory", {
         path: entry.path,
       });
-
       return prefixTreeNodeId(listing.tree, `datasource:${dataSource.id}`);
     } catch {
       return directoryEntryToTreeNode(dataSource, entry);
@@ -1576,6 +1591,25 @@ function directoryEntryToTreeNode(
     modifiedMs: entry.modifiedMs,
     childCount: entry.childCount,
   };
+}
+
+function getArchiveTreeNodeName(name: string) {
+  return name.replace(/^\d{4}-/, "");
+}
+
+function isArchiveExtractorOutputPath(
+  dataSource: DataSourceRecord,
+  path: string,
+) {
+  const normalizedPath = path
+    .replace(/\\/g, "/")
+    .replace(/\/+$/g, "")
+    .toLowerCase();
+  const normalizedDataSourceId = dataSource.id.toLowerCase();
+
+  return normalizedPath.endsWith(
+    `/artifacts/extracted/${normalizedDataSourceId}`,
+  );
 }
 
 function prefixTreeNodeId(

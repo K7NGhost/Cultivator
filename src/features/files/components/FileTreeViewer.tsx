@@ -843,11 +843,11 @@ export function FileTreeViewer({
   }, [treeOpenState]);
 
   function handleTreeToggle(id: string) {
-    // react-arborist only reports the toggled node id. The tree defaults to
-    // open nodes, so an absent value means "open" until the user closes it.
+    // react-arborist only reports the toggled node id. Nodes default to closed,
+    // so an absent value becomes open the first time the user toggles it.
     setTreeOpenState((currentOpenState) => ({
       ...currentOpenState,
-      [id]: !(currentOpenState[id] ?? true),
+      [id]: !(currentOpenState[id] ?? false),
     }));
   }
 
@@ -1027,7 +1027,7 @@ export function FileTreeViewer({
             height={treePanel.size.height}
             rowHeight={28}
             indent={0}
-            openByDefault
+            openByDefault={false}
             initialOpenState={treeOpenState}
             onToggle={handleTreeToggle}
             disableDrag
