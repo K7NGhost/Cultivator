@@ -29,7 +29,7 @@ use sqlx::{
     Row, SqlitePool,
 };
 #[cfg(feature = "python-plugins")]
-use std::io::{self, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -44,7 +44,7 @@ use std::{
     hash::{Hash, Hasher},
     thread::ThreadId,
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 mod builtin;
@@ -312,6 +312,19 @@ pub struct PluginLogRecord {
 pub struct PluginRunSummary {
     pub datasource_id: String,
     pub jobs: Vec<PluginJobRecord>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginProgressEvent {
+    #[serde(default)]
+    run_id: String,
+    #[serde(default)]
+    plugin_id: String,
+    completed: u64,
+    total: u64,
+    message: Option<String>,
+    eta_seconds: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -1365,6 +1378,7 @@ pub async fn run_datasource_plugins(
     {
         jobs.push(
             run_archive_extractor_stage(
+                &app_handle,
                 &pool,
                 &mut datasource,
                 &case_folder_path,
@@ -1451,6 +1465,7 @@ pub async fn run_datasource_plugins(
             let execution_case_database_path = case_database_path.clone();
             let execution_case_folder_path = case_folder_path.clone();
             let execution_run_id = run_id.clone();
+            let execution_app_handle = app_handle.clone();
             let execution_python_runtime = python_runtime
                 .get_or_insert_with(|| resolve_python_runtime(&app_handle))
                 .clone()?;
@@ -1467,6 +1482,7 @@ pub async fn run_datasource_plugins(
                         plan,
                         &execution_python_runtime,
                         execution_run_id.as_deref(),
+                        &execution_app_handle,
                     )
                 })
                 .await
@@ -1657,6 +1673,7 @@ async fn finish_python_plugin_job(
 }
 
 async fn run_archive_extractor_stage(
+    app_handle: &AppHandle,
     pool: &SqlitePool,
     datasource: &mut DatasourceForPlugins,
     case_folder_path: &str,
@@ -1665,8 +1682,25 @@ async fn run_archive_extractor_stage(
     let job = create_plugin_job(pool, datasource, builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID).await?;
     let execution_paths = datasource.paths.clone();
     let output_root = archive_extractor_output_root(case_folder_path, &datasource.id);
+    let progress_app_handle = app_handle.clone();
+    let progress_run_id = run_id.unwrap_or_default().to_string();
     let output = tauri::async_runtime::spawn_blocking(move || {
-        builtin::execute_archive_extractor(execution_paths, output_root)
+        builtin::execute_archive_extractor_with_progress(execution_paths, output_root, |progress| {
+            if progress.total_entries == 0 {
+                return;
+            }
+            let _ = progress_app_handle.emit(
+                "plugin-progress",
+                PluginProgressEvent {
+                    run_id: progress_run_id.clone(),
+                    plugin_id: builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID.to_string(),
+                    completed: progress.completed_entries,
+                    total: progress.total_entries,
+                    message: Some(format!("Extracting {}", progress.current_archive)),
+                    eta_seconds: None,
+                },
+            );
+        })
     })
     .await
     .map_err(|error| format!("Archive extractor worker failed: {error}"))?;
@@ -1839,6 +1873,7 @@ fn execute_python_plugin_process(
     plan: PluginExecutionPlan,
     python_runtime: &PythonRuntime,
     run_id: Option<&str>,
+    app_handle: &AppHandle,
 ) -> Result<PluginExecutionOutput, String> {
     if is_plugin_run_cancelled(run_id)? {
         return Err("Plugin run cancelled.".to_string());
@@ -1887,16 +1922,41 @@ fn execute_python_plugin_process(
             .map_err(|error| format!("Failed to send plugin input: {error}"))?;
     }
 
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to open Python plugin process stderr.".to_string())?;
+    let progress_app_handle = app_handle.clone();
+    let progress_run_id = run_id.unwrap_or_default().to_string();
+    let progress_plugin_id = plugin.manifest.id.clone();
+    let stderr_reader = std::thread::spawn(move || {
+        let mut diagnostics = Vec::new();
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if let Some(payload) = line.strip_prefix("__CULTIVATOR_PROGRESS__") {
+                if let Ok(mut progress) = serde_json::from_str::<PluginProgressEvent>(payload) {
+                    progress.run_id = progress_run_id.clone();
+                    progress.plugin_id = progress_plugin_id.clone();
+                    if progress.total > 0 && progress.completed <= progress.total {
+                        let _ = progress_app_handle.emit("plugin-progress", progress);
+                    }
+                }
+            } else {
+                diagnostics.push(line);
+            }
+        }
+        diagnostics.join("\n")
+    });
+
     let output = child
         .wait_with_output()
         .map_err(|error| format!("Failed to wait for Python plugin process: {error}"))?;
+    let stderr = stderr_reader.join().unwrap_or_default();
 
     if is_plugin_run_cancelled(run_id)? {
         return Err("Plugin run cancelled.".to_string());
     }
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         let message = stderr.trim();
 
         return Err(if message.is_empty() {
@@ -3195,6 +3255,19 @@ def log(level, message):
     logs.append({"level": str(level), "message": str(message)})
 
 
+def progress(completed, total, message=None, eta_seconds=None):
+    completed = int(completed)
+    total = int(total)
+    if total <= 0 or completed < 0 or completed > total:
+        raise ValueError("progress requires 0 <= completed <= total and total > 0")
+    payload = {"completed": completed, "total": total}
+    if message is not None:
+        payload["message"] = str(message)
+    if eta_seconds is not None:
+        payload["etaSeconds"] = max(0, int(eta_seconds))
+    print("__CULTIVATOR_PROGRESS__" + json.dumps(payload, separators=(",", ":")), file=sys.stderr, flush=True)
+
+
 def create_artifact(kind, label, **fields):
     artifact = {"kind": kind}
     category = artifact_category_for_kind(kind)
@@ -3370,7 +3443,7 @@ def search(query, regex=False, case_sensitive=False, binary_files=False, max_mat
 api = types.ModuleType("cultivator_api")
 for name, value in list(globals().items()):
     if name in {
-        "read_bytes", "read_text", "read_lines", "sha256", "log", "create_artifact",
+        "read_bytes", "read_text", "read_lines", "sha256", "log", "progress", "create_artifact",
         "create_table_artifact", "add_table_row", "add_artifact", "create_group",
         "datetime_from_unix", "datetime_from_iso", "datetime_from_datetime", "account",
         "application", "browser_history", "call", "contact", "credential",
@@ -3831,6 +3904,15 @@ def sha256(path: str) -> str: ...
 
 def log(level: str, message: str) -> None: ...
 
+def progress(
+    completed: int,
+    total: int,
+    message: Optional[str] = None,
+    eta_seconds: Optional[int] = None,
+) -> None:
+    """Report determinate progress. ETA is optional and must come from the plugin."""
+    ...
+
 def search_files(
     root_path: str,
     query: str,
@@ -4152,6 +4234,18 @@ def run(context):
 
     cultivator_api.add_artifact(table)
     return None</code></pre>
+
+      <h2>Progress Reporting</h2>
+      <p>Progress is opt-in. Call <code>cultivator_api.progress(completed, total, message=None, eta_seconds=None)</code> to update the ingest toast. Values must satisfy <code>0 &lt;= completed &lt;= total</code> and <code>total &gt; 0</code>. Only provide <code>eta_seconds</code> when the plugin has calculated it from real work.</p>
+      <pre><code>import cultivator_api
+
+for index, item in enumerate(items, 1):
+    process(item)
+    cultivator_api.progress(
+        index,
+        len(items),
+        message=f"Processing {item.name}",
+    )</code></pre>
 
       <h2>Return Values</h2>
       <p>Return <code>None</code>, one dictionary, or a list of dictionaries.</p>

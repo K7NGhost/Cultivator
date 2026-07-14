@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Database,
   File,
+  FileArchive,
   Folder,
   FolderOpen,
   Play,
@@ -586,6 +587,10 @@ function findTreeNodeById(
 }
 
 function getNodeIcon(node: AutopsyTreeNode) {
+  if (isZipTreeNode(node)) {
+    return FileArchive;
+  }
+
   switch (node.kind) {
     case "group":
       return node.id === "autopsy:tags" ? Tags : FolderOpen;
@@ -605,6 +610,10 @@ function getNodeIcon(node: AutopsyTreeNode) {
 }
 
 function getNodeIconClassName(node: AutopsyTreeNode) {
+  if (isZipTreeNode(node)) {
+    return "text-violet-600 dark:text-violet-400";
+  }
+
   switch (node.kind) {
     case "group":
       return node.id === "autopsy:tags"
@@ -619,6 +628,13 @@ function getNodeIconClassName(node: AutopsyTreeNode) {
     case "directory":
       return "text-amber-600 dark:text-amber-400";
   }
+}
+
+function isZipTreeNode(node: AutopsyTreeNode) {
+  return (
+    (node.kind === "file" || node.kind === "directory") &&
+    (/\.zip$/i.test(node.name) || /\.zip$/i.test(node.path ?? ""))
+  );
 }
 
 function getNodeKindLabel(node: AutopsyTreeNode) {

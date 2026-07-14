@@ -34,6 +34,12 @@ pub struct ArchiveExtractionRecord {
     pub skipped_entries: u64,
 }
 
+pub struct ArchiveExtractionProgress {
+    pub completed_entries: u64,
+    pub total_entries: u64,
+    pub current_archive: String,
+}
+
 pub fn manifest() -> PythonPluginManifest {
     PythonPluginManifest {
         id: PLUGIN_ID.to_string(),
@@ -51,10 +57,14 @@ pub fn manifest() -> PythonPluginManifest {
     }
 }
 
-pub fn execute(
+pub fn execute_with_progress<F>(
     paths: Vec<String>,
     output_root: PathBuf,
-) -> Result<ArchiveExtractionSummary, String> {
+    mut progress: F,
+) -> Result<ArchiveExtractionSummary, String>
+where
+    F: FnMut(ArchiveExtractionProgress),
+{
     if output_root.exists() {
         fs::remove_dir_all(&output_root).map_err(|error| {
             format!(
@@ -83,17 +93,46 @@ pub fn execute(
     };
 
     let archives = collect_zip_archives(paths, &mut summary.scanned_files);
+    let archive_entry_counts = archives
+        .iter()
+        .map(|path| zip_entry_count(path).unwrap_or(1))
+        .collect::<Vec<_>>();
+    let total_entries = archive_entry_counts.iter().sum::<u64>();
+    let mut completed_entries = 0u64;
 
     for (archive_index, archive_path) in archives.iter().enumerate() {
+        let current_archive = display_name(archive_path);
+        progress(ArchiveExtractionProgress {
+            completed_entries,
+            total_entries,
+            current_archive: current_archive.clone(),
+        });
         let archive_output = output_root.join(format!(
             "{archive_index:04}-{}",
             sanitize_output_name(&display_name(archive_path))
         ));
-        let record = match extract_zip_archive(archive_path, &archive_output, &mut summary.errors) {
+        let record = match extract_zip_archive(
+            archive_path,
+            &archive_output,
+            &mut summary.errors,
+            |entry_index| {
+                progress(ArchiveExtractionProgress {
+                    completed_entries: completed_entries + entry_index,
+                    total_entries,
+                    current_archive: current_archive.clone(),
+                });
+            },
+        ) {
             Ok(record) => record,
             Err(error) => {
                 summary.archive_count += 1;
                 summary.errors.push(error);
+                completed_entries += archive_entry_counts[archive_index];
+                progress(ArchiveExtractionProgress {
+                    completed_entries,
+                    total_entries,
+                    current_archive,
+                });
                 continue;
             }
         };
@@ -103,6 +142,12 @@ pub fn execute(
         summary.extracted_bytes += record.extracted_bytes;
         summary.skipped_entries += record.skipped_entries;
         summary.archives.push(record);
+        completed_entries += archive_entry_counts[archive_index];
+        progress(ArchiveExtractionProgress {
+            completed_entries,
+            total_entries,
+            current_archive,
+        });
     }
 
     Ok(summary)
@@ -160,6 +205,7 @@ fn extract_zip_archive(
     archive_path: &Path,
     archive_output: &Path,
     errors: &mut Vec<String>,
+    mut progress: impl FnMut(u64),
 ) -> Result<ArchiveExtractionRecord, String> {
     let input = fs::File::open(archive_path).map_err(|error| {
         format!(
@@ -190,6 +236,7 @@ fn extract_zip_archive(
     })?;
 
     for index in 0..archive.len() {
+        progress(index as u64);
         let mut file = match archive.by_index(index) {
             Ok(file) => file,
             Err(error) => {
@@ -278,6 +325,12 @@ fn extract_zip_archive(
     }
 
     Ok(record)
+}
+
+fn zip_entry_count(path: &Path) -> Option<u64> {
+    let input = fs::File::open(path).ok()?;
+    let archive = ZipArchive::new(input).ok()?;
+    Some(archive.len() as u64)
 }
 
 fn is_zip_archive(path: &Path) -> bool {

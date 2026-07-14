@@ -1,4 +1,5 @@
 import { createElement, useEffect, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast, type Id } from "react-toastify";
 
 import type {
@@ -18,11 +19,22 @@ type ActiveIngestRun = {
 type ActiveIngestJob = {
   pluginId: string;
   pluginName: string;
+  progress?: PluginProgress;
 };
+
+type PluginProgress = {
+  completed: number;
+  etaSeconds?: number;
+  message?: string;
+  total: number;
+};
+
+type PluginProgressEvent = PluginProgress & { pluginId: string; runId: string };
 
 const activeRuns = new Map<string, ActiveIngestRun>();
 const listeners = new Set<() => void>();
 let ingestToastId: Id | null = null;
+let progressUnlisten: Promise<UnlistenFn> | null = null;
 
 export function createPluginRunId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -56,6 +68,7 @@ export function showPluginRunStartedToast(input: {
     runId,
     status: "running",
   });
+  ensureProgressListener();
   renderIngestToast();
 
   return ingestToastId ?? runId;
@@ -146,6 +159,7 @@ function IngestRunsToast() {
     };
   }, []);
 
+
   const ingestJobs = runs.flatMap((run) =>
     run.jobs.map((job) => ({
       job,
@@ -177,6 +191,11 @@ function IngestRunsToast() {
     createElement(
       "div",
       { className: "mt-1 text-[11px] opacity-85" },
+      "Progress is shown when reported by a plugin.",
+    ),
+    createElement(
+      "div",
+      { className: "mt-1 text-[11px] opacity-75" },
       "Closing this toast does not cancel running jobs.",
     ),
     createElement(
@@ -201,10 +220,39 @@ function IngestRunsToast() {
             createElement(
               "div",
               { className: "text-[11px] opacity-80" },
-              `${run.datasourceName} - ${
-                run.status === "cancelling" ? "Cancelling" : "Running"
-              }`,
+              run.status === "cancelling"
+                ? `${run.datasourceName} - Cancelling`
+                : job.progress?.message ?? `${run.datasourceName} - Running`,
             ),
+            job.progress &&
+              createElement(
+                "div",
+                { className: "mt-1" },
+                createElement(
+                  "div",
+                  {
+                    className: "h-1.5 overflow-hidden rounded-full bg-black/20",
+                    role: "progressbar",
+                    "aria-valuemax": job.progress.total,
+                    "aria-valuemin": 0,
+                    "aria-valuenow": job.progress.completed,
+                  },
+                  createElement("div", {
+                    className: "h-full rounded-full bg-white transition-[width]",
+                    style: {
+                      width: `${(job.progress.completed / job.progress.total) * 100}%`,
+                    },
+                  }),
+                ),
+                createElement(
+                  "div",
+                  { className: "mt-0.5 text-[10px] opacity-70" },
+                  `${job.progress.completed.toLocaleString()} / ${job.progress.total.toLocaleString()}`,
+                  job.progress.etaSeconds !== undefined
+                    ? ` · ${formatDuration(job.progress.etaSeconds)} remaining`
+                    : "",
+                ),
+              ),
           ),
           run.onCancel
             ? createElement(
@@ -227,6 +275,33 @@ function IngestRunsToast() {
       ),
     ),
   );
+}
+
+function formatDuration(seconds: number) {
+  seconds = Math.max(0, Math.ceil(seconds));
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+
+  return minutes > 0
+    ? `${minutes}m ${remainingSeconds.toString().padStart(2, "0")}s`
+    : `${remainingSeconds}s`;
+}
+
+function ensureProgressListener() {
+  progressUnlisten ??= listen<PluginProgressEvent>("plugin-progress", (event) => {
+    const progress = event.payload;
+    const run = activeRuns.get(progress.runId);
+    if (!run || progress.total <= 0) return;
+    activeRuns.set(progress.runId, {
+      ...run,
+      jobs: run.jobs.map((job) =>
+        job.pluginId === progress.pluginId
+          ? { ...job, progress: { ...progress, completed: Math.min(progress.completed, progress.total) } }
+          : job,
+      ),
+    });
+    notifyIngestToastSubscribers();
+  });
 }
 
 function cancelIngestRun(run: ActiveIngestRun) {
