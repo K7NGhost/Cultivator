@@ -26,6 +26,7 @@ pub struct MediaGallery {
 #[serde(rename_all = "camelCase")]
 pub struct MediaScanProgress {
     pub scanned_files: u64,
+    pub total_files: u64,
     pub matched_files: u64,
     pub current_path: String,
 }
@@ -140,6 +141,7 @@ pub fn manifest() -> PythonPluginManifest {
         ),
         entry: "builtin:image-metadata".to_string(),
         function: "scan".to_string(),
+        options: Vec::new(),
     }
 }
 
@@ -163,6 +165,13 @@ where
     let mut last_progress_file_count = 0u64;
     let mut last_progress_at = Instant::now();
 
+    progress(MediaScanProgress {
+        scanned_files: 0,
+        total_files: 0,
+        matched_files: 0,
+        current_path: String::new(),
+    });
+
     for root_path in paths {
         let root = PathBuf::from(root_path);
 
@@ -176,6 +185,7 @@ where
             maybe_report_progress(
                 &root,
                 scanned_files,
+                0,
                 &photos,
                 &videos,
                 &mut last_progress_file_count,
@@ -205,11 +215,11 @@ where
 
             scanned_files += 1;
             let entry_path = entry.into_path();
-
             push_media_item(&entry_path, &mut photos, &mut videos)?;
             maybe_report_progress(
                 &entry_path,
                 scanned_files,
+                0,
                 &photos,
                 &videos,
                 &mut last_progress_file_count,
@@ -221,6 +231,7 @@ where
 
     progress(MediaScanProgress {
         scanned_files,
+        total_files: 0,
         matched_files: (photos.len() + videos.len()) as u64,
         current_path: String::new(),
     });
@@ -235,6 +246,7 @@ where
 fn maybe_report_progress<F>(
     path: &Path,
     scanned_files: u64,
+    total_files: u64,
     photos: &[MediaItem],
     videos: &[MediaItem],
     last_progress_file_count: &mut u64,
@@ -256,6 +268,7 @@ fn maybe_report_progress<F>(
 
     progress(MediaScanProgress {
         scanned_files,
+        total_files,
         matched_files: (photos.len() + videos.len()) as u64,
         current_path: path.to_string_lossy().to_string(),
     });

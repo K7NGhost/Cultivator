@@ -179,6 +179,9 @@ export function FilesPage() {
     useState<DataSourceRecord | null>(null);
   const [availablePlugins, setAvailablePlugins] = useState<PythonPlugin[]>([]);
   const [selectedRunPluginIds, setSelectedRunPluginIds] = useState<string[]>([]);
+  const [pluginOptionValues, setPluginOptionValues] = useState<
+    Record<string, Record<string, string>>
+  >({});
   const [activeRunPluginId, setActiveRunPluginId] = useState("");
   const [pluginFilter, setPluginFilter] = useState("");
   const [pluginTargetFilter, setPluginTargetFilter] = useState<
@@ -1020,6 +1023,19 @@ export function FilesPage() {
 
     setPluginRunDataSource(dataSource);
     setSelectedRunPluginIds(dataSource.pluginIds);
+    setPluginOptionValues(
+      Object.fromEntries(
+        availablePlugins.map((plugin) => [
+          plugin.id,
+          Object.fromEntries(
+            (plugin.options ?? []).map((option) => [
+              option.id,
+              option.defaultValue,
+            ]),
+          ),
+        ]),
+      ),
+    );
     setPluginFilter("");
     setDataSourceError(null);
   }
@@ -1072,6 +1088,7 @@ export function FilesPage() {
         caseFolderPath: activeCase.folderPath,
         datasourceId: runDataSource.id,
         pluginIds: runPluginIds,
+        pluginOptions: pluginOptionValues,
         runId,
       });
       showPluginRunFinishedToasts({
@@ -1490,9 +1507,48 @@ export function FilesPage() {
                     <div className="text-muted-foreground">Target</div>
                     <div>{getPluginTargetLabel(activeRunPlugin.target)}</div>
                   </div>
-                  <div className="mt-auto rounded-sm border border-dashed px-2 py-2 text-[11px] text-muted-foreground">
-                    This plugin does not expose configurable options yet.
-                  </div>
+                  {(activeRunPlugin.options ?? []).length > 0 ? (
+                    <div className="mt-auto grid gap-2 rounded-sm border p-2">
+                      {activeRunPlugin.options?.map((option) => (
+                        <label key={option.id} className="grid gap-1">
+                          <span className="font-medium">{option.label}</span>
+                          <select
+                            className="h-7 rounded-sm border bg-background px-2 text-xs"
+                            value={
+                              pluginOptionValues[activeRunPlugin.id]?.[
+                                option.id
+                              ] ?? option.defaultValue
+                            }
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setPluginOptionValues((current) => ({
+                                ...current,
+                                [activeRunPlugin.id]: {
+                                  ...current[activeRunPlugin.id],
+                                  [option.id]: value,
+                                },
+                              }));
+                            }}
+                          >
+                            {option.choices.map((choice) => (
+                              <option key={choice.value} value={choice.value}>
+                                {choice.label}
+                              </option>
+                            ))}
+                          </select>
+                          {option.description && (
+                            <span className="text-[10px] text-muted-foreground">
+                              {option.description}
+                            </span>
+                          )}
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-auto rounded-sm border border-dashed px-2 py-2 text-[11px] text-muted-foreground">
+                      This plugin does not expose configurable options yet.
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="grid flex-1 place-items-center px-3 text-center text-xs text-muted-foreground">

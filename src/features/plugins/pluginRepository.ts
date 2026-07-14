@@ -7,6 +7,7 @@ import type {
   PluginRunSummary,
   PythonPlugin,
 } from "@/features/plugins/types";
+import { waitForPluginProgressListener } from "@/features/plugins/pluginToasts";
 
 export const archiveExtractorPluginId = "archive-extractor";
 
@@ -90,8 +91,10 @@ export async function runDatasourcePlugins(input: {
   caseFolderPath: string;
   datasourceId: string;
   pluginIds?: string[];
+  pluginOptions?: Record<string, Record<string, string>>;
   runId?: string;
 }): Promise<PluginRunSummary> {
+  await waitForPluginProgressListener();
   return invoke<PluginRunSummary>("run_datasource_plugins", input);
 }
 

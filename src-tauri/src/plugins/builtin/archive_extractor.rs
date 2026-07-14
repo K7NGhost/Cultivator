@@ -1,4 +1,7 @@
-use crate::plugins::{PythonPluginManifest, PythonPluginMode, PythonPluginTarget};
+use crate::plugins::{
+    PluginOptionChoice, PluginOptionDefinition, PythonPluginManifest, PythonPluginMode,
+    PythonPluginTarget,
+};
 use flate2::read::GzDecoder;
 use globset::{GlobBuilder, GlobMatcher};
 use ignore::WalkBuilder;
@@ -70,6 +73,24 @@ pub fn manifest() -> PythonPluginManifest {
         path_regex: Some("(?i).*(\\.zip|\\.tar|\\.gz|\\.tar\\.gz|\\.tgz)$".to_string()),
         entry: "builtin:archive-extractor".to_string(),
         function: "extract".to_string(),
+        options: vec![PluginOptionDefinition {
+            id: "extractionMode".to_string(),
+            label: "Extraction mode".to_string(),
+            description: "Extract every member or only paths requested by other selected plugins."
+                .to_string(),
+            option_type: "select".to_string(),
+            default_value: "all".to_string(),
+            choices: vec![
+                PluginOptionChoice {
+                    value: "all".to_string(),
+                    label: "Extract all".to_string(),
+                },
+                PluginOptionChoice {
+                    value: "plugin_specific".to_string(),
+                    label: "Plugin-specific paths".to_string(),
+                },
+            ],
+        }],
     }
 }
 
@@ -731,6 +752,7 @@ mod tests {
             path_regex: None,
             entry: "plugin.py".to_string(),
             function: "run".to_string(),
+            options: Vec::new(),
         }])
         .expect("matcher should compile");
 
@@ -789,6 +811,7 @@ mod tests {
             path_regex: None,
             entry: "plugin.py".to_string(),
             function: "run".to_string(),
+            options: Vec::new(),
         };
         let summary = execute_with_progress(
             vec![archive_path.to_string_lossy().to_string()],

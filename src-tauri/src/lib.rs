@@ -649,6 +649,7 @@ async fn run_datasource_plugins(
     case_folder_path: String,
     datasource_id: String,
     plugin_ids: Option<Vec<String>>,
+    plugin_options: Option<std::collections::HashMap<String, serde_json::Value>>,
     run_id: Option<String>,
 ) -> Result<plugins::PluginRunSummary, String> {
     plugins::run_datasource_plugins(
@@ -657,6 +658,7 @@ async fn run_datasource_plugins(
         case_folder_path,
         datasource_id,
         plugin_ids,
+        plugin_options,
         run_id,
     )
     .await

@@ -102,6 +102,29 @@ pub struct PythonPluginManifest {
     pub entry: String,
     #[serde(default = "default_plugin_function")]
     pub function: String,
+    #[serde(default)]
+    pub options: Vec<PluginOptionDefinition>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginOptionDefinition {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(rename = "type")]
+    pub option_type: String,
+    pub default_value: String,
+    #[serde(default)]
+    pub choices: Vec<PluginOptionChoice>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginOptionChoice {
+    pub value: String,
+    pub label: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -271,6 +294,7 @@ struct PythonPluginProcessInput<'a> {
     datasource: &'a DatasourceForPlugins,
     tasks: &'a [PluginExecutionTask],
     scanned_files: u64,
+    options: &'a JsonValue,
 }
 
 #[derive(Deserialize)]
@@ -1450,26 +1474,13 @@ pub fn cancel_plugin_run(run_id: String) -> Result<bool, String> {
     Ok(true)
 }
 
-fn is_direct_supported_archive_path(path: &str) -> bool {
-    let path = Path::new(path);
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    path.is_file()
-        && (name.ends_with(".zip")
-            || name.ends_with(".tar")
-            || name.ends_with(".tar.gz")
-            || name.ends_with(".tgz")
-            || name.ends_with(".gz"))
-}
-
 pub async fn run_datasource_plugins(
     app_handle: AppHandle,
     case_database_path: String,
     case_folder_path: String,
     datasource_id: String,
     plugin_ids: Option<Vec<String>>,
+    plugin_options: Option<HashMap<String, JsonValue>>,
     run_id: Option<String>,
 ) -> Result<PluginRunSummary, String> {
     let pool = open_case_database(&case_database_path).await?;
@@ -1483,33 +1494,30 @@ pub async fn run_datasource_plugins(
         .collect::<HashMap<_, _>>();
     let requested_plugin_ids = plugin_ids.unwrap_or_else(|| datasource.plugin_ids.clone());
     let mut jobs = Vec::new();
-    let should_prepare_zip_input = requested_plugin_ids
-        .iter()
-        .any(|plugin_id| plugin_id != builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID)
-        && datasource
-            .paths
-            .iter()
-            .any(|path| is_direct_supported_archive_path(path));
     let archive_extractor_requested = requested_plugin_ids
         .iter()
         .any(|plugin_id| plugin_id == builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID);
-    let archive_entry_manifests = should_prepare_zip_input
-        .then(|| {
-            requested_plugin_ids
-                .iter()
-                .filter(|plugin_id| plugin_id.as_str() != builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID)
-                .filter_map(|plugin_id| {
-                    if plugin_id == builtin::IMAGE_METADATA_PLUGIN_ID {
-                        Some(builtin::image_metadata_manifest())
-                    } else {
-                        plugin_map
-                            .get(plugin_id)
-                            .map(|plugin| plugin.manifest.clone())
-                    }
-                })
-                .collect::<Vec<_>>()
-        })
-        .filter(|_| !archive_extractor_requested);
+    let extraction_mode = plugin_options
+        .as_ref()
+        .and_then(|options| options.get(builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID))
+        .and_then(|options| options.get("extractionMode"))
+        .and_then(JsonValue::as_str)
+        .unwrap_or("all");
+    let archive_entry_manifests = (extraction_mode == "plugin_specific").then(|| {
+        requested_plugin_ids
+            .iter()
+            .filter(|plugin_id| plugin_id.as_str() != builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID)
+            .filter_map(|plugin_id| {
+                if plugin_id == builtin::IMAGE_METADATA_PLUGIN_ID {
+                    Some(builtin::image_metadata_manifest())
+                } else {
+                    plugin_map
+                        .get(plugin_id)
+                        .map(|plugin| plugin.manifest.clone())
+                }
+            })
+            .collect::<Vec<_>>()
+    });
 
     let mut datasource_paths_updated = false;
 
@@ -1521,21 +1529,11 @@ pub async fn run_datasource_plugins(
                 &mut datasource,
                 &case_folder_path,
                 run_id.as_deref(),
-                None,
+                archive_entry_manifests,
             )
             .await?,
         );
         datasource_paths_updated = jobs.last().is_some_and(|job| job.status == "complete");
-    } else if should_prepare_zip_input && !is_plugin_run_cancelled(run_id.as_deref())? {
-        datasource_paths_updated = prepare_archive_inputs(
-            &app_handle,
-            &pool,
-            &mut datasource,
-            &case_folder_path,
-            run_id.as_deref(),
-            archive_entry_manifests.unwrap_or_default(),
-        )
-        .await?;
     }
 
     #[cfg(feature = "python-plugins")]
@@ -1615,6 +1613,25 @@ pub async fn run_datasource_plugins(
             let execution_case_database_path = case_database_path.clone();
             let execution_case_folder_path = case_folder_path.clone();
             let execution_run_id = run_id.clone();
+            let mut resolved_plugin_options = plugin
+                .manifest
+                .options
+                .iter()
+                .map(|option| {
+                    (
+                        option.id.clone(),
+                        JsonValue::String(option.default_value.clone()),
+                    )
+                })
+                .collect::<serde_json::Map<_, _>>();
+            if let Some(provided_options) = plugin_options
+                .as_ref()
+                .and_then(|options| options.get(&plugin.manifest.id))
+                .and_then(JsonValue::as_object)
+            {
+                resolved_plugin_options.extend(provided_options.clone());
+            }
+            let execution_plugin_options = JsonValue::Object(resolved_plugin_options);
             let execution_app_handle = app_handle.clone();
             let execution_python_runtime = python_runtime
                 .get_or_insert_with(|| resolve_python_runtime(&app_handle))
@@ -1633,6 +1650,7 @@ pub async fn run_datasource_plugins(
                         &execution_python_runtime,
                         execution_run_id.as_deref(),
                         &execution_app_handle,
+                        &execution_plugin_options,
                     )
                 })
                 .await
@@ -1721,8 +1739,27 @@ pub async fn run_datasource_plugins(
         let progress_pool = pool.clone();
         let progress_job_id = job.id.clone();
         let progress_plugin_id = builtin::IMAGE_METADATA_PLUGIN_ID.to_string();
+        let progress_app_handle = app_handle.clone();
+        let progress_run_id = run_id.clone().unwrap_or_default();
         let progress_logger = tauri::async_runtime::spawn(async move {
-            while let Ok(progress) = progress_receiver.recv_timeout(Duration::from_millis(500)) {
+            while let Ok(progress) = progress_receiver.recv() {
+                let message = format!(
+                    "Found {} media file{}",
+                    progress.matched_files,
+                    if progress.matched_files == 1 { "" } else { "s" }
+                );
+                let _ = progress_app_handle.emit(
+                    "plugin-progress",
+                    PluginProgressEvent {
+                        run_id: progress_run_id.clone(),
+                        plugin_id: progress_plugin_id.clone(),
+                        completed: progress.matched_files,
+                        total: progress.total_files,
+                        message: Some(message),
+                        eta_seconds: None,
+                    },
+                );
+
                 if progress.scanned_files == 0 {
                     continue;
                 }
@@ -1790,59 +1827,6 @@ pub async fn run_datasource_plugins(
         jobs,
         datasource_paths_updated,
     })
-}
-
-async fn prepare_archive_inputs(
-    app_handle: &AppHandle,
-    pool: &SqlitePool,
-    datasource: &mut DatasourceForPlugins,
-    case_folder_path: &str,
-    run_id: Option<&str>,
-    selected_manifests: Vec<PythonPluginManifest>,
-) -> Result<bool, String> {
-    let execution_paths = datasource.paths.clone();
-    let output_root = archive_extractor_output_root(case_folder_path, &datasource.id);
-    let progress_app_handle = app_handle.clone();
-    let progress_run_id = run_id.unwrap_or_default().to_string();
-    let output = tauri::async_runtime::spawn_blocking(move || {
-        builtin::execute_archive_extractor_with_progress(
-            execution_paths,
-            output_root,
-            Some(selected_manifests),
-            |progress| {
-                if progress.total_entries == 0 {
-                    return;
-                }
-                let _ = progress_app_handle.emit(
-                    "plugin-progress",
-                    PluginProgressEvent {
-                        run_id: progress_run_id.clone(),
-                        plugin_id: builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID.to_string(),
-                        completed: progress.completed_entries,
-                        total: progress.total_entries,
-                        message: Some(format!("Reading {}", progress.current_archive)),
-                        eta_seconds: None,
-                    },
-                );
-            },
-        )
-    })
-    .await
-    .map_err(|error| format!("Archive preparation worker failed: {error}"))??;
-
-    if output.extracted_files == 0 {
-        return Ok(false);
-    }
-
-    add_datasource_path_if_missing(pool, &datasource.id, &output.output_root).await?;
-    if !datasource
-        .paths
-        .iter()
-        .any(|path| path == &output.output_root)
-    {
-        datasource.paths.push(output.output_root);
-    }
-    Ok(true)
 }
 
 async fn finish_python_plugin_job(
@@ -2073,6 +2057,7 @@ fn execute_python_plugin_process(
     python_runtime: &PythonRuntime,
     run_id: Option<&str>,
     app_handle: &AppHandle,
+    plugin_options: &JsonValue,
 ) -> Result<PluginExecutionOutput, String> {
     if is_plugin_run_cancelled(run_id)? {
         return Err("Plugin run cancelled.".to_string());
@@ -2086,6 +2071,7 @@ fn execute_python_plugin_process(
         datasource,
         tasks: &plan.tasks,
         scanned_files: plan.scanned_files,
+        options: plugin_options,
     };
     let input_json = serde_json::to_vec(&input)
         .map_err(|error| format!("Failed to serialize plugin input: {error}"))?;
@@ -3696,6 +3682,7 @@ def build_context(input_data, task):
             "name": plugin["name"],
             "mode": plugin["mode"],
         },
+        "options": input_data.get("options", {}),
         "file": {
             "path": target_file["path"],
             "name": target_file["name"],

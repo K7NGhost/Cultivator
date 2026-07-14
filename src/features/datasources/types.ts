@@ -19,6 +19,16 @@ export type DataSourcePlugin = {
   pathRegex?: string;
   entry: string;
   function: string;
+  options?: PluginOptionDefinition[];
+};
+
+export type PluginOptionDefinition = {
+  id: string;
+  label: string;
+  description?: string;
+  type: "select";
+  defaultValue: string;
+  choices: Array<{ value: string; label: string }>;
 };
 
 export type DataSourceRecord = {

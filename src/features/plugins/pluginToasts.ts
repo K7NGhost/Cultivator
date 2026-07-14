@@ -233,21 +233,40 @@ function IngestRunsToast() {
                   {
                     className: "h-1.5 overflow-hidden rounded-full bg-black/20",
                     role: "progressbar",
-                    "aria-valuemax": job.progress.total,
+                    "aria-valuemax": job.progress.total || undefined,
                     "aria-valuemin": 0,
-                    "aria-valuenow": job.progress.completed,
+                    "aria-valuenow":
+                      job.progress.total > 0
+                        ? job.progress.completed
+                        : undefined,
+                    "aria-valuetext":
+                      job.progress.total === 0
+                        ? job.pluginId === "image-metadata"
+                          ? `${job.progress.completed} media files found`
+                          : `${job.progress.completed} items processed`
+                        : undefined,
                   },
                   createElement("div", {
-                    className: "h-full rounded-full bg-white transition-[width]",
+                    className:
+                      job.progress.total > 0
+                        ? "h-full rounded-full bg-white transition-[width]"
+                        : "h-full w-1/3 animate-pulse rounded-full bg-white",
                     style: {
-                      width: `${(job.progress.completed / job.progress.total) * 100}%`,
+                      width:
+                        job.progress.total > 0
+                          ? `${(job.progress.completed / job.progress.total) * 100}%`
+                          : undefined,
                     },
                   }),
                 ),
                 createElement(
                   "div",
                   { className: "mt-0.5 text-[10px] opacity-70" },
-                  `${job.progress.completed.toLocaleString()} / ${job.progress.total.toLocaleString()}`,
+                  job.progress.total > 0
+                    ? `${job.progress.completed.toLocaleString()} / ${job.progress.total.toLocaleString()}`
+                    : job.pluginId === "image-metadata"
+                      ? `${job.progress.completed.toLocaleString()} media files found`
+                      : `${job.progress.completed.toLocaleString()} items processed`,
                   job.progress.etaSeconds !== undefined
                     ? ` · ${formatDuration(job.progress.etaSeconds)} remaining`
                     : "",
@@ -291,10 +310,13 @@ function ensureProgressListener() {
   progressUnlisten ??= listen<PluginProgressEvent>("plugin-progress", (event) => {
     const progress = event.payload;
     const run = activeRuns.get(progress.runId);
-    if (!run || progress.total <= 0) return;
+    if (!run || progress.completed < 0 || progress.total < 0) return;
     const reportedProgress = {
       ...progress,
-      completed: Math.min(progress.completed, progress.total),
+      completed:
+        progress.total > 0
+          ? Math.min(progress.completed, progress.total)
+          : progress.completed,
     };
     const hasJob = run.jobs.some((job) => job.pluginId === progress.pluginId);
     activeRuns.set(progress.runId, {
@@ -319,6 +341,12 @@ function ensureProgressListener() {
     });
     notifyIngestToastSubscribers();
   });
+
+  return progressUnlisten;
+}
+
+export async function waitForPluginProgressListener() {
+  await ensureProgressListener();
 }
 
 function cancelIngestRun(run: ActiveIngestRun) {
