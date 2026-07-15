@@ -466,7 +466,13 @@ enum EntryKind {
 }
 
 #[tauri::command]
-fn list_directory(path: String) -> Result<DirectoryListing, String> {
+async fn list_directory(path: String) -> Result<DirectoryListing, String> {
+    tokio::task::spawn_blocking(move || list_directory_impl(path))
+        .await
+        .map_err(|error| format!("Failed to join directory scan task: {error}"))?
+}
+
+fn list_directory_impl(path: String) -> Result<DirectoryListing, String> {
     let root = PathBuf::from(path);
 
     if !root.is_dir() {
@@ -486,7 +492,13 @@ fn list_directory(path: String) -> Result<DirectoryListing, String> {
 }
 
 #[tauri::command]
-fn list_directory_entries(path: String) -> Result<Vec<DirectoryEntry>, String> {
+async fn list_directory_entries(path: String) -> Result<Vec<DirectoryEntry>, String> {
+    tokio::task::spawn_blocking(move || list_directory_entries_impl(path))
+        .await
+        .map_err(|error| format!("Failed to join directory listing task: {error}"))?
+}
+
+fn list_directory_entries_impl(path: String) -> Result<Vec<DirectoryEntry>, String> {
     let directory = PathBuf::from(path);
 
     if !directory.is_dir() {
@@ -497,7 +509,13 @@ fn list_directory_entries(path: String) -> Result<Vec<DirectoryEntry>, String> {
 }
 
 #[tauri::command]
-fn describe_paths(paths: Vec<String>) -> Result<Vec<DirectoryEntry>, String> {
+async fn describe_paths(paths: Vec<String>) -> Result<Vec<DirectoryEntry>, String> {
+    tokio::task::spawn_blocking(move || describe_paths_impl(paths))
+        .await
+        .map_err(|error| format!("Failed to join path description task: {error}"))?
+}
+
+fn describe_paths_impl(paths: Vec<String>) -> Result<Vec<DirectoryEntry>, String> {
     let mut entries = Vec::new();
 
     for path in paths {

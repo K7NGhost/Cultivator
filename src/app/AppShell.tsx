@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { AppMenubar } from "@/app/AppMenubar";
 import { AppSidebar } from "@/app/AppSidebar";
+import { StartupLoadingOverlay } from "@/app/StartupLoadingOverlay";
 import { loadSidebarOpenState, saveSidebarOpenState } from "@/app/sidebarState";
 import { ModeToggle } from "@/components/mode-toggle";
 import {
@@ -111,6 +112,7 @@ function AppShellContent() {
           <PersistentWorkspace />
         </main>
       </SidebarInset>
+      <StartupLoadingOverlay />
     </SidebarProvider>
   );
 }
@@ -120,6 +122,7 @@ function PersistentWorkspace() {
   const navigate = useNavigate();
   const activePath =
     location.pathname === "/" ? "/files" : normalizeWorkspacePath(location.pathname);
+  const [visitedPaths, setVisitedPaths] = useState(() => new Set([activePath]));
 
   useEffect(() => {
     if (location.pathname === "/" || activePath !== location.pathname) {
@@ -127,9 +130,20 @@ function PersistentWorkspace() {
     }
   }, [activePath, location.pathname, navigate]);
 
+  useEffect(() => {
+    setVisitedPaths((currentPaths) => {
+      if (currentPaths.has(activePath)) {
+        return currentPaths;
+      }
+
+      return new Set([...currentPaths, activePath]);
+    });
+  }, [activePath]);
+
   return (
     <>
       {workspaceRoutes.map((route) => (
+        visitedPaths.has(route.path) &&
         <section
           key={route.path}
           className={route.path === activePath ? "h-full min-h-0" : "hidden"}

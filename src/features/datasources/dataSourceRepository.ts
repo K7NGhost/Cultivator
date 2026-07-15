@@ -13,6 +13,7 @@ import type {
 } from "@/features/datasources/types";
 
 const dataSourcesChangedEvent = "cultivator:datasources-changed";
+const dataSourceListRequests = new Map<string, Promise<DataSourceRecord[]>>();
 
 type DataSourceRow = {
   id: string;
@@ -189,6 +190,12 @@ export async function createDataSource(
 }
 
 export function notifyDataSourcesChanged(caseId: string) {
+  for (const cacheKey of dataSourceListRequests.keys()) {
+    if (cacheKey.endsWith(`\u0000${caseId}`)) {
+      dataSourceListRequests.delete(cacheKey);
+    }
+  }
+
   window.dispatchEvent(
     new CustomEvent(dataSourcesChangedEvent, {
       detail: { caseId },
@@ -222,6 +229,28 @@ export function subscribeToDataSourcesChanged(
 }
 
 export async function listDataSources(
+  caseDatabasePath: string,
+  caseId: string,
+): Promise<DataSourceRecord[]> {
+  const cacheKey = `${caseDatabasePath}\u0000${caseId}`;
+  const existingRequest = dataSourceListRequests.get(cacheKey);
+
+  if (existingRequest) {
+    return existingRequest;
+  }
+
+  const request = listDataSourcesUncached(caseDatabasePath, caseId).catch(
+    (error) => {
+      dataSourceListRequests.delete(cacheKey);
+      throw error;
+    },
+  );
+  dataSourceListRequests.set(cacheKey, request);
+
+  return request;
+}
+
+async function listDataSourcesUncached(
   caseDatabasePath: string,
   caseId: string,
 ): Promise<DataSourceRecord[]> {

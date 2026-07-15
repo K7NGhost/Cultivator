@@ -55,6 +55,7 @@ type FileTreeViewerProps = {
   selectedFileViewDataSourceId?: string;
   tagSummaries?: FileTagSummary[];
   onSelectNode: (node: EvidenceTreeNode) => void;
+  onExpandNode?: (node: EvidenceTreeNode) => void;
   onSelectFileView?: (view: FileViewSelection) => void;
   onSelectFileViewDataSource?: (datasourceId: string) => void;
   onRemoveDataSource?: (node: EvidenceTreeNode) => void;
@@ -161,10 +162,25 @@ function buildRealTreeNodes(
     }
 
     const children = buildRealTreeNodes(node.children ?? [], options);
+    const lazyChildren =
+      children.length === 0 &&
+      node.kind === "directory" &&
+      node.children === undefined &&
+      (node.childCount ?? node.files) > 0
+        ? [
+            {
+              id: `${node.id}:loading`,
+              name: "Loading...",
+              path: "",
+              kind: "group" as const,
+              files: 0,
+            },
+          ]
+        : undefined;
 
     visibleNodes.push({
       ...node,
-      children: children.length > 0 ? children : undefined,
+      children: children.length > 0 ? children : lazyChildren,
       sourceNode: node,
     });
   }
@@ -853,6 +869,7 @@ export function FileTreeViewer({
   selectedFileViewDataSourceId = "all",
   tagSummaries = [],
   onSelectNode,
+  onExpandNode,
   onSelectFileView,
   onSelectFileViewDataSource,
   onRemoveDataSource,
@@ -916,6 +933,13 @@ export function FileTreeViewer({
   }, [treeOpenState]);
 
   function handleTreeToggle(id: string) {
+    const isOpening = !(treeOpenState[id] ?? false);
+    const toggledNode = findTreeNodeById(treeData, id);
+
+    if (isOpening && toggledNode?.sourceNode) {
+      onExpandNode?.(toggledNode.sourceNode);
+    }
+
     // react-arborist only reports the toggled node id. Nodes default to closed,
     // so an absent value becomes open the first time the user toggles it.
     setTreeOpenState((currentOpenState) => ({

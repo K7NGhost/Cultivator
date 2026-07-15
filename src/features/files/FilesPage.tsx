@@ -34,7 +34,6 @@ import type {
 } from "@/features/datasources/types";
 import {
   type EvidenceDirectoryEntry,
-  type EvidenceDirectoryListing,
   type EvidenceTreeNode,
   useEvidence,
 } from "@/features/evidence/evidence-provider";
@@ -71,6 +70,7 @@ import {
 } from "@/features/plugins/pluginToasts";
 import type { PythonPlugin } from "@/features/plugins/types";
 import { cn } from "@/lib/utils";
+import { notifyFilesWorkspaceReady } from "@/app/startupEvents";
 
 function getPluginTargetLabel(target: PythonPlugin["target"]) {
   switch (target) {
@@ -147,6 +147,7 @@ export function FilesPage() {
   const [selectedFileView, setSelectedFileView] =
     useState<FileViewSelection | null>(null);
   const selectedFileViewRef = useRef<FileViewSelection | null>(null);
+  const loadingTreeNodePathsRef = useRef(new Set<string>());
   const [fileViewEntriesById, setFileViewEntriesById] = useState<
     Record<string, EvidenceDirectoryEntry[]>
   >({});
@@ -292,6 +293,10 @@ export function FilesPage() {
             : "all",
         );
         setDataSourceTreeNodes(nextNodes);
+        notifyFilesWorkspaceReady({
+          caseId: activeCase.id,
+          datasourceCount: dataSources.length,
+        });
       })
       .catch((caughtError) => {
         if (!isCurrent) {
@@ -305,6 +310,14 @@ export function FilesPage() {
         );
         setDataSources([]);
         setDataSourceTreeNodes([]);
+        notifyFilesWorkspaceReady({
+          caseId: activeCase.id,
+          datasourceCount: 0,
+          error:
+            caughtError instanceof Error
+              ? caughtError.message
+              : String(caughtError),
+        });
       })
       .finally(() => {
         if (isCurrent) {
@@ -705,6 +718,39 @@ export function FilesPage() {
     }
 
     void loadDirectoryEntries(node, { pushHistory: true });
+  }
+
+  async function loadTreeNodeChildren(node: EvidenceTreeNode) {
+    if (
+      node.kind !== "directory" ||
+      node.children !== undefined ||
+      loadingTreeNodePathsRef.current.has(node.path)
+    ) {
+      return;
+    }
+
+    loadingTreeNodePathsRef.current.add(node.path);
+
+    try {
+      const entries = await invoke<EvidenceDirectoryEntry[]>(
+        "list_directory_entries",
+        { path: node.path },
+      );
+      const children = entries.map((entry) =>
+        directoryEntryToNestedTreeNode(node, entry),
+      );
+      setDataSourceTreeNodes((currentNodes) =>
+        replaceTreeNodeChildren(currentNodes, node.id, children),
+      );
+    } catch (caughtError) {
+      setEntriesError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : String(caughtError),
+      );
+    } finally {
+      loadingTreeNodePathsRef.current.delete(node.path);
+    }
   }
 
   async function loadTaggedFileView(view: FileViewSelection) {
@@ -1246,6 +1292,9 @@ export function FilesPage() {
             tagSummaries={fileTagSummaries}
             onSelectFileViewDataSource={setFileViewDataSourceId}
             onSelectNode={selectTreeNode}
+            onExpandNode={(node) => {
+              void loadTreeNodeChildren(node);
+            }}
             onSelectFileView={(view) => {
               selectFileView(view);
             }}
@@ -1640,18 +1689,29 @@ async function buildDataSourcePathTreeNode(
   dataSource: DataSourceRecord,
   entry: EvidenceDirectoryEntry,
 ): Promise<EvidenceTreeNode> {
-  if (entry.kind === "directory") {
+  const node = directoryEntryToTreeNode(dataSource, entry);
+
+  if (
+    entry.kind === "directory" &&
+    isArchiveExtractorOutputPath(dataSource, entry.path)
+  ) {
     try {
-      const listing = await invoke<EvidenceDirectoryListing>("list_directory", {
-        path: entry.path,
-      });
-      return prefixTreeNodeId(listing.tree, `datasource:${dataSource.id}`);
+      const entries = await invoke<EvidenceDirectoryEntry[]>(
+        "list_directory_entries",
+        { path: entry.path },
+      );
+      return {
+        ...node,
+        children: entries.map((child) =>
+          directoryEntryToNestedTreeNode(node, child),
+        ),
+      };
     } catch {
-      return directoryEntryToTreeNode(dataSource, entry);
+      return node;
     }
   }
 
-  return directoryEntryToTreeNode(dataSource, entry);
+  return node;
 }
 
 function directoryEntryToTreeNode(
@@ -1668,6 +1728,50 @@ function directoryEntryToTreeNode(
     modifiedMs: entry.modifiedMs,
     childCount: entry.childCount,
   };
+}
+
+function directoryEntryToNestedTreeNode(
+  parent: EvidenceTreeNode,
+  entry: EvidenceDirectoryEntry,
+): EvidenceTreeNode {
+  return {
+    id: `${parent.id}:${entry.path}`,
+    name: entry.name,
+    path: entry.path,
+    kind: entry.kind,
+    files: entry.kind === "directory" ? (entry.childCount ?? 0) : 0,
+    size: entry.size,
+    modifiedMs: entry.modifiedMs,
+    childCount: entry.childCount,
+  };
+}
+
+function replaceTreeNodeChildren(
+  nodes: EvidenceTreeNode[],
+  nodeId: string,
+  children: EvidenceTreeNode[],
+): EvidenceTreeNode[] {
+  let changed = false;
+  const nextNodes = nodes.map((node) => {
+    if (node.id === nodeId) {
+      changed = true;
+      return { ...node, children };
+    }
+
+    if (!node.children) {
+      return node;
+    }
+
+    const nextChildren = replaceTreeNodeChildren(node.children, nodeId, children);
+    if (nextChildren !== node.children) {
+      changed = true;
+      return { ...node, children: nextChildren };
+    }
+
+    return node;
+  });
+
+  return changed ? nextNodes : nodes;
 }
 
 function getArchiveTreeNodeName(name: string) {
@@ -1687,19 +1791,6 @@ function isArchiveExtractorOutputPath(
   return normalizedPath.endsWith(
     `/artifacts/extracted/${normalizedDataSourceId}`,
   );
-}
-
-function prefixTreeNodeId(
-  node: EvidenceTreeNode,
-  idPrefix: string,
-): EvidenceTreeNode {
-  return {
-    ...node,
-    id: `${idPrefix}:${node.path}`,
-    children: node.children?.map((childNode) =>
-      prefixTreeNodeId(childNode, idPrefix),
-    ),
-  };
 }
 
 function treeNodeToDirectoryEntry(
