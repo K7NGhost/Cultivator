@@ -822,10 +822,10 @@ fn search<'py>(
 }
 
 pub fn list_python_plugins(app_handle: AppHandle) -> Result<Vec<PythonPluginManifest>, String> {
-    let mut plugins = vec![
-        builtin::archive_extractor_manifest(),
-        builtin::image_metadata_manifest(),
-    ];
+    let mut plugins = builtin::plugins()
+        .iter()
+        .map(|plugin| plugin.manifest())
+        .collect::<Vec<_>>();
 
     plugins.extend(
         load_python_plugins(&app_handle)?
@@ -1081,8 +1081,7 @@ pub async fn list_plugin_artifacts(
             payload,
             created_at
           FROM plugin_results AS result
-          WHERE result.plugin_id != $1
-            AND result.result_kind NOT IN ($2, $3)
+          WHERE result.result_kind NOT IN ($1, $2)
             AND result.job_id = (
               SELECT job.id
               FROM plugin_jobs AS job
@@ -1096,7 +1095,6 @@ pub async fn list_plugin_artifacts(
           LIMIT 5000
         "#,
     )
-    .bind(builtin::IMAGE_METADATA_PLUGIN_ID)
     .bind(LEGACY_DEMO_ARTIFACT_KINDS[0])
     .bind(LEGACY_DEMO_ARTIFACT_KINDS[1])
     .fetch_all(&pool)
@@ -1150,11 +1148,9 @@ pub async fn delete_plugin_artifacts(
             r#"
               DELETE FROM plugin_results
               WHERE id = $1
-                AND plugin_id != $2
             "#,
         )
         .bind(artifact_id)
-        .bind(builtin::IMAGE_METADATA_PLUGIN_ID)
         .execute(&pool)
         .await
         .map_err(|error| format!("Failed to delete plugin artifact: {error}"))?;
@@ -1494,53 +1490,54 @@ pub async fn run_datasource_plugins(
         .collect::<HashMap<_, _>>();
     let requested_plugin_ids = plugin_ids.unwrap_or_else(|| datasource.plugin_ids.clone());
     let mut jobs = Vec::new();
-    let archive_extractor_requested = requested_plugin_ids
+    let related_manifests = requested_plugin_ids
         .iter()
-        .any(|plugin_id| plugin_id == builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID);
-    let extraction_mode = plugin_options
-        .as_ref()
-        .and_then(|options| options.get(builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID))
-        .and_then(|options| options.get("extractionMode"))
-        .and_then(JsonValue::as_str)
-        .unwrap_or("all");
-    let archive_entry_manifests = (extraction_mode == "plugin_specific").then(|| {
-        requested_plugin_ids
-            .iter()
-            .filter(|plugin_id| plugin_id.as_str() != builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID)
-            .filter_map(|plugin_id| {
-                if plugin_id == builtin::IMAGE_METADATA_PLUGIN_ID {
-                    Some(builtin::image_metadata_manifest())
-                } else {
+        .filter_map(|plugin_id| {
+            builtin::plugin(plugin_id)
+                .map(|plugin| plugin.manifest())
+                .or_else(|| {
                     plugin_map
                         .get(plugin_id)
                         .map(|plugin| plugin.manifest.clone())
-                }
-            })
-            .collect::<Vec<_>>()
-    });
+                })
+        })
+        .collect::<Vec<_>>();
+    let mut requested_builtins = requested_plugin_ids
+        .iter()
+        .filter_map(|plugin_id| builtin::plugin(plugin_id))
+        .collect::<Vec<_>>();
+    requested_builtins.sort_by_key(|plugin| plugin.execution_order());
 
     let mut datasource_paths_updated = false;
 
-    if archive_extractor_requested && !is_plugin_run_cancelled(run_id.as_deref())? {
-        jobs.push(
-            run_archive_extractor_stage(
-                &app_handle,
-                &pool,
-                &mut datasource,
-                &case_folder_path,
-                run_id.as_deref(),
-                archive_entry_manifests,
-            )
-            .await?,
-        );
-        datasource_paths_updated = jobs.last().is_some_and(|job| job.status == "complete");
+    for plugin in requested_builtins
+        .iter()
+        .copied()
+        .filter(|plugin| plugin.execution_order() < 100)
+    {
+        if is_plugin_run_cancelled(run_id.as_deref())? {
+            break;
+        }
+
+        let (job, paths_updated) = run_builtin_plugin_stage(
+            &app_handle,
+            &pool,
+            &mut datasource,
+            &case_folder_path,
+            run_id.as_deref(),
+            plugin,
+            plugin_options.as_ref(),
+            related_manifests.clone(),
+        )
+        .await?;
+        datasource_paths_updated |= paths_updated;
+        jobs.push(job);
     }
 
     #[cfg(feature = "python-plugins")]
     let datasource_files = enumerate_datasource_files(&datasource)?;
     let mut python_runtime = None;
     let mut job_handles = Vec::new();
-    let mut should_run_image_metadata = false;
 
     for plugin_id in &requested_plugin_ids {
         if is_plugin_run_cancelled(run_id.as_deref())? {
@@ -1565,12 +1562,7 @@ pub async fn run_datasource_plugins(
             continue;
         }
 
-        if plugin_id == builtin::IMAGE_METADATA_PLUGIN_ID {
-            should_run_image_metadata = true;
-            continue;
-        }
-
-        if plugin_id == builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID {
+        if builtin::plugin(plugin_id).is_some() {
             continue;
         }
 
@@ -1613,25 +1605,8 @@ pub async fn run_datasource_plugins(
             let execution_case_database_path = case_database_path.clone();
             let execution_case_folder_path = case_folder_path.clone();
             let execution_run_id = run_id.clone();
-            let mut resolved_plugin_options = plugin
-                .manifest
-                .options
-                .iter()
-                .map(|option| {
-                    (
-                        option.id.clone(),
-                        JsonValue::String(option.default_value.clone()),
-                    )
-                })
-                .collect::<serde_json::Map<_, _>>();
-            if let Some(provided_options) = plugin_options
-                .as_ref()
-                .and_then(|options| options.get(&plugin.manifest.id))
-                .and_then(JsonValue::as_object)
-            {
-                resolved_plugin_options.extend(provided_options.clone());
-            }
-            let execution_plugin_options = JsonValue::Object(resolved_plugin_options);
+            let execution_plugin_options =
+                resolved_plugin_options(&plugin.manifest, plugin_options.as_ref());
             let execution_app_handle = app_handle.clone();
             let execution_python_runtime = python_runtime
                 .get_or_insert_with(|| resolve_python_runtime(&app_handle))
@@ -1712,104 +1687,28 @@ pub async fn run_datasource_plugins(
         }
     }
 
-    if should_run_image_metadata && !is_plugin_run_cancelled(run_id.as_deref())? {
-        let job = create_plugin_job(&pool, &datasource, builtin::IMAGE_METADATA_PLUGIN_ID).await?;
-        let execution_paths = datasource.paths.clone();
-        insert_plugin_logs(
+    for plugin in requested_builtins
+        .iter()
+        .copied()
+        .filter(|plugin| plugin.execution_order() >= 100)
+    {
+        if is_plugin_run_cancelled(run_id.as_deref())? {
+            break;
+        }
+
+        let (job, paths_updated) = run_builtin_plugin_stage(
+            &app_handle,
             &pool,
-            &job.id,
-            builtin::IMAGE_METADATA_PLUGIN_ID,
-            &[PendingPluginLog {
-                level: "info".to_string(),
-                message: format!(
-                    "Image metadata started. Scanning {} datasource path{}.",
-                    execution_paths.len(),
-                    if execution_paths.len() == 1 { "" } else { "s" }
-                ),
-            }],
+            &mut datasource,
+            &case_folder_path,
+            run_id.as_deref(),
+            plugin,
+            plugin_options.as_ref(),
+            related_manifests.clone(),
         )
         .await?;
-        let job_id = job.id.clone();
-        let plugin_id = builtin::IMAGE_METADATA_PLUGIN_ID.to_string();
-        let job_pool = pool.clone();
-        let job_datasource_id = datasource.id.clone();
-        let job_run_id = run_id.clone();
-        let (progress_sender, progress_receiver) =
-            std::sync::mpsc::channel::<builtin::MediaScanProgress>();
-        let progress_pool = pool.clone();
-        let progress_job_id = job.id.clone();
-        let progress_plugin_id = builtin::IMAGE_METADATA_PLUGIN_ID.to_string();
-        let progress_app_handle = app_handle.clone();
-        let progress_run_id = run_id.clone().unwrap_or_default();
-        let progress_logger = tauri::async_runtime::spawn(async move {
-            while let Ok(progress) = progress_receiver.recv() {
-                let message = format!(
-                    "Found {} media file{}",
-                    progress.matched_files,
-                    if progress.matched_files == 1 { "" } else { "s" }
-                );
-                let _ = progress_app_handle.emit(
-                    "plugin-progress",
-                    PluginProgressEvent {
-                        run_id: progress_run_id.clone(),
-                        plugin_id: progress_plugin_id.clone(),
-                        completed: progress.matched_files,
-                        total: progress.total_files,
-                        message: Some(message),
-                        eta_seconds: None,
-                    },
-                );
-
-                if progress.scanned_files == 0 {
-                    continue;
-                }
-
-                let current_path = if progress.current_path.is_empty() {
-                    String::new()
-                } else {
-                    format!(" Current file: {}", progress.current_path)
-                };
-                let log = PendingPluginLog {
-                    level: "info".to_string(),
-                    message: format!(
-                        "Image metadata still running. Scanned {} files and found {} media files so far.{}",
-                        progress.scanned_files, progress.matched_files, current_path
-                    ),
-                };
-
-                let _ = insert_plugin_logs(
-                    &progress_pool,
-                    &progress_job_id,
-                    &progress_plugin_id,
-                    &[log],
-                )
-                .await;
-            }
-        });
-
-        let handle = tauri::async_runtime::spawn(async move {
-            let output = tauri::async_runtime::spawn_blocking(move || {
-                builtin::execute_image_metadata_with_progress(execution_paths, |progress| {
-                    let _ = progress_sender.send(progress);
-                })
-            })
-            .await
-            .map_err(|error| format!("Plugin worker failed: {error}"))?;
-
-            let _ = progress_logger.await;
-
-            finish_image_metadata_job(
-                &job_pool,
-                &job_id,
-                &job_datasource_id,
-                &plugin_id,
-                output,
-                job_run_id.as_deref(),
-            )
-            .await
-        });
-
-        job_handles.push(handle);
+        datasource_paths_updated |= paths_updated;
+        jobs.push(job);
     }
 
     for handle in job_handles {
@@ -1860,191 +1759,148 @@ async fn finish_python_plugin_job(
     load_plugin_job(pool, job_id).await
 }
 
-async fn run_archive_extractor_stage(
+async fn run_builtin_plugin_stage(
     app_handle: &AppHandle,
     pool: &SqlitePool,
     datasource: &mut DatasourceForPlugins,
     case_folder_path: &str,
     run_id: Option<&str>,
-    selected_manifests: Option<Vec<PythonPluginManifest>>,
-) -> Result<PluginJobRecord, String> {
-    let job = create_plugin_job(pool, datasource, builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID).await?;
+    plugin: &'static dyn builtin::BuiltinPlugin,
+    plugin_options: Option<&HashMap<String, JsonValue>>,
+    related_manifests: Vec<PythonPluginManifest>,
+) -> Result<(PluginJobRecord, bool), String> {
+    let manifest = plugin.manifest();
+    let plugin_id = manifest.id.clone();
+    let job = create_plugin_job(pool, datasource, &plugin_id).await?;
     let execution_paths = datasource.paths.clone();
-    let output_root = archive_extractor_output_root(case_folder_path, &datasource.id);
+    let output_root = plugin
+        .output_directory_name()
+        .map(|directory| builtin_plugin_output_root(case_folder_path, directory, &datasource.id));
+    let options = resolved_plugin_options(&manifest, plugin_options);
+    let related_manifests = related_manifests
+        .into_iter()
+        .filter(|related| related.id != plugin_id)
+        .collect();
     let progress_app_handle = app_handle.clone();
     let progress_run_id = run_id.unwrap_or_default().to_string();
+    let progress_plugin_id = plugin_id.clone();
     let output = tauri::async_runtime::spawn_blocking(move || {
-        builtin::execute_archive_extractor_with_progress(
+        let mut reporter = |progress: builtin::BuiltinPluginProgress| {
+            if progress.total == 0 && progress.completed == 0 && progress.message.is_none() {
+                return;
+            }
+            let _ = progress_app_handle.emit(
+                "plugin-progress",
+                PluginProgressEvent {
+                    run_id: progress_run_id.clone(),
+                    plugin_id: progress_plugin_id.clone(),
+                    completed: progress.completed,
+                    total: progress.total,
+                    message: progress.message,
+                    eta_seconds: None,
+                },
+            );
+        };
+        let cancellation = || is_plugin_run_cancelled(Some(&progress_run_id)).unwrap_or(false);
+        let mut context = builtin::BuiltinPluginContext::new(
             execution_paths,
             output_root,
-            selected_manifests,
-            |progress| {
-                if progress.total_entries == 0 {
-                    return;
-                }
-                let _ = progress_app_handle.emit(
-                    "plugin-progress",
-                    PluginProgressEvent {
-                        run_id: progress_run_id.clone(),
-                        plugin_id: builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID.to_string(),
-                        completed: progress.completed_entries,
-                        total: progress.total_entries,
-                        message: Some(format!("Extracting {}", progress.current_archive)),
-                        eta_seconds: None,
-                    },
-                );
-            },
-        )
+            options,
+            related_manifests,
+            &mut reporter,
+            &cancellation,
+        );
+
+        plugin.run(&mut context)?;
+        Ok::<_, String>(context.into_effects())
     })
     .await
-    .map_err(|error| format!("Archive extractor worker failed: {error}"))?;
-    let extracted_path = output
-        .as_ref()
-        .ok()
-        .filter(|summary| summary.extracted_files > 0)
-        .map(|summary| summary.output_root.clone());
-    let job_record = finish_archive_extractor_job(
-        pool,
-        &job.id,
-        &datasource.id,
-        builtin::ARCHIVE_EXTRACTOR_PLUGIN_ID,
-        output,
-        run_id,
-    )
-    .await?;
-
-    if job_record.status == "complete" {
-        if let Some(path) = extracted_path {
-            add_datasource_path_if_missing(pool, &datasource.id, &path).await?;
-
-            if !datasource.paths.iter().any(|existing| existing == &path) {
-                datasource.paths.push(path);
-            }
-        }
-    }
-
-    Ok(job_record)
-}
-
-async fn finish_archive_extractor_job(
-    pool: &SqlitePool,
-    job_id: &str,
-    datasource_id: &str,
-    plugin_id: &str,
-    output: Result<builtin::ArchiveExtractionSummary, String>,
-    run_id: Option<&str>,
-) -> Result<PluginJobRecord, String> {
-    match output {
-        Ok(summary) => {
+    .map_err(|error| format!("Built-in plugin worker failed: {error}"))?;
+    let mut paths_updated = false;
+    let job_record = match output {
+        Ok(effects) => {
             if is_plugin_run_cancelled(run_id)? {
-                fail_plugin_job(pool, job_id, "Plugin run cancelled.").await?;
-                return load_plugin_job(pool, job_id).await;
+                fail_plugin_job(pool, &job.id, "Plugin run cancelled.").await?;
+                return Ok((load_plugin_job(pool, &job.id).await?, false));
             }
 
-            let mut logs = vec![PendingPluginLog {
-                level: "info".to_string(),
-                message: format!(
-                    "Scanned {} files, found {} supported archives, and extracted {} files to {}.",
-                    summary.scanned_files,
-                    summary.archive_count,
-                    summary.extracted_files,
-                    summary.output_root
-                ),
-            }];
+            let logs = effects
+                .logs
+                .into_iter()
+                .map(|(level, message)| PendingPluginLog { level, message })
+                .collect::<Vec<_>>();
+            insert_plugin_logs(pool, &job.id, &plugin_id, &logs).await?;
 
-            if summary.skipped_entries > 0 {
-                logs.push(PendingPluginLog {
-                    level: "warn".to_string(),
-                    message: format!(
-                        "Skipped {} unsafe or invalid archive entries.",
-                        summary.skipped_entries
-                    ),
-                });
+            if let Some(artifacts) = effects.artifacts {
+                let records = artifacts
+                    .into_iter()
+                    .map(|artifact| PluginResultRecord {
+                        file_path: artifact.file_path,
+                        result_kind: artifact.kind,
+                        label: artifact.label,
+                        payload: artifact.payload,
+                    })
+                    .collect::<Vec<_>>();
+                replace_plugin_results(pool, &job.id, &datasource.id, &plugin_id, &records).await?;
             }
 
-            if summary.archive_count == 0 {
-                logs.push(PendingPluginLog {
-                    level: "warn".to_string(),
-                    message: "No ZIP, TAR, GZ, TAR.GZ, or TGZ archives were found in the selected datasource paths."
-                        .to_string(),
-                });
+            if let Some(gallery) = effects.media {
+                replace_media_gallery_items(pool, &job.id, &datasource.id, &gallery).await?;
             }
 
-            logs.extend(summary.errors.iter().map(|message| PendingPluginLog {
-                level: "error".to_string(),
-                message: message.clone(),
-            }));
+            for path in effects.derived_paths {
+                add_datasource_path_if_missing(pool, &datasource.id, &path).await?;
+                if !datasource.paths.iter().any(|existing| existing == &path) {
+                    datasource.paths.push(path);
+                    paths_updated = true;
+                }
+            }
 
-            insert_plugin_logs(pool, job_id, plugin_id, &logs).await?;
-            sqlx::query(
-                r#"
-                  DELETE FROM plugin_results
-                  WHERE datasource_id = $1
-                    AND plugin_id = $2
-                    AND result_kind = 'archive_extraction'
-                "#,
-            )
-            .bind(datasource_id)
-            .bind(plugin_id)
-            .execute(pool)
-            .await
-            .map_err(|error| format!("Failed to remove legacy archive results: {error}"))?;
-            complete_plugin_job(pool, job_id).await?;
+            complete_plugin_job(pool, &job.id).await?;
+            load_plugin_job(pool, &job.id).await?
         }
         Err(message) => {
             insert_plugin_logs(
                 pool,
-                job_id,
-                plugin_id,
+                &job.id,
+                &plugin_id,
                 &[PendingPluginLog {
                     level: "error".to_string(),
                     message: message.clone(),
                 }],
             )
             .await?;
-            fail_plugin_job(pool, job_id, &message).await?;
+            fail_plugin_job(pool, &job.id, &message).await?;
+            load_plugin_job(pool, &job.id).await?
         }
-    }
+    };
 
-    load_plugin_job(pool, job_id).await
+    Ok((job_record, paths_updated))
 }
 
-async fn finish_image_metadata_job(
-    pool: &SqlitePool,
-    job_id: &str,
-    datasource_id: &str,
-    plugin_id: &str,
-    output: Result<builtin::MediaGallery, String>,
-    run_id: Option<&str>,
-) -> Result<PluginJobRecord, String> {
-    match output {
-        Ok(gallery) => {
-            if is_plugin_run_cancelled(run_id)? {
-                fail_plugin_job(pool, job_id, "Plugin run cancelled.").await?;
-                return load_plugin_job(pool, job_id).await;
-            }
+fn resolved_plugin_options(
+    manifest: &PythonPluginManifest,
+    plugin_options: Option<&HashMap<String, JsonValue>>,
+) -> JsonValue {
+    let mut resolved = manifest
+        .options
+        .iter()
+        .map(|option| {
+            (
+                option.id.clone(),
+                JsonValue::String(option.default_value.clone()),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
 
-            let mut logs = Vec::new();
-            let matched_files = (gallery.photos.len() + gallery.videos.len()) as u64;
-
-            logs.push(PendingPluginLog {
-                level: "info".to_string(),
-                message: format!(
-                    "Scanned {} files and found {} media files.",
-                    gallery.scanned_files, matched_files
-                ),
-            });
-
-            insert_plugin_logs(pool, job_id, plugin_id, &logs).await?;
-            replace_media_gallery_items(pool, job_id, datasource_id, &gallery).await?;
-            complete_plugin_job(pool, job_id).await?;
-        }
-        Err(message) => {
-            fail_plugin_job(pool, job_id, &message).await?;
-        }
+    if let Some(provided) = plugin_options
+        .and_then(|options| options.get(&manifest.id))
+        .and_then(JsonValue::as_object)
+    {
+        resolved.extend(provided.clone());
     }
 
-    load_plugin_job(pool, job_id).await
+    JsonValue::Object(resolved)
 }
 
 #[cfg(feature = "python-plugins")]
@@ -5503,9 +5359,17 @@ fn unix_millis() -> u128 {
 }
 
 fn archive_extractor_output_root(case_folder_path: &str, datasource_id: &str) -> PathBuf {
+    builtin_plugin_output_root(case_folder_path, "extracted", datasource_id)
+}
+
+fn builtin_plugin_output_root(
+    case_folder_path: &str,
+    directory: &str,
+    datasource_id: &str,
+) -> PathBuf {
     PathBuf::from(case_folder_path)
         .join("artifacts")
-        .join("extracted")
+        .join(sanitize_path_segment(directory))
         .join(sanitize_path_segment(datasource_id))
 }
 

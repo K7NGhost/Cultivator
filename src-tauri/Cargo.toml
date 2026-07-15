@@ -23,6 +23,7 @@ default = []
 python-plugins = ["dep:pyo3", "dep:sha2"]
 
 [dependencies]
+ctor = "0.8.0"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
