@@ -11,6 +11,9 @@ export type DataSourcePluginTarget =
 export type DataSourcePlugin = {
   id: string;
   name: string;
+  organizationFolder?: string;
+  author: string;
+  version: string;
   description: string;
   type: string;
   target: DataSourcePluginTarget;

@@ -1,4 +1,4 @@
-use crate::plugins::{PythonPluginManifest, PythonPluginMode, PythonPluginTarget};
+use crate::plugins::PythonPluginManifest;
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -7,8 +7,6 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant, UNIX_EPOCH},
 };
-
-pub const PLUGIN_ID: &str = "image-metadata";
 
 const MAX_HEADER_BYTES: usize = 64;
 const PROGRESS_FILE_INTERVAL: u64 = 500;
@@ -127,22 +125,8 @@ const FEATURED_EXIF_FIELDS: &[FeaturedExifField] = &[
 ];
 
 pub fn manifest() -> PythonPluginManifest {
-    PythonPluginManifest {
-        id: PLUGIN_ID.to_string(),
-        name: "Image Metadata".to_string(),
-        description: "Built-in Rust analyzer for image and video gallery metadata.".to_string(),
-        plugin_type: "other".to_string(),
-        target: PythonPluginTarget::Other,
-        mode: PythonPluginMode::PathRegex,
-        path_glob: Vec::new(),
-        path_regex: Some(
-            "(?i).*\\.(jpg|jpeg|png|gif|bmp|webp|tif|tiff|heic|heif|avif|mp4|mov|m4v|avi|webm|mkv|3gp)$"
-                .to_string(),
-        ),
-        entry: "builtin:image-metadata".to_string(),
-        function: "scan".to_string(),
-        options: Vec::new(),
-    }
+    toml::from_str(include_str!("image_metadata.toml"))
+        .expect("built-in Image Metadata manifest must be valid")
 }
 
 pub fn execute_with_progress<F>(paths: Vec<String>, progress: F) -> Result<MediaGallery, String>

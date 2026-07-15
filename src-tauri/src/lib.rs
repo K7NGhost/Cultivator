@@ -570,6 +570,11 @@ fn list_python_plugins(
 }
 
 #[tauri::command]
+fn list_python_plugin_folders(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
+    plugins::list_python_plugin_folders(app_handle)
+}
+
+#[tauri::command]
 fn python_plugin_directory(app_handle: tauri::AppHandle) -> Result<String, String> {
     plugins::python_plugin_directory(app_handle)
 }
@@ -598,11 +603,27 @@ fn create_python_plugin(
 }
 
 #[tauri::command]
+fn create_python_plugin_folder(
+    app_handle: tauri::AppHandle,
+    request: plugins::CreatePythonPluginFolderRequest,
+) -> Result<String, String> {
+    plugins::create_python_plugin_folder(app_handle, request)
+}
+
+#[tauri::command]
 fn delete_python_plugin(
     app_handle: tauri::AppHandle,
     request: plugins::DeletePythonPluginRequest,
 ) -> Result<(), String> {
     plugins::delete_python_plugin(app_handle, request)
+}
+
+#[tauri::command]
+fn move_python_plugin(
+    app_handle: tauri::AppHandle,
+    request: plugins::MovePythonPluginRequest,
+) -> Result<String, String> {
+    plugins::move_python_plugin(app_handle, request)
 }
 
 #[tauri::command]
@@ -2162,12 +2183,15 @@ pub fn run() {
             list_file_view_entries_page,
             build_file_view_index,
             list_python_plugins,
+            list_python_plugin_folders,
             python_plugin_directory,
             open_python_plugin_directory,
             open_python_plugin_directory_in_vscode,
             open_python_api_guide,
             create_python_plugin,
+            create_python_plugin_folder,
             delete_python_plugin,
+            move_python_plugin,
             list_plugin_jobs,
             list_plugin_logs,
             list_plugin_artifacts,

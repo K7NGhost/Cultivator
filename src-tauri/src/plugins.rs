@@ -84,6 +84,12 @@ pub enum PythonPluginMode {
 pub struct PythonPluginManifest {
     pub id: String,
     pub name: String,
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub organization_folder: Option<String>,
+    #[serde(default = "default_plugin_author")]
+    pub author: String,
+    #[serde(default = "default_plugin_version")]
+    pub version: String,
     pub description: String,
     #[serde(rename = "type")]
     pub plugin_type: String,
@@ -170,6 +176,8 @@ pub struct CreatePythonPluginRequest {
     #[serde(default)]
     pub folder_name: Option<String>,
     #[serde(default)]
+    pub organization_folder: Option<String>,
+    #[serde(default)]
     pub manifest: Option<CreatePythonPluginManifestRequest>,
     #[serde(default)]
     pub manifest_toml: Option<String>,
@@ -177,9 +185,27 @@ pub struct CreatePythonPluginRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreatePythonPluginFolderRequest {
+    pub folder: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovePythonPluginRequest {
+    pub plugin_id: String,
+    #[serde(default)]
+    pub organization_folder: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreatePythonPluginManifestRequest {
     pub id: String,
     pub name: String,
+    #[serde(default = "default_plugin_author")]
+    pub author: String,
+    #[serde(default = "default_plugin_version")]
+    pub version: String,
     pub description: String,
     #[serde(rename = "type")]
     pub plugin_type: String,
@@ -833,9 +859,18 @@ pub fn list_python_plugins(app_handle: AppHandle) -> Result<Vec<PythonPluginMani
             .map(|plugin| plugin.manifest),
     );
 
-    plugins.sort_by(|left, right| left.name.cmp(&right.name));
+    plugins.sort_by(|left, right| {
+        left.organization_folder
+            .cmp(&right.organization_folder)
+            .then_with(|| left.name.cmp(&right.name))
+    });
 
     Ok(plugins)
+}
+
+pub fn list_python_plugin_folders(app_handle: AppHandle) -> Result<Vec<String>, String> {
+    let plugin_root = ensure_python_plugin_directory(&app_handle)?;
+    discover_python_plugin_organization_folders(&plugin_root)
 }
 
 pub fn python_plugin_directory(app_handle: AppHandle) -> Result<String, String> {
@@ -872,11 +907,29 @@ pub fn open_python_api_guide(app_handle: AppHandle) -> Result<(), String> {
         .map_err(|error| format!("Failed to open Python API guide: {error}"))
 }
 
+pub fn create_python_plugin_folder(
+    app_handle: AppHandle,
+    request: CreatePythonPluginFolderRequest,
+) -> Result<String, String> {
+    let plugin_root = ensure_python_plugin_directory(&app_handle)?;
+    let folder = resolve_plugin_organization_folder(&plugin_root, &request.folder)?;
+
+    if folder == plugin_root {
+        return Err("Organization folder name is required.".to_string());
+    }
+
+    ensure_not_inside_plugin_directory(&plugin_root, &folder)?;
+    fs::create_dir_all(&folder)
+        .map_err(|error| format!("Failed to create plugin organization folder: {error}"))?;
+
+    Ok(folder.to_string_lossy().to_string())
+}
+
 pub fn create_python_plugin(
     app_handle: AppHandle,
     request: CreatePythonPluginRequest,
 ) -> Result<CreatedPythonPlugin, String> {
-    let manifest_text = create_plugin_manifest_text(&request)?;
+    let manifest_text = add_missing_manifest_metadata(&create_plugin_manifest_text(&request)?)?;
     let manifest = toml::from_str::<PythonPluginManifest>(&manifest_text)
         .map_err(|error| format!("Failed to parse plugin.toml: {error}"))?;
     let plugin_id = manifest.id.trim();
@@ -905,7 +958,12 @@ pub fn create_python_plugin(
     }
 
     let plugin_root = ensure_python_plugin_directory(&app_handle)?;
-    let plugin_directory = plugin_root.join(plugin_folder_name);
+    let organization_folder = resolve_plugin_organization_folder(
+        &plugin_root,
+        request.organization_folder.as_deref().unwrap_or_default(),
+    )?;
+    ensure_not_inside_plugin_directory(&plugin_root, &organization_folder)?;
+    let plugin_directory = organization_folder.join(plugin_folder_name);
     let manifest_path = plugin_directory.join("plugin.toml");
     let script_path = plugin_directory.join("plugin.py");
 
@@ -985,6 +1043,48 @@ pub fn delete_python_plugin(
 
     fs::remove_dir_all(&target)
         .map_err(|error| format!("Failed to delete Python plugin '{plugin_id}': {error}"))
+}
+
+pub fn move_python_plugin(
+    app_handle: AppHandle,
+    request: MovePythonPluginRequest,
+) -> Result<String, String> {
+    let plugin_id = request.plugin_id.trim();
+    if plugin_id.is_empty() {
+        return Err("Plugin id is required.".to_string());
+    }
+
+    let plugin_root = ensure_python_plugin_directory(&app_handle)?;
+    let source = load_python_plugins(&app_handle)?
+        .into_iter()
+        .find(|plugin| plugin.manifest.id == plugin_id)
+        .map(|plugin| plugin.directory)
+        .ok_or_else(|| format!("Python plugin '{plugin_id}' was not found."))?;
+    let organization_folder =
+        resolve_plugin_organization_folder(&plugin_root, request.organization_folder.as_str())?;
+    ensure_not_inside_plugin_directory(&plugin_root, &organization_folder)?;
+    let folder_name = source
+        .file_name()
+        .ok_or_else(|| format!("Python plugin '{plugin_id}' has an invalid directory."))?;
+    let destination = organization_folder.join(folder_name);
+
+    if destination == source {
+        return Ok(destination.to_string_lossy().to_string());
+    }
+    if destination.exists() {
+        return Err(format!(
+            "A folder named '{}' already exists in '{}'.",
+            folder_name.to_string_lossy(),
+            organization_folder.display()
+        ));
+    }
+
+    fs::create_dir_all(&organization_folder)
+        .map_err(|error| format!("Failed to create plugin organization folder: {error}"))?;
+    fs::rename(&source, &destination)
+        .map_err(|error| format!("Failed to move Python plugin '{plugin_id}': {error}"))?;
+
+    Ok(destination.to_string_lossy().to_string())
 }
 
 pub async fn list_plugin_jobs(case_database_path: String) -> Result<Vec<PluginJobRecord>, String> {
@@ -2728,25 +2828,24 @@ fn load_python_plugins(app_handle: &AppHandle) -> Result<Vec<LoadedPythonPlugin>
     let plugin_root = ensure_python_plugin_directory(app_handle)?;
     let mut plugins = Vec::new();
 
-    for entry in fs::read_dir(&plugin_root)
-        .map_err(|error| format!("Failed to read Python plugin directory: {error}"))?
-    {
-        let entry = entry.map_err(|error| format!("Failed to inspect Python plugin: {error}"))?;
-        let plugin_dir = entry.path();
-
-        if !plugin_dir.is_dir() {
-            continue;
-        }
-
+    for plugin_dir in discover_python_plugin_directories(&plugin_root)? {
         let manifest_path = plugin_dir.join("plugin.toml");
-
-        if !manifest_path.is_file() {
-            continue;
-        }
-
         let manifest_text = fs::read_to_string(&manifest_path)
             .map_err(|error| format!("Failed to read '{}': {error}", manifest_path.display()))?;
-        let manifest = toml::from_str::<PythonPluginManifest>(&manifest_text)
+        let migrated_manifest_text = add_missing_manifest_metadata(&manifest_text)?;
+        if migrated_manifest_text != manifest_text {
+            fs::write(
+                &manifest_path,
+                normalize_toml_for_write(&migrated_manifest_text),
+            )
+            .map_err(|error| {
+                format!(
+                    "Failed to add author and version to '{}': {error}",
+                    manifest_path.display()
+                )
+            })?;
+        }
+        let mut manifest = toml::from_str::<PythonPluginManifest>(&migrated_manifest_text)
             .map_err(|error| format!("Failed to parse '{}': {error}", manifest_path.display()))?;
 
         if LEGACY_DEMO_PLUGIN_IDS.contains(&manifest.id.as_str()) {
@@ -2754,6 +2853,12 @@ fn load_python_plugins(app_handle: &AppHandle) -> Result<Vec<LoadedPythonPlugin>
         }
 
         validate_manifest(&manifest, &plugin_dir)?;
+
+        manifest.organization_folder = plugin_dir
+            .parent()
+            .and_then(|parent| parent.strip_prefix(&plugin_root).ok())
+            .filter(|folder| !folder.as_os_str().is_empty())
+            .map(display_relative_plugin_folder);
 
         plugins.push(LoadedPythonPlugin {
             manifest,
@@ -2764,6 +2869,145 @@ fn load_python_plugins(app_handle: &AppHandle) -> Result<Vec<LoadedPythonPlugin>
     plugins.sort_by(|left, right| left.manifest.name.cmp(&right.manifest.name));
 
     Ok(plugins)
+}
+
+fn discover_python_plugin_directories(plugin_root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut plugin_directories = Vec::new();
+    let mut pending_directories = vec![plugin_root.to_path_buf()];
+
+    while let Some(directory) = pending_directories.pop() {
+        let mut child_directories = fs::read_dir(&directory)
+            .map_err(|error| format!("Failed to read '{}': {error}", directory.display()))?
+            .filter_map(|entry| match entry {
+                Ok(entry) => match entry.file_type() {
+                    Ok(file_type) if file_type.is_dir() && !file_type.is_symlink() => {
+                        Some(Ok(entry.path()))
+                    }
+                    Ok(_) => None,
+                    Err(error) => Some(Err(format!(
+                        "Failed to inspect '{}': {error}",
+                        entry.path().display()
+                    ))),
+                },
+                Err(error) => Some(Err(format!(
+                    "Failed to inspect plugin organization folder: {error}"
+                ))),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        child_directories.sort();
+
+        for child_directory in child_directories.into_iter().rev() {
+            if child_directory.join("plugin.toml").is_file() {
+                plugin_directories.push(child_directory);
+            } else {
+                pending_directories.push(child_directory);
+            }
+        }
+    }
+
+    plugin_directories.sort();
+    Ok(plugin_directories)
+}
+
+fn discover_python_plugin_organization_folders(plugin_root: &Path) -> Result<Vec<String>, String> {
+    let mut organization_folders = Vec::new();
+    let mut pending_directories = vec![plugin_root.to_path_buf()];
+
+    while let Some(directory) = pending_directories.pop() {
+        let mut child_directories = fs::read_dir(&directory)
+            .map_err(|error| format!("Failed to read '{}': {error}", directory.display()))?
+            .filter_map(|entry| match entry {
+                Ok(entry) => match entry.file_type() {
+                    Ok(file_type) if file_type.is_dir() && !file_type.is_symlink() => {
+                        Some(Ok(entry.path()))
+                    }
+                    Ok(_) => None,
+                    Err(error) => Some(Err(format!(
+                        "Failed to inspect '{}': {error}",
+                        entry.path().display()
+                    ))),
+                },
+                Err(error) => Some(Err(format!(
+                    "Failed to inspect plugin organization folder: {error}"
+                ))),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        child_directories.sort();
+
+        for child_directory in child_directories.into_iter().rev() {
+            if child_directory.join("plugin.toml").is_file() {
+                continue;
+            }
+
+            let relative = child_directory.strip_prefix(plugin_root).map_err(|_| {
+                "Organization folder must be inside the Python plugin folder.".to_string()
+            })?;
+            organization_folders.push(display_relative_plugin_folder(relative));
+            pending_directories.push(child_directory);
+        }
+    }
+
+    organization_folders.sort();
+    Ok(organization_folders)
+}
+
+fn resolve_plugin_organization_folder(
+    plugin_root: &Path,
+    organization_folder: &str,
+) -> Result<PathBuf, String> {
+    let organization_folder = organization_folder.trim();
+    if organization_folder.is_empty() {
+        return Ok(plugin_root.to_path_buf());
+    }
+
+    let mut resolved = plugin_root.to_path_buf();
+    let normalized = organization_folder.replace('\\', "/");
+
+    if normalized.starts_with('/') {
+        return Err(
+            "Organization folder must be relative to the Python plugin folder.".to_string(),
+        );
+    }
+
+    for segment in normalized.split('/') {
+        let segment = segment.trim();
+        if !is_safe_plugin_organization_segment(segment) {
+            return Err(
+                "Organization folders may contain letters, numbers, spaces, '.', '_', and '-', separated by '/' or '\\'."
+                    .to_string(),
+            );
+        }
+        resolved.push(segment);
+    }
+
+    Ok(resolved)
+}
+
+fn ensure_not_inside_plugin_directory(plugin_root: &Path, folder: &Path) -> Result<(), String> {
+    let relative = folder
+        .strip_prefix(plugin_root)
+        .map_err(|_| "Organization folder must be inside the Python plugin folder.".to_string())?;
+    let mut current = plugin_root.to_path_buf();
+
+    for segment in relative.components() {
+        current.push(segment);
+        if current.join("plugin.toml").is_file() {
+            return Err(format!(
+                "'{}' is a plugin directory and cannot contain organization folders.",
+                current.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn display_relative_plugin_folder(folder: &Path) -> String {
+    folder
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn ensure_python_plugin_directory(app_handle: &AppHandle) -> Result<PathBuf, String> {
@@ -5104,6 +5348,14 @@ fn default_plugin_function() -> String {
     "run".to_string()
 }
 
+fn default_plugin_author() -> String {
+    "Unknown".to_string()
+}
+
+fn default_plugin_version() -> String {
+    "0.0.0".to_string()
+}
+
 fn manifest_path_globs(manifest: &PythonPluginManifest) -> Option<&[String]> {
     if manifest.path_glob.is_empty() {
         return None;
@@ -5197,9 +5449,11 @@ fn create_plugin_manifest_text(request: &CreatePythonPluginRequest) -> Result<St
             .unwrap_or_default();
 
         return Ok(format!(
-            "id = {}\nname = {}\ndescription = {}\ntype = {}\ntarget = {}\nmode = {}\n{path_glob}{path_regex}entry = {}\nfunction = {}\n",
+            "id = {}\nname = {}\nauthor = {}\nversion = {}\ndescription = {}\ntype = {}\ntarget = {}\nmode = {}\n{path_glob}{path_regex}entry = {}\nfunction = {}\n",
             toml_quote(&manifest.id),
             toml_quote(&manifest.name),
+            toml_quote(&manifest.author),
+            toml_quote(&manifest.version),
             toml_quote(&manifest.description),
             toml_quote(&manifest.plugin_type),
             toml_quote(plugin_target_value(&manifest.target)),
@@ -5228,6 +5482,33 @@ fn normalize_toml_for_write(text: &str) -> String {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
 
     format!("{}\r\n", normalized.trim_end())
+}
+
+fn add_missing_manifest_metadata(text: &str) -> Result<String, String> {
+    let document = toml::from_str::<toml::Table>(text)
+        .map_err(|error| format!("Failed to parse plugin TOML metadata: {error}"))?;
+    let needs_author = !document.contains_key("author");
+    let needs_version = !document.contains_key("version");
+
+    if !needs_author && !needs_version {
+        return Ok(text.to_string());
+    }
+
+    let mut lines = text.lines().map(str::to_string).collect::<Vec<_>>();
+    let insertion_index = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with('['))
+        .unwrap_or(lines.len());
+    let mut metadata = Vec::new();
+    if needs_author {
+        metadata.push("author = \"Unknown\"".to_string());
+    }
+    if needs_version {
+        metadata.push("version = \"0.0.0\"".to_string());
+    }
+    lines.splice(insertion_index..insertion_index, metadata);
+
+    Ok(lines.join("\n"))
 }
 
 fn toml_quote(value: &str) -> String {
@@ -5266,10 +5547,21 @@ fn is_safe_plugin_id(plugin_id: &str) -> bool {
         .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
 }
 
+fn is_safe_plugin_organization_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ' ' | '-' | '_' | '.')
+        })
+}
+
 fn python_plugin_manifest_template(plugin_id: &str, plugin_name: &str) -> String {
     format!(
         r#"id = "{plugin_id}"
 name = "{plugin_name}"
+author = "Your Name"
+version = "1.0.0"
 description = "Describe what this plugin extracts."
 type = "other"
 target = "other"
@@ -5413,4 +5705,57 @@ fn pyo3_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
 
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temporary_plugin_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "cultivator-plugin-folders-{label}-{}-{}",
+            std::process::id(),
+            NEXT_ID_SUFFIX.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    #[test]
+    fn discovers_plugins_in_nested_organization_folders() {
+        let root = temporary_plugin_root("discovery");
+        let ford = root.join("VLEAPP").join("Ford").join("phonebook");
+        let hyundai = root.join("VLEAPP").join("Hyundai").join("contacts");
+        let nested_dependency = ford.join("vendor").join("nested-plugin");
+
+        fs::create_dir_all(&nested_dependency).unwrap();
+        fs::create_dir_all(&hyundai).unwrap();
+        fs::write(ford.join("plugin.toml"), "id = \"phonebook\"").unwrap();
+        fs::write(hyundai.join("plugin.toml"), "id = \"contacts\"").unwrap();
+        fs::write(nested_dependency.join("plugin.toml"), "id = \"nested\"").unwrap();
+
+        let discovered = discover_python_plugin_directories(&root).unwrap();
+        assert_eq!(discovered, vec![ford, hyundai]);
+        assert_eq!(
+            discover_python_plugin_organization_folders(&root).unwrap(),
+            vec![
+                "VLEAPP".to_string(),
+                "VLEAPP/Ford".to_string(),
+                "VLEAPP/Hyundai".to_string(),
+            ]
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn organization_folder_paths_are_relative_and_traversal_safe() {
+        let root = temporary_plugin_root("paths");
+
+        assert_eq!(
+            resolve_plugin_organization_folder(&root, "VLEAPP/Ford").unwrap(),
+            root.join("VLEAPP").join("Ford")
+        );
+        assert!(resolve_plugin_organization_folder(&root, "../outside").is_err());
+        assert!(resolve_plugin_organization_folder(&root, "VLEAPP//Ford").is_err());
+        assert!(resolve_plugin_organization_folder(&root, "C:\\outside").is_err());
+    }
 }

@@ -42,6 +42,9 @@ impl BuiltinPlugin for HashCalculatorPlugin {
         PythonPluginManifest {
             id: "hash-calculator".to_string(),
             name: "Hash Calculator".to_string(),
+            organization_folder: None,
+            author: "Your Name".to_string(),
+            version: "1.0.0".to_string(),
             description: "Calculates hashes for datasource files.".to_string(),
             plugin_type: "other".to_string(),
             target: PythonPluginTarget::Other,

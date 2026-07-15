@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Copy,
+  Folder,
+  FolderInput,
   FolderOpen,
+  FolderPlus,
   Plus,
   Play,
   RefreshCw,
@@ -11,6 +14,7 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -46,14 +50,20 @@ import {
   getStoredCreatePluginMode,
   storeCreatePluginMode,
 } from "@/features/plugins/createPluginPreferences";
-import { isSafePluginFolderName } from "@/features/plugins/pluginManifest";
+import {
+  isSafePluginFolderName,
+  isSafePluginOrganizationPath,
+} from "@/features/plugins/pluginManifest";
 import {
   cancelDatasourcePluginRun,
   createPythonPlugin,
+  createPythonPluginFolder,
   deletePythonPlugin,
   listPluginJobs,
   listPluginLogs,
+  listPythonPluginFolders,
   listPythonPlugins,
+  movePythonPlugin,
   openPythonPluginFolder,
   openPythonPluginFolderInVscode,
   pluginRunUpdatedDatasourcePaths,
@@ -199,15 +209,22 @@ export function PluginsPage() {
   const { activeCase } = useCases();
   const [datasources, setDatasources] = useState<DataSourceRecord[]>([]);
   const [plugins, setPlugins] = useState<PythonPlugin[]>([]);
+  const [pluginFolders, setPluginFolders] = useState<string[]>([]);
   const [jobs, setJobs] = useState<PluginJobRecord[]>([]);
   const [logs, setLogs] = useState<PluginLogRecord[]>([]);
   const [activeRuns, setActiveRuns] = useState<ActivePluginRun[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
+    useState(false);
   const [createPluginMode, setCreatePluginMode] = useState<CreatePluginMode>(
     getStoredCreatePluginMode,
   );
   const [newPluginId, setNewPluginId] = useState("");
   const [newPluginName, setNewPluginName] = useState("");
+  const [newPluginOrganizationFolder, setNewPluginOrganizationFolder] =
+    useState("");
+  const [newPluginAuthor, setNewPluginAuthor] = useState("");
+  const [newPluginVersion, setNewPluginVersion] = useState("1.0.0");
   const [newPluginDescription, setNewPluginDescription] = useState("");
   const [newPluginType, setNewPluginType] = useState("other");
   const [newPluginTarget, setNewPluginTarget] =
@@ -220,7 +237,20 @@ export function PluginsPage() {
   const [newPluginFunction, setNewPluginFunction] = useState("run");
   const [newPluginTomlDetails, setNewPluginTomlDetails] = useState("");
   const [creatingPlugin, setCreatingPlugin] = useState(false);
+  const [newOrganizationFolder, setNewOrganizationFolder] = useState("");
+  const [creatingOrganizationFolder, setCreatingOrganizationFolder] =
+    useState(false);
   const [deletingPluginId, setDeletingPluginId] = useState<string | null>(null);
+  const [movingPlugin, setMovingPlugin] = useState<PythonPlugin | null>(null);
+  const [isMovingPlugin, setIsMovingPlugin] = useState(false);
+  const [isBulkMoveDialogOpen, setIsBulkMoveDialogOpen] = useState(false);
+  const [bulkMoveSource, setBulkMoveSource] = useState("");
+  const [bulkMovePluginIds, setBulkMovePluginIds] = useState<string[]>([]);
+  const [bulkMoveDestination, setBulkMoveDestination] = useState("");
+  const [bulkMoveProgress, setBulkMoveProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const [loadState, setLoadState] = useState<LoadState>({
     error: null,
@@ -232,6 +262,17 @@ export function PluginsPage() {
   const datasourceMap = useMemo(() => {
     return new Map(datasources.map((datasource) => [datasource.id, datasource]));
   }, [datasources]);
+  const movablePlugins = useMemo(
+    () => plugins.filter((plugin) => !plugin.entry.startsWith("builtin:")),
+    [plugins],
+  );
+  const visibleBulkMovePlugins = useMemo(
+    () =>
+      movablePlugins.filter(
+        (plugin) => (plugin.organizationFolder ?? "") === bulkMoveSource,
+      ),
+    [bulkMoveSource, movablePlugins],
+  );
   const runningPluginRows = useMemo(() => {
     const activeRows = activeRuns.flatMap((run) =>
       run.pluginIds.map((pluginId) => {
@@ -272,6 +313,7 @@ export function PluginsPage() {
     if (!activeCase) {
       setDatasources([]);
       setPlugins([]);
+      setPluginFolders([]);
       setJobs([]);
       setLogs([]);
       setLoadState({ error: null, isLoading: false });
@@ -283,15 +325,18 @@ export function PluginsPage() {
     }
 
     try {
-      const [nextDatasources, nextPlugins, nextJobs, nextLogs] = await Promise.all([
-        listDataSources(activeCase.databasePath, activeCase.id),
-        listPythonPlugins(),
-        listPluginJobs(activeCase.databasePath),
-        listPluginLogs(activeCase.databasePath),
-      ]);
+      const [nextDatasources, nextPlugins, nextPluginFolders, nextJobs, nextLogs] =
+        await Promise.all([
+          listDataSources(activeCase.databasePath, activeCase.id),
+          listPythonPlugins(),
+          listPythonPluginFolders(),
+          listPluginJobs(activeCase.databasePath),
+          listPluginLogs(activeCase.databasePath),
+        ]);
 
       setDatasources(nextDatasources);
       setPlugins(nextPlugins);
+      setPluginFolders(nextPluginFolders);
       setJobs(nextJobs);
       setLogs(nextLogs);
       setLoadState({ error: null, isLoading: false });
@@ -372,6 +417,16 @@ export function PluginsPage() {
     const pluginEntry = newPluginEntry.trim();
     const pluginFunction = newPluginFunction.trim();
     const pluginTomlDetails = newPluginTomlDetails.trim();
+    const organizationFolder = newPluginOrganizationFolder.trim();
+
+    if (!isSafePluginOrganizationPath(organizationFolder)) {
+      setLoadState({
+        error:
+          "Organization folders must be relative paths using letters, numbers, spaces, '.', '_', and '-'.",
+        isLoading: false,
+      });
+      return;
+    }
 
     if (createPluginMode === "manual") {
       if (!pluginId || !pluginName || !pluginType || !pluginEntry || !pluginFunction) {
@@ -428,9 +483,12 @@ export function PluginsPage() {
       await createPythonPlugin(
         createPluginMode === "manual"
           ? {
+              organizationFolder: organizationFolder || undefined,
               manifest: {
                 id: pluginId,
                 name: pluginName,
+                author: newPluginAuthor.trim() || "Unknown",
+                version: newPluginVersion.trim() || "1.0.0",
                 description: newPluginDescription.trim(),
                 type: pluginType,
                 target: newPluginTarget,
@@ -446,6 +504,7 @@ export function PluginsPage() {
             }
           : {
               folderName: pluginName,
+              organizationFolder: organizationFolder || undefined,
               manifestToml: pluginTomlDetails,
             },
       );
@@ -466,6 +525,9 @@ export function PluginsPage() {
   function resetCreatePluginForm() {
     setNewPluginId("");
     setNewPluginName("");
+    setNewPluginOrganizationFolder("");
+    setNewPluginAuthor("");
+    setNewPluginVersion("1.0.0");
     setNewPluginDescription("");
     setNewPluginType("other");
     setNewPluginTarget("infotainment");
@@ -475,6 +537,31 @@ export function PluginsPage() {
     setNewPluginEntry("plugin.py");
     setNewPluginFunction("run");
     setNewPluginTomlDetails("");
+  }
+
+  async function createOrganizationFolder() {
+    const folder = newOrganizationFolder.trim();
+    if (!folder || !isSafePluginOrganizationPath(folder)) {
+      setLoadState({
+        error:
+          "Enter a relative folder path using letters, numbers, spaces, '.', '_', and '-'.",
+        isLoading: false,
+      });
+      return;
+    }
+
+    setCreatingOrganizationFolder(true);
+    setLoadState((currentState) => ({ ...currentState, error: null }));
+    try {
+      await createPythonPluginFolder(folder);
+      setNewOrganizationFolder("");
+      setIsCreateFolderDialogOpen(false);
+      await refreshPluginsPage({ showLoading: false });
+    } catch (caughtError) {
+      setLoadState({ error: getErrorMessage(caughtError), isLoading: false });
+    } finally {
+      setCreatingOrganizationFolder(false);
+    }
   }
 
   function handleCreatePluginModeChange(value: string) {
@@ -507,6 +594,76 @@ export function PluginsPage() {
     } finally {
       setDeletingPluginId(null);
     }
+  }
+
+  async function movePlugin(folder: string) {
+    if (!movingPlugin) {
+      return;
+    }
+
+    setIsMovingPlugin(true);
+    setLoadState((currentState) => ({ ...currentState, error: null }));
+    try {
+      await movePythonPlugin(movingPlugin.id, folder);
+      setMovingPlugin(null);
+      await refreshPluginsPage();
+    } catch (caughtError) {
+      setLoadState({ error: getErrorMessage(caughtError), isLoading: false });
+    } finally {
+      setIsMovingPlugin(false);
+    }
+  }
+
+  function toggleBulkMovePlugin(pluginId: string, selected: boolean) {
+    setBulkMovePluginIds((currentPluginIds) =>
+      selected
+        ? currentPluginIds.includes(pluginId)
+          ? currentPluginIds
+          : [...currentPluginIds, pluginId]
+        : currentPluginIds.filter((currentPluginId) => currentPluginId !== pluginId),
+    );
+  }
+
+  async function bulkMovePlugins() {
+    if (bulkMovePluginIds.length === 0) {
+      setLoadState({
+        error: "Select at least one Python plugin to move.",
+        isLoading: false,
+      });
+      return;
+    }
+
+    const failures: Array<{ id: string; error: string }> = [];
+    setBulkMoveProgress({ completed: 0, total: bulkMovePluginIds.length });
+    setLoadState((currentState) => ({ ...currentState, error: null }));
+
+    for (const [index, pluginId] of bulkMovePluginIds.entries()) {
+      try {
+        await movePythonPlugin(pluginId, bulkMoveDestination);
+      } catch (caughtError) {
+        failures.push({ id: pluginId, error: getErrorMessage(caughtError) });
+      }
+      setBulkMoveProgress({
+        completed: index + 1,
+        total: bulkMovePluginIds.length,
+      });
+    }
+
+    await refreshPluginsPage({ showLoading: false });
+    setBulkMoveProgress(null);
+
+    if (failures.length === 0) {
+      setBulkMovePluginIds([]);
+      setBulkMoveDestination("");
+      setIsBulkMoveDialogOpen(false);
+      return;
+    }
+
+    setBulkMovePluginIds(failures.map((failure) => failure.id));
+    setLoadState({
+      error: `${failures.length} plugin${failures.length === 1 ? "" : "s"} could not be moved: ${failures[0].error}`,
+      isLoading: false,
+    });
   }
 
   async function openPluginFolder() {
@@ -555,7 +712,7 @@ export function PluginsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <section className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
+      <section className="flex h-9 shrink-0 items-center gap-2 overflow-x-auto border-b px-2">
         <div className="text-xs font-medium uppercase text-muted-foreground">
           Python Plugins
         </div>
@@ -568,6 +725,31 @@ export function PluginsPage() {
         >
           <Plus className="size-3.5" aria-hidden="true" />
           Add Plugin
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          className="h-7 rounded-sm px-2 text-xs"
+          onClick={() => setIsCreateFolderDialogOpen(true)}
+        >
+          <FolderPlus className="size-3.5" aria-hidden="true" />
+          New Folder
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          className="h-7 rounded-sm px-2 text-xs"
+          disabled={movablePlugins.length === 0}
+          onClick={() => {
+            setBulkMovePluginIds([]);
+            setBulkMoveDestination("");
+            setIsBulkMoveDialogOpen(true);
+          }}
+        >
+          <FolderInput className="size-3.5" aria-hidden="true" />
+          Move Plugins
         </Button>
         <Button
           type="button"
@@ -650,16 +832,19 @@ export function PluginsPage() {
 
                 <Table
                   containerClassName="min-h-0 flex-1 overflow-auto"
-                  className="min-w-[860px] table-fixed text-xs"
+                  className="min-w-[960px] table-fixed text-xs"
                 >
                   <TableHeader className="sticky top-0 z-10 bg-muted">
-                      <TableRow className="hover:bg-muted">
-                        <TableHead className="h-7 w-[190px] px-2">Plugin</TableHead>
-                        <TableHead className="h-7 w-[110px] px-2">Target</TableHead>
-                        <TableHead className="h-7 w-[110px] px-2">Mode</TableHead>
-                        <TableHead className="h-7 w-[220px] px-2">Description</TableHead>
+                    <TableRow className="hover:bg-muted">
+                      <TableHead className="h-7 w-[190px] px-2">Plugin</TableHead>
+                      <TableHead className="h-7 w-[120px] px-2">Folder</TableHead>
+                      <TableHead className="h-7 w-[130px] px-2">Author</TableHead>
+                      <TableHead className="h-7 w-[70px] px-2">Version</TableHead>
+                      <TableHead className="h-7 w-[110px] px-2">Target</TableHead>
+                      <TableHead className="h-7 w-[110px] px-2">Mode</TableHead>
+                      <TableHead className="h-7 w-[220px] px-2">Description</TableHead>
                       <TableHead className="h-7 w-[110px] px-2">Entry</TableHead>
-                      <TableHead className="h-7 w-[90px] px-2">Action</TableHead>
+                      <TableHead className="h-7 w-[150px] px-2">Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -676,6 +861,17 @@ export function PluginsPage() {
                                 {plugin.id}
                               </div>
                             </div>
+                          </TableCell>
+                          <TableCell className="h-8 truncate px-2 py-0 font-mono text-[11px] text-muted-foreground">
+                            {isBuiltIn
+                              ? "Built-in"
+                              : plugin.organizationFolder || "Root"}
+                          </TableCell>
+                          <TableCell className="h-8 truncate px-2 py-0 text-muted-foreground">
+                            {plugin.author || "Unknown"}
+                          </TableCell>
+                          <TableCell className="h-8 truncate px-2 py-0 font-mono text-[11px] text-muted-foreground">
+                            {plugin.version || "0.0.0"}
                           </TableCell>
                           <TableCell className="h-8 px-2 py-0">
                             <Badge
@@ -700,19 +896,44 @@ export function PluginsPage() {
                             {plugin.entry}:{plugin.function}
                           </TableCell>
                           <TableCell className="h-8 px-2 py-0">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="xs"
-                              className="h-7 rounded-sm px-2 text-xs text-destructive hover:text-destructive"
-                              disabled={isDeleting || isBuiltIn}
-                              onClick={() => {
-                                void deletePlugin(plugin);
-                              }}
-                            >
-                              <Trash2 className="size-3.5" aria-hidden="true" />
-                              {isBuiltIn ? "Built-in" : isDeleting ? "Deleting" : "Delete"}
-                            </Button>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="xs"
+                                className="h-7 rounded-sm px-2 text-xs"
+                                disabled={isBuiltIn}
+                                onClick={() => {
+                                  setMovingPlugin(plugin);
+                                }}
+                              >
+                                <FolderInput
+                                  className="size-3.5"
+                                  aria-hidden="true"
+                                />
+                                Move
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="xs"
+                                className="h-7 rounded-sm px-2 text-xs text-destructive hover:text-destructive"
+                                disabled={isDeleting || isBuiltIn}
+                                onClick={() => {
+                                  void deletePlugin(plugin);
+                                }}
+                              >
+                                <Trash2
+                                  className="size-3.5"
+                                  aria-hidden="true"
+                                />
+                                {isBuiltIn
+                                  ? "Built-in"
+                                  : isDeleting
+                                    ? "Deleting"
+                                    : "Delete"}
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       );
@@ -720,7 +941,7 @@ export function PluginsPage() {
                     {plugins.length === 0 && (
                       <TableRow>
                         <TableCell
-                          colSpan={6}
+                          colSpan={9}
                           className="h-16 text-center text-xs text-muted-foreground"
                         >
                           No Python plugins are installed.
@@ -1041,6 +1262,22 @@ export function PluginsPage() {
             }}
           >
             <div className="max-h-[min(34rem,calc(100vh-12rem))] overflow-auto px-3 py-3">
+              <label className="mb-3 block space-y-1 text-xs">
+                <span className="text-muted-foreground">
+                  Organization folder (optional)
+                </span>
+                <Input
+                  className="h-8 rounded-sm font-mono text-xs"
+                  value={newPluginOrganizationFolder}
+                  placeholder="VLEAPP/Ford"
+                  onChange={(event) =>
+                    setNewPluginOrganizationFolder(event.target.value)
+                  }
+                />
+                <span className="block text-[10px] text-muted-foreground">
+                  Nested folders are created automatically.
+                </span>
+              </label>
               <Tabs
                 value={createPluginMode}
                 onValueChange={handleCreatePluginModeChange}
@@ -1087,6 +1324,24 @@ export function PluginsPage() {
                         onChange={(event) =>
                           setNewPluginDescription(event.target.value)
                         }
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">Author</span>
+                      <Input
+                        className="h-8 rounded-sm text-xs"
+                        value={newPluginAuthor}
+                        placeholder="Your Name"
+                        onChange={(event) => setNewPluginAuthor(event.target.value)}
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">Version</span>
+                      <Input
+                        className="h-8 rounded-sm text-xs"
+                        value={newPluginVersion}
+                        placeholder="1.0.0"
+                        onChange={(event) => setNewPluginVersion(event.target.value)}
                       />
                     </label>
                     <label className="space-y-1 text-xs">
@@ -1238,6 +1493,295 @@ export function PluginsPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isCreateFolderDialogOpen}
+        onOpenChange={(isOpen) => {
+          setIsCreateFolderDialogOpen(isOpen);
+          if (!isOpen) {
+            setNewOrganizationFolder("");
+          }
+        }}
+      >
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md rounded-sm p-0">
+          <DialogHeader className="border-b px-3 py-2">
+            <DialogTitle className="text-sm">New Plugin Folder</DialogTitle>
+            <DialogDescription className="text-xs">
+              Create a virtual organization folder under the Python plugin
+              directory.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createOrganizationFolder();
+            }}
+          >
+            <div className="space-y-1 px-3 py-3">
+              <label className="space-y-1 text-xs">
+                <span className="text-muted-foreground">Folder path</span>
+                <Input
+                  autoFocus
+                  className="h-8 rounded-sm font-mono text-xs"
+                  value={newOrganizationFolder}
+                  placeholder="VLEAPP/Ford"
+                  onChange={(event) =>
+                    setNewOrganizationFolder(event.target.value)
+                  }
+                />
+              </label>
+            </div>
+            <DialogFooter className="border-t px-3 py-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 rounded-sm text-xs"
+                onClick={() => setIsCreateFolderDialogOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                className="h-8 rounded-sm text-xs"
+                disabled={creatingOrganizationFolder}
+              >
+                {creatingOrganizationFolder ? "Creating..." : "Create Folder"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isBulkMoveDialogOpen}
+        onOpenChange={(isOpen) => {
+          if (bulkMoveProgress) {
+            return;
+          }
+          setIsBulkMoveDialogOpen(isOpen);
+          if (!isOpen) {
+            setBulkMoveSource("");
+            setBulkMovePluginIds([]);
+            setBulkMoveDestination("");
+          }
+        }}
+      >
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-xl rounded-sm p-0">
+          <DialogHeader className="border-b px-3 py-2">
+            <DialogTitle className="text-sm">Move Python Plugins</DialogTitle>
+            <DialogDescription className="text-xs">
+              Choose a folder to view, select its plugins, then choose where to
+              move them.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 px-3 py-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block space-y-1 text-xs">
+                <span className="text-muted-foreground">View plugins in</span>
+                <select
+                  className="h-8 w-full rounded-sm border bg-background px-2 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  value={bulkMoveSource}
+                  disabled={bulkMoveProgress !== null}
+                  onChange={(event) => {
+                    setBulkMoveSource(event.target.value);
+                    setBulkMovePluginIds([]);
+                  }}
+                >
+                  <option value="">Plugin root</option>
+                  {pluginFolders.map((folder) => (
+                    <option key={folder} value={folder}>
+                      {folder}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block space-y-1 text-xs">
+                <span className="text-muted-foreground">Destination folder</span>
+                <select
+                  className="h-8 w-full rounded-sm border bg-background px-2 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  value={bulkMoveDestination}
+                  disabled={bulkMoveProgress !== null}
+                  onChange={(event) =>
+                    setBulkMoveDestination(event.target.value)
+                  }
+                >
+                  <option value="">Plugin root</option>
+                  {pluginFolders.map((folder) => (
+                    <option key={folder} value={folder}>
+                      {folder}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="overflow-hidden rounded-sm border">
+              <label className="flex cursor-pointer items-center gap-2 border-b bg-muted px-2 py-2 text-xs font-medium">
+                <Checkbox
+                  checked={
+                    visibleBulkMovePlugins.length > 0 &&
+                    bulkMovePluginIds.length === visibleBulkMovePlugins.length
+                      ? true
+                      : bulkMovePluginIds.length > 0
+                        ? "indeterminate"
+                        : false
+                  }
+                  disabled={bulkMoveProgress !== null}
+                  onCheckedChange={(checked) => {
+                    setBulkMovePluginIds(
+                      checked === true
+                        ? visibleBulkMovePlugins.map((plugin) => plugin.id)
+                        : [],
+                    );
+                  }}
+                />
+                <span>Select all in this folder</span>
+                <span className="ml-auto text-[10px] text-muted-foreground">
+                  {bulkMovePluginIds.length} selected of{" "}
+                  {visibleBulkMovePlugins.length}
+                </span>
+              </label>
+              <div className="max-h-72 divide-y overflow-y-auto">
+                {visibleBulkMovePlugins.map((plugin) => {
+                  const selected = bulkMovePluginIds.includes(plugin.id);
+
+                  return (
+                    <label
+                      key={plugin.id}
+                      className="flex cursor-pointer items-center gap-2 px-2 py-2 text-xs hover:bg-accent"
+                    >
+                      <Checkbox
+                        checked={selected}
+                        disabled={bulkMoveProgress !== null}
+                        onCheckedChange={(checked) =>
+                          toggleBulkMovePlugin(plugin.id, checked === true)
+                        }
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">
+                          {plugin.name}
+                        </span>
+                        <span className="block truncate font-mono text-[10px] text-muted-foreground">
+                          {plugin.organizationFolder || "Plugin root"}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+                {visibleBulkMovePlugins.length === 0 && (
+                  <div className="px-3 py-8 text-center text-xs text-muted-foreground">
+                    No movable plugins are directly inside this folder.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="border-t px-3 py-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-sm text-xs"
+              disabled={bulkMoveProgress !== null}
+              onClick={() => setIsBulkMoveDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 rounded-sm text-xs"
+              disabled={
+                bulkMovePluginIds.length === 0 ||
+                bulkMoveProgress !== null ||
+                bulkMoveDestination === bulkMoveSource
+              }
+              onClick={() => void bulkMovePlugins()}
+            >
+              <FolderInput className="size-3.5" aria-hidden="true" />
+              {bulkMoveProgress
+                ? `Moving ${bulkMoveProgress.completed}/${bulkMoveProgress.total}`
+                : `Move ${bulkMovePluginIds.length} Plugin${bulkMovePluginIds.length === 1 ? "" : "s"}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={movingPlugin !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen && !isMovingPlugin) {
+            setMovingPlugin(null);
+          }
+        }}
+      >
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md rounded-sm p-0">
+          <DialogHeader className="border-b px-3 py-2">
+            <DialogTitle className="text-sm">Move Python Plugin</DialogTitle>
+            <DialogDescription className="text-xs">
+              Choose where to move {movingPlugin?.name || "this plugin"}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-80 space-y-1 overflow-y-auto px-3 py-3">
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-9 w-full justify-start rounded-sm px-2 font-mono text-xs"
+              disabled={isMovingPlugin || !movingPlugin?.organizationFolder}
+              onClick={() => void movePlugin("")}
+            >
+              <FolderOpen className="size-4" aria-hidden="true" />
+              Plugin root
+              {!movingPlugin?.organizationFolder && (
+                <span className="ml-auto text-[10px] text-muted-foreground">
+                  Current
+                </span>
+              )}
+            </Button>
+            {pluginFolders.map((folder) => {
+              const isCurrent = movingPlugin?.organizationFolder === folder;
+
+              return (
+                <Button
+                  key={folder}
+                  type="button"
+                  variant="ghost"
+                  className="h-9 w-full justify-start rounded-sm px-2 font-mono text-xs"
+                  disabled={isMovingPlugin || isCurrent}
+                  onClick={() => void movePlugin(folder)}
+                >
+                  <Folder className="size-4" aria-hidden="true" />
+                  <span className="truncate">{folder}</span>
+                  {isCurrent && (
+                    <span className="ml-auto text-[10px] text-muted-foreground">
+                      Current
+                    </span>
+                  )}
+                </Button>
+              );
+            })}
+            {pluginFolders.length === 0 && (
+              <div className="px-2 py-4 text-center text-xs text-muted-foreground">
+                No organization folders have been created yet.
+              </div>
+            )}
+          </div>
+          <DialogFooter className="border-t px-3 py-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-sm text-xs"
+              disabled={isMovingPlugin}
+              onClick={() => setMovingPlugin(null)}
+            >
+              Cancel
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

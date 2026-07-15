@@ -25,6 +25,10 @@ export async function listPythonPlugins(): Promise<PythonPlugin[]> {
   return invoke<PythonPlugin[]>("list_python_plugins");
 }
 
+export async function listPythonPluginFolders(): Promise<string[]> {
+  return invoke<string[]>("list_python_plugin_folders");
+}
+
 export async function openPythonPluginFolder(): Promise<void> {
   await invoke("open_python_plugin_directory");
 }
@@ -44,6 +48,8 @@ export async function createPythonPlugin(
         manifest?: {
           id: string;
           name: string;
+          author: string;
+          version: string;
           description: string;
           type: string;
           target:
@@ -60,6 +66,7 @@ export async function createPythonPlugin(
           function: string;
         };
         folderName?: string;
+        organizationFolder?: string;
         manifestToml?: string;
         name?: string;
       },
@@ -96,6 +103,21 @@ export async function runDatasourcePlugins(input: {
 }): Promise<PluginRunSummary> {
   await waitForPluginProgressListener();
   return invoke<PluginRunSummary>("run_datasource_plugins", input);
+}
+
+export async function movePythonPlugin(
+  pluginId: string,
+  organizationFolder: string,
+): Promise<string> {
+  return invoke<string>("move_python_plugin", {
+    request: { pluginId, organizationFolder },
+  });
+}
+
+export async function createPythonPluginFolder(folder: string): Promise<string> {
+  return invoke<string>("create_python_plugin_folder", {
+    request: { folder },
+  });
 }
 
 export async function listPluginLogs(

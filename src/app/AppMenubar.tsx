@@ -37,7 +37,10 @@ import {
   getStoredCreatePluginMode,
   storeCreatePluginMode,
 } from "@/features/plugins/createPluginPreferences";
-import { isSafePluginFolderName } from "@/features/plugins/pluginManifest";
+import {
+  isSafePluginFolderName,
+  isSafePluginOrganizationPath,
+} from "@/features/plugins/pluginManifest";
 import {
   createPythonPlugin,
   openPythonApiGuide,
@@ -91,6 +94,10 @@ export function AppMenubar() {
   );
   const [newPluginId, setNewPluginId] = useState("");
   const [newPluginName, setNewPluginName] = useState("");
+  const [newPluginOrganizationFolder, setNewPluginOrganizationFolder] =
+    useState("");
+  const [newPluginAuthor, setNewPluginAuthor] = useState("");
+  const [newPluginVersion, setNewPluginVersion] = useState("1.0.0");
   const [newPluginDescription, setNewPluginDescription] = useState("");
   const [newPluginType, setNewPluginType] = useState("other");
   const [newPluginTarget, setNewPluginTarget] =
@@ -108,6 +115,9 @@ export function AppMenubar() {
   function resetCreatePluginForm() {
     setNewPluginId("");
     setNewPluginName("");
+    setNewPluginOrganizationFolder("");
+    setNewPluginAuthor("");
+    setNewPluginVersion("1.0.0");
     setNewPluginDescription("");
     setNewPluginType("other");
     setNewPluginTarget("infotainment");
@@ -177,10 +187,26 @@ export function AppMenubar() {
     const pluginEntry = newPluginEntry.trim();
     const pluginFunction = newPluginFunction.trim();
     const pluginTomlDetails = newPluginTomlDetails.trim();
+    const organizationFolder = newPluginOrganizationFolder.trim();
+
+    if (!isSafePluginOrganizationPath(organizationFolder)) {
+      setCreatePluginError(
+        "Organization folders must be relative paths using letters, numbers, spaces, '.', '_', and '-'.",
+      );
+      return;
+    }
 
     if (createPluginMode === "manual") {
-      if (!pluginId || !pluginName || !pluginType || !pluginEntry || !pluginFunction) {
-        setCreatePluginError("Plugin id, name, type, entry, and function are required.");
+      if (
+        !pluginId ||
+        !pluginName ||
+        !pluginType ||
+        !pluginEntry ||
+        !pluginFunction
+      ) {
+        setCreatePluginError(
+          "Plugin id, name, type, entry, and function are required.",
+        );
         return;
       }
 
@@ -219,9 +245,12 @@ export function AppMenubar() {
       await createPythonPlugin(
         createPluginMode === "manual"
           ? {
+              organizationFolder: organizationFolder || undefined,
               manifest: {
                 id: pluginId,
                 name: pluginName,
+                author: newPluginAuthor.trim() || "Unknown",
+                version: newPluginVersion.trim() || "1.0.0",
                 description: newPluginDescription.trim(),
                 type: pluginType,
                 target: newPluginTarget,
@@ -237,6 +266,7 @@ export function AppMenubar() {
             }
           : {
               folderName: pluginName,
+              organizationFolder: organizationFolder || undefined,
               manifestToml: pluginTomlDetails,
             },
       );
@@ -432,6 +462,23 @@ export function AppMenubar() {
           </DialogHeader>
           <form onSubmit={handleCreatePlugin}>
             <div className="max-h-[min(34rem,calc(100vh-12rem))] overflow-auto px-3 py-3">
+              <label className="mb-3 block space-y-1 text-xs">
+                <span className="text-muted-foreground">
+                  Organization folder (optional)
+                </span>
+                <Input
+                  className="h-8 rounded-sm font-mono text-xs"
+                  value={newPluginOrganizationFolder}
+                  placeholder="VLEAPP/Ford"
+                  onChange={(event) => {
+                    setNewPluginOrganizationFolder(event.target.value);
+                    setCreatePluginError(null);
+                  }}
+                />
+                <span className="block text-[10px] text-muted-foreground">
+                  Nested folders are created automatically.
+                </span>
+              </label>
               <Tabs
                 value={createPluginMode}
                 onValueChange={handleCreatePluginModeChange}
@@ -484,6 +531,30 @@ export function AppMenubar() {
                         onChange={(event) =>
                           setNewPluginDescription(event.target.value)
                         }
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">Author</span>
+                      <Input
+                        className="h-8 rounded-sm text-xs"
+                        value={newPluginAuthor}
+                        placeholder="Your Name"
+                        onChange={(event) => {
+                          setNewPluginAuthor(event.target.value);
+                          setCreatePluginError(null);
+                        }}
+                      />
+                    </label>
+                    <label className="space-y-1 text-xs">
+                      <span className="text-muted-foreground">Version</span>
+                      <Input
+                        className="h-8 rounded-sm text-xs"
+                        value={newPluginVersion}
+                        placeholder="1.0.0"
+                        onChange={(event) => {
+                          setNewPluginVersion(event.target.value);
+                          setCreatePluginError(null);
+                        }}
                       />
                     </label>
                     <label className="space-y-1 text-xs">

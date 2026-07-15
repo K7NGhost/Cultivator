@@ -1,0 +1,26 @@
+id = "archive-extractor"
+name = "Archive Extractor"
+author = "Cultivator Team"
+version = "1.0.0"
+description = "Built-in Rust extractor for ZIP, TAR, GZ, TAR.GZ, and TGZ archives so later plugins can scan extracted files."
+type = "other"
+target = "other"
+mode = "path_regex"
+path_regex = "(?i).*(\\.zip|\\.tar|\\.gz|\\.tar\\.gz|\\.tgz)$"
+entry = "builtin:archive-extractor"
+function = "extract"
+
+[[options]]
+id = "extractionMode"
+label = "Extraction mode"
+description = "Extract every member or only paths requested by other selected plugins."
+type = "select"
+defaultValue = "all"
+
+[[options.choices]]
+value = "all"
+label = "Extract all"
+
+[[options.choices]]
+value = "plugin_specific"
+label = "Plugin-specific paths"

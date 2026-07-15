@@ -1,7 +1,4 @@
-use crate::plugins::{
-    PluginOptionChoice, PluginOptionDefinition, PythonPluginManifest, PythonPluginMode,
-    PythonPluginTarget,
-};
+use crate::plugins::{PythonPluginManifest, PythonPluginMode};
 use flate2::read::GzDecoder;
 use globset::{GlobBuilder, GlobMatcher};
 use ignore::WalkBuilder;
@@ -13,8 +10,6 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 use zip::ZipArchive;
-
-pub const PLUGIN_ID: &str = "archive-extractor";
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,38 +55,8 @@ enum ArchiveKind {
 }
 
 pub fn manifest() -> PythonPluginManifest {
-    PythonPluginManifest {
-        id: PLUGIN_ID.to_string(),
-        name: "Archive Extractor".to_string(),
-        description:
-            "Built-in Rust extractor for ZIP, TAR, GZ, TAR.GZ, and TGZ archives so later plugins can scan extracted files."
-                .to_string(),
-        plugin_type: "other".to_string(),
-        target: PythonPluginTarget::Other,
-        mode: PythonPluginMode::PathRegex,
-        path_glob: Vec::new(),
-        path_regex: Some("(?i).*(\\.zip|\\.tar|\\.gz|\\.tar\\.gz|\\.tgz)$".to_string()),
-        entry: "builtin:archive-extractor".to_string(),
-        function: "extract".to_string(),
-        options: vec![PluginOptionDefinition {
-            id: "extractionMode".to_string(),
-            label: "Extraction mode".to_string(),
-            description: "Extract every member or only paths requested by other selected plugins."
-                .to_string(),
-            option_type: "select".to_string(),
-            default_value: "all".to_string(),
-            choices: vec![
-                PluginOptionChoice {
-                    value: "all".to_string(),
-                    label: "Extract all".to_string(),
-                },
-                PluginOptionChoice {
-                    value: "plugin_specific".to_string(),
-                    label: "Plugin-specific paths".to_string(),
-                },
-            ],
-        }],
-    }
+    toml::from_str(include_str!("archive_extractor.toml"))
+        .expect("built-in Archive Extractor manifest must be valid")
 }
 
 pub fn execute_with_progress<F>(
@@ -736,6 +701,7 @@ fn display_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::PythonPluginTarget;
     use flate2::{write::GzEncoder, Compression};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -744,6 +710,9 @@ mod tests {
         let matchers = build_archive_entry_matchers(vec![PythonPluginManifest {
             id: "sqlite-parser".to_string(),
             name: "SQLite parser".to_string(),
+            organization_folder: None,
+            author: "Test".to_string(),
+            version: "1.0.0".to_string(),
             description: String::new(),
             plugin_type: "other".to_string(),
             target: PythonPluginTarget::Other,
@@ -803,6 +772,9 @@ mod tests {
         let manifest = PythonPluginManifest {
             id: "sms".to_string(),
             name: "SMS".to_string(),
+            organization_folder: None,
+            author: "Test".to_string(),
+            version: "1.0.0".to_string(),
             description: String::new(),
             plugin_type: "other".to_string(),
             target: PythonPluginTarget::Other,
