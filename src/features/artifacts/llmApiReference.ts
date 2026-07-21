@@ -169,13 +169,17 @@ cultivator_api.timeline_event(label, **fields)
 
 Plugins can either return one artifact dictionary, return a list of artifact dictionaries, or call add_artifact() and return None.
 
-Custom table artifacts store plugin-defined rows in one artifact. Header strings are converted to snake_case row keys; dictionary headers can provide explicit keys.
+Custom table artifacts store plugin-defined rows in one artifact. Header strings are converted to snake_case row keys; dictionary headers can provide explicit keys. Identical displayed rows are grouped by default without deleting stored occurrences. Set \`deduplication={"mode": "preserve"}\` to keep repeated rows separate, or provide \`identityFields\` to define the fields that identify one logical entry.
 
 \`\`\`python
 table = cultivator_api.create_table_artifact(
     name="Parsed Chats",
     category="messages",
     headers=["Sender", "Recipient", "Body", "Sent At"],
+    deduplication={
+        "mode": "group",
+        "identityFields": ["sender", "recipient", "body", "sent_at"],
+    },
 )
 
 cultivator_api.add_table_row(

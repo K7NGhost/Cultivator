@@ -78,6 +78,13 @@ import {
   deleteArtifacts,
   listArtifacts,
 } from "@/features/artifacts/artifactRepository";
+import {
+  combineCustomTableArtifacts,
+  getArtifactEntryMetrics,
+  getCustomTableRowSources,
+  type CustomTableView,
+  type CustomTableViewRow,
+} from "@/features/artifacts/customTableGrouping";
 import type {
   ArtifactModelDefinition,
   StoredArtifactRecord,
@@ -97,21 +104,11 @@ type ArtifactTreeNode = {
   kind: "category" | "group" | "artifact";
   count: number;
   entryCount: number;
+  occurrenceCount: number;
   icon?: string;
   artifact?: StoredArtifactRecord;
   artifacts?: StoredArtifactRecord[];
   children?: ArtifactTreeNode[];
-};
-
-type CustomTableColumn = {
-  key: string;
-  label: string;
-};
-
-type CustomTableData = {
-  name: string;
-  columns: CustomTableColumn[];
-  rows: Record<string, unknown>[];
 };
 
 type ArtifactEntryViewMode = "selected" | "all";
@@ -126,6 +123,7 @@ const CUSTOM_TABLE_HEADER_HEIGHT = 30;
 const CUSTOM_TABLE_ROW_HEIGHT = 30;
 const CUSTOM_TABLE_MIN_COLUMN_WIDTH = 144;
 const CUSTOM_TABLE_MAX_COLUMN_WIDTH = 280;
+const CUSTOM_TABLE_SOURCES_COLUMN_WIDTH = 136;
 const CUSTOM_TABLE_WORKER_SORT_THRESHOLD = 50_000;
 
 type ArtifactCategoryBucket = {
@@ -351,86 +349,26 @@ function getPayloadStringList(
   );
 }
 
-function getCustomTableData(payload: unknown): CustomTableData | null {
-  if (!isPayloadObject(payload) || !isPayloadObject(payload.table)) {
-    return null;
-  }
-
-  const table = payload.table;
-
-  if (!Array.isArray(table.columns) || !Array.isArray(table.rows)) {
-    return null;
-  }
-
-  const columns = table.columns
-    .filter(isPayloadObject)
-    .map((column) => ({
-      key: typeof column.key === "string" ? column.key : "",
-      label: typeof column.label === "string" ? column.label : "",
-    }))
-    .filter((column) => column.key.length > 0 && column.label.length > 0);
-
-  if (columns.length === 0) {
-    return null;
-  }
-
-  return {
-    name:
-      typeof table.name === "string" && table.name.length > 0
-        ? table.name
-        : getPayloadString(payload, "label") ?? "Custom Table",
-    columns,
-    rows: table.rows.filter(isPayloadObject),
-  };
-}
-
 function getCombinedCustomTableData(
   artifacts: StoredArtifactRecord[],
-): CustomTableData | null {
-  const tables = artifacts
-    .map((artifact) => getCustomTableData(artifact.payload))
-    .filter(
-      (table): table is CustomTableData =>
-        table !== null,
-    );
-
-  if (tables.length === 0) {
-    return null;
-  }
-
-  const columns = new Map<string, CustomTableColumn>();
-
-  for (const table of tables) {
-    for (const column of table.columns) {
-      if (!columns.has(column.key)) {
-        columns.set(column.key, column);
-      }
-    }
-  }
-
-  return {
-    name: tables[0].name,
-    columns: Array.from(columns.values()),
-    rows: tables.flatMap((table) => table.rows),
-  };
+): CustomTableView | null {
+  return combineCustomTableArtifacts(artifacts);
 }
 
-function getArtifactEntryCount(artifact: StoredArtifactRecord) {
-  return getCustomTableData(artifact.payload)?.rows.length ?? 1;
-}
-
-function getArtifactEntriesCount(artifacts: StoredArtifactRecord[]) {
-  return artifacts.reduce(
-    (total, artifact) => total + getArtifactEntryCount(artifact),
-    0,
-  );
-}
-
-function formatEntryHitLabel(entryCount: number, fileHits: number) {
+function formatEntryHitLabel(
+  entryCount: number,
+  occurrenceCount: number,
+  fileHits: number,
+) {
   const entryLabel = entryCount === 1 ? "entry" : "entries";
+  const occurrenceLabel = occurrenceCount === 1 ? "occurrence" : "occurrences";
   const fileLabel = fileHits === 1 ? "file hit" : "file hits";
+  const entryText = `${entryCount.toLocaleString()} ${entryLabel}`;
+  const fileText = `${fileHits.toLocaleString()} ${fileLabel}`;
 
-  return `${entryCount.toLocaleString()} ${entryLabel} / ${fileHits.toLocaleString()} ${fileLabel}`;
+  return occurrenceCount === entryCount
+    ? `${entryText} / ${fileText}`
+    : `${entryText} / ${occurrenceCount.toLocaleString()} ${occurrenceLabel} / ${fileText}`;
 }
 
 function formatTableCell(value: unknown) {
@@ -629,10 +567,18 @@ function formatArtifactFileLabel(artifact: StoredArtifactRecord) {
     return artifact.label || artifact.resultKind;
   }
 
-  const normalizedPath = artifact.filePath.replace(/\\/g, "/");
+  return formatFilePathLabel(artifact.filePath);
+}
+
+function formatFilePathLabel(filePath: string) {
+  if (!filePath) {
+    return "Unknown source";
+  }
+
+  const normalizedPath = filePath.replace(/\\/g, "/");
   const pathParts = normalizedPath.split("/").filter(Boolean);
 
-  return pathParts[pathParts.length - 1] ?? artifact.filePath;
+  return pathParts[pathParts.length - 1] ?? filePath;
 }
 
 function getArtifactNodeKey(artifact: StoredArtifactRecord) {
@@ -680,13 +626,15 @@ function buildArtifactNodes(
   return Array.from(artifactMap.entries())
     .map(([groupKey, groupArtifacts]) => {
       const [firstArtifact] = groupArtifacts;
+      const metrics = getArtifactEntryMetrics(groupArtifacts);
 
       return {
         id: `artifact:${category}:${idPrefix}:${groupKey}`,
         name: getArtifactNodeName(firstArtifact),
         kind: "artifact" as const,
         count: groupArtifacts.length,
-        entryCount: getArtifactEntriesCount(groupArtifacts),
+        entryCount: metrics.entryCount,
+        occurrenceCount: metrics.occurrenceCount,
         icon: getPayloadIcon(firstArtifact) ?? undefined,
         artifact: firstArtifact,
         artifacts: groupArtifacts,
@@ -759,6 +707,10 @@ function buildArtifactTree(
               (total, node) => total + node.entryCount,
               0,
             ),
+            occurrenceCount: children.reduce(
+              (total, node) => total + node.occurrenceCount,
+              0,
+            ),
             children,
           };
         })
@@ -775,6 +727,10 @@ function buildArtifactTree(
         count: children.reduce((total, node) => total + node.count, 0),
         entryCount: children.reduce(
           (total, node) => total + node.entryCount,
+          0,
+        ),
+        occurrenceCount: children.reduce(
+          (total, node) => total + node.occurrenceCount,
           0,
         ),
         children,
@@ -906,13 +862,17 @@ export function ArtifactsPage() {
       return counts;
     }, new Map<string, number>());
   }, [visibleArtifacts]);
-  const artifactEntryCount = useMemo(
-    () => getArtifactEntriesCount(visibleArtifacts),
-    [visibleArtifacts],
-  );
   const artifactTree = useMemo(
     () => buildArtifactTree(visibleArtifacts, showEmptyArtifacts),
     [visibleArtifacts, showEmptyArtifacts],
+  );
+  const artifactEntryCount = artifactTree.reduce(
+    (total, node) => total + node.entryCount,
+    0,
+  );
+  const artifactOccurrenceCount = artifactTree.reduce(
+    (total, node) => total + node.occurrenceCount,
+    0,
   );
   const selectedArtifactNode =
     findArtifactNodeById(artifactTree, selectedArtifactNodeId) ??
@@ -1094,7 +1054,11 @@ export function ArtifactsPage() {
         </DropdownMenu>
         <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
           <span>
-            {formatEntryHitLabel(artifactEntryCount, visibleArtifacts.length)}
+            {formatEntryHitLabel(
+              artifactEntryCount,
+              artifactOccurrenceCount,
+              visibleArtifacts.length,
+            )}
           </span>
           <Separator orientation="vertical" className="h-4" />
           <span>{categories.size.toLocaleString()} categories</span>
@@ -1116,6 +1080,7 @@ export function ArtifactsPage() {
           <ArtifactTreeViewer
             artifacts={visibleArtifacts}
             entryCount={artifactEntryCount}
+            occurrenceCount={artifactOccurrenceCount}
             showEmptyArtifacts={showEmptyArtifacts}
             treeData={artifactTree}
             selectedTreeNodeId={selectedArtifactNode?.id ?? null}
@@ -1266,6 +1231,7 @@ function ArtifactTreeViewer({
   artifacts,
   emptyText,
   entryCount,
+  occurrenceCount,
   showEmptyArtifacts,
   onShowEmptyArtifactsChange,
   onSelectArtifactNode,
@@ -1277,6 +1243,7 @@ function ArtifactTreeViewer({
   artifacts: StoredArtifactRecord[];
   emptyText: string;
   entryCount: number;
+  occurrenceCount: number;
   showEmptyArtifacts: boolean;
   onShowEmptyArtifactsChange: (showEmptyArtifacts: boolean) => void;
   onSelectArtifactNode: (artifactNode: ArtifactTreeNode) => void;
@@ -1311,10 +1278,18 @@ function ArtifactTreeViewer({
           <Badge
             variant="secondary"
             className="h-5 max-w-44 rounded-sm text-[11px]"
-            title={formatEntryHitLabel(entryCount, artifacts.length)}
+            title={formatEntryHitLabel(
+              entryCount,
+              occurrenceCount,
+              artifacts.length,
+            )}
           >
             <span className="truncate">
-              {formatEntryHitLabel(entryCount, artifacts.length)}
+              {formatEntryHitLabel(
+                entryCount,
+                occurrenceCount,
+                artifacts.length,
+              )}
             </span>
           </Badge>
         </div>
@@ -1439,10 +1414,18 @@ function ArtifactTreeRow({
               <Badge
                 variant="outline"
                 className="h-4 max-w-40 rounded-sm px-1 text-[10px]"
-                title={formatEntryHitLabel(node.data.entryCount, node.data.count)}
+                title={formatEntryHitLabel(
+                  node.data.entryCount,
+                  node.data.occurrenceCount,
+                  node.data.count,
+                )}
               >
                 <span className="truncate">
-                  {formatEntryHitLabel(node.data.entryCount, node.data.count)}
+                  {formatEntryHitLabel(
+                    node.data.entryCount,
+                    node.data.occurrenceCount,
+                    node.data.count,
+                  )}
                 </span>
               </Badge>
             ) : (
@@ -1455,10 +1438,18 @@ function ArtifactTreeRow({
             <Badge
               variant="outline"
               className="h-4 max-w-40 rounded-sm px-1 text-[10px]"
-              title={formatEntryHitLabel(node.data.entryCount, node.data.count)}
+              title={formatEntryHitLabel(
+                node.data.entryCount,
+                node.data.occurrenceCount,
+                node.data.count,
+              )}
             >
               <span className="truncate">
-                {formatEntryHitLabel(node.data.entryCount, node.data.count)}
+                {formatEntryHitLabel(
+                  node.data.entryCount,
+                  node.data.occurrenceCount,
+                  node.data.count,
+                )}
               </span>
             </Badge>
           )}
@@ -1728,7 +1719,7 @@ function ArtifactPreviewPanel({
 }) {
   const combinedCustomTable =
     entryViewMode === "all" ? getCombinedCustomTableData(artifactOptions) : null;
-  const customTable = getCustomTableData(artifact.payload);
+  const customTable = combineCustomTableArtifacts([artifact]);
 
   if (combinedCustomTable) {
     return (
@@ -1774,7 +1765,7 @@ function CustomTableArtifactPreview({
   table,
 }: {
   subtitle?: string;
-  table: CustomTableData;
+  table: CustomTableView;
 }) {
   const [sort, setSort] = useState<CustomTableSortState>(() => ({
     key: table.columns[0]?.key ?? "",
@@ -1804,17 +1795,26 @@ function CustomTableArtifactPreview({
       ),
     [table.columns],
   );
+  const showSources =
+    table.sources.length > 1 || table.totalOccurrences !== table.rows.length;
   const tableWidth = useMemo(
-    () => columnWidths.reduce((total, width) => total + width, 0),
-    [columnWidths],
+    () =>
+      columnWidths.reduce((total, width) => total + width, 0) +
+      (showSources ? CUSTOM_TABLE_SOURCES_COLUMN_WIDTH : 0),
+    [columnWidths, showSources],
+  );
+  const sortableRows = useMemo(
+    () => table.rows.map((row) => row.values),
+    [table.rows],
   );
   const { isSorting, sortedIndexes } = useCustomTableSortedIndexes(
-    table.rows,
+    sortableRows,
     sort,
   );
   const rowRenderer = ({ index, key, style }: ListRowProps) => {
     const rowIndex = sortedIndexes[index] ?? index;
-    const row = table.rows[rowIndex];
+    const groupedRow = table.rows[rowIndex];
+    const row = groupedRow?.values;
 
     return (
       <div
@@ -1843,6 +1843,9 @@ function CustomTableArtifactPreview({
             </div>
           );
         })}
+        {showSources && groupedRow ? (
+          <CustomTableSourcesCell row={groupedRow} table={table} />
+        ) : null}
       </div>
     );
   };
@@ -1859,7 +1862,9 @@ function CustomTableArtifactPreview({
           ) : null}
         </div>
         <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
-          {table.rows.length.toLocaleString()} rows
+          {table.totalOccurrences === table.rows.length
+            ? `${table.rows.length.toLocaleString()} rows`
+            : `${table.rows.length.toLocaleString()} unique / ${table.totalOccurrences.toLocaleString()} occurrences`}
         </Badge>
       </div>
 
@@ -1933,6 +1938,14 @@ function CustomTableArtifactPreview({
                             </Button>
                           </div>
                         ))}
+                        {showSources ? (
+                          <div
+                            className="flex h-full items-center px-2 text-[11px] font-medium uppercase text-muted-foreground"
+                            style={{ width: CUSTOM_TABLE_SOURCES_COLUMN_WIDTH }}
+                          >
+                            Occurrences
+                          </div>
+                        ) : null}
                       </div>
                       <List
                         height={bodyHeight}
@@ -1959,6 +1972,57 @@ function CustomTableArtifactPreview({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function CustomTableSourcesCell({
+  row,
+  table,
+}: {
+  row: CustomTableViewRow;
+  table: CustomTableView;
+}) {
+  const sources = getCustomTableRowSources(table, row);
+  const occurrenceLabel = row.occurrenceCount === 1 ? "occurrence" : "occurrences";
+
+  return (
+    <div
+      className="flex h-full shrink-0 items-center px-1.5"
+      style={{ width: CUSTOM_TABLE_SOURCES_COLUMN_WIDTH }}
+    >
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="h-6 w-full justify-between rounded-sm px-1.5 text-[11px] font-normal"
+            title={`${row.occurrenceCount.toLocaleString()} ${occurrenceLabel} in ${sources.length.toLocaleString()} ${sources.length === 1 ? "source" : "sources"}`}
+          >
+            <span className="truncate">
+              {row.occurrenceCount.toLocaleString()} {occurrenceLabel}
+            </span>
+            <ChevronDown className="size-3 shrink-0" aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="max-h-72 w-96">
+          {sources.map((source) => (
+            <DropdownMenuItem
+              key={source.artifactId}
+              className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 text-xs"
+              title={source.filePath || source.artifactId}
+            >
+              <span className="min-w-0 truncate font-mono text-[11px]">
+                {formatFilePathLabel(source.filePath)}
+              </span>
+              <Badge variant="outline" className="h-4 rounded-sm px-1 text-[10px]">
+                {source.count.toLocaleString()}
+              </Badge>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

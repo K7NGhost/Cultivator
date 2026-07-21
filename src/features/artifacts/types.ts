@@ -61,6 +61,17 @@ export type ArtifactGroup = {
   label: string;
 };
 
+export type ArtifactDeduplicationMode = "group" | "preserve";
+
+/**
+ * Controls how logically identical artifact entries are presented. Grouping is
+ * non-destructive: every stored occurrence and source reference is retained.
+ */
+export type ArtifactDeduplicationPolicy = {
+  mode?: ArtifactDeduplicationMode;
+  identityFields?: string[];
+};
+
 /**
  * Shared fields every artifact model can carry. Plugin payloads are persisted
  * as JSON, so these property names are intentionally stable and camelCase.
@@ -69,6 +80,7 @@ export type BaseArtifact = {
   kind: string;
   category: ArtifactCategory;
   label: string;
+  deduplication?: ArtifactDeduplicationPolicy;
   icon?: string;
   group?: ArtifactGroup;
   description?: string;

@@ -1191,8 +1191,7 @@ pub async fn list_plugin_artifacts(
               ORDER BY job.started_at DESC, job.id DESC
               LIMIT 1
             )
-          ORDER BY result.created_at DESC
-          LIMIT 5000
+          ORDER BY result.created_at DESC, result.id DESC
         "#,
     )
     .bind(LEGACY_DEMO_ARTIFACT_KINDS[0])
@@ -3884,11 +3883,19 @@ class ArtifactGroup(TypedDict):
     id: str
     label: str
 
+ArtifactDeduplicationMode = Literal["group", "preserve"]
+
+class ArtifactDeduplicationPolicy(TypedDict, total=False):
+    """Non-destructive presentation policy for logically identical entries."""
+    mode: ArtifactDeduplicationMode
+    identityFields: list[str]
+
 class BaseArtifact(TypedDict, total=False):
     """Shared fields supported by every Cultivator artifact model."""
     kind: str
     category: ArtifactCategory
     label: str
+    deduplication: ArtifactDeduplicationPolicy
     icon: str
     group: ArtifactGroup
     description: str
@@ -4505,7 +4512,7 @@ def run(context):
     return None</code></pre>
 
       <h2>Custom Table Artifacts</h2>
-      <p>Use <code>create_table_artifact</code> when a plugin needs its own table under a custom or existing category.</p>
+      <p>Use <code>create_table_artifact</code> when a plugin needs its own table under a custom or existing category. Cultivator groups identical displayed rows by default while retaining every occurrence and source. Pass <code>deduplication={"mode": "preserve"}</code> when repetitions are meaningful, or add <code>identityFields</code> to define which row fields identify one logical entry.</p>
       <pre><code>import cultivator_api
 
 def run(context):
@@ -4513,6 +4520,10 @@ def run(context):
         name="Parsed Chats",
         category="messages",
         headers=["Sender", "Recipient", "Body", "Sent At"],
+        deduplication={
+            "mode": "group",
+            "identityFields": ["sender", "recipient", "body", "sent_at"],
+        },
     )
 
     cultivator_api.add_table_row(
