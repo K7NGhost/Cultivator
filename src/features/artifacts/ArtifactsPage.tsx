@@ -40,9 +40,9 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   ContextMenu,
+  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
@@ -73,6 +73,10 @@ import { useCases } from "@/features/cases/case-provider";
 import { listDataSources } from "@/features/datasources/dataSourceRepository";
 import type { DataSourceRecord } from "@/features/datasources/types";
 import { artifactModelsByKind } from "@/features/artifacts/artifactModels";
+import {
+  ARTIFACT_NAVIGATION_CATEGORIES,
+  getArtifactNavigationCategory,
+} from "@/features/artifacts/artifactNavigationCategories";
 import {
   deleteArtifact,
   deleteArtifacts,
@@ -290,31 +294,6 @@ function getArtifactModel(kind: string): ArtifactModelDefinition | undefined {
   return artifactModelsByKind.get(
     kind as ArtifactModelDefinition["kind"],
   );
-}
-
-function getPayloadSummary(artifact: StoredArtifactRecord) {
-  if (!artifact.payload || typeof artifact.payload !== "object") {
-    return "";
-  }
-
-  const payload = artifact.payload as Record<string, unknown>;
-  const summaryKeys = [
-    "name",
-    "title",
-    "url",
-    "phone",
-    "email",
-    "sender",
-    "service",
-    "path",
-    "key",
-  ];
-
-  return summaryKeys
-    .map((key) => payload[key])
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .slice(0, 2)
-    .join(" | ");
 }
 
 function formatJson(value: unknown) {
@@ -650,15 +629,21 @@ function buildArtifactTree(
   artifacts: StoredArtifactRecord[],
   showEmptyArtifacts: boolean,
 ): ArtifactTreeNode[] {
-  const categoryMap = new Map<string, ArtifactCategoryBucket>();
+  const categoryMap = new Map<string, ArtifactCategoryBucket>(
+    ARTIFACT_NAVIGATION_CATEGORIES.map((category) => [
+      category,
+      { grouped: new Map(), ungrouped: [] },
+    ]),
+  );
 
   for (const artifact of artifacts) {
-    const category = getPayloadCategory(artifact);
-    const defaultBucket: ArtifactCategoryBucket = {
-      grouped: new Map(),
-      ungrouped: [],
-    };
-    const categoryBucket = categoryMap.get(category) ?? defaultBucket;
+    const category = getArtifactNavigationCategory(artifact);
+    const categoryBucket = categoryMap.get(category);
+
+    if (!categoryBucket) {
+      continue;
+    }
+
     const payloadGroup = getPayloadGroup(artifact);
 
     if (payloadGroup) {
@@ -674,14 +659,9 @@ function buildArtifactTree(
     } else {
       categoryBucket.ungrouped.push(artifact);
     }
-
-    categoryMap.set(category, categoryBucket);
   }
 
   return Array.from(categoryMap.entries())
-    .sort(([firstCategory], [secondCategory]) =>
-      firstCategory.localeCompare(secondCategory),
-    )
     .map(([category, categoryBucket]) => {
       const artifactNodes = buildArtifactNodes(
         category,
@@ -735,8 +715,7 @@ function buildArtifactTree(
         ),
         children,
       };
-    })
-    .filter((node) => showEmptyArtifacts || node.children.length > 0);
+    });
 }
 
 function collectTreeArtifacts(node: ArtifactTreeNode): StoredArtifactRecord[] {
@@ -853,15 +832,6 @@ export function ArtifactsPage() {
           ),
     [artifacts, selectedDatasourceId],
   );
-  const categories = useMemo(() => {
-    return visibleArtifacts.reduce((counts, artifact) => {
-      const category = getPayloadCategory(artifact);
-
-      counts.set(category, (counts.get(category) ?? 0) + 1);
-
-      return counts;
-    }, new Map<string, number>());
-  }, [visibleArtifacts]);
   const artifactTree = useMemo(
     () => buildArtifactTree(visibleArtifacts, showEmptyArtifacts),
     [visibleArtifacts, showEmptyArtifacts],
@@ -1025,7 +995,13 @@ export function ArtifactsPage() {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="min-w-56">
-            <DropdownMenuItem onSelect={() => setSelectedDatasourceId("all")}>
+            <DropdownMenuItem
+              onSelect={() => {
+                setSelectedDatasourceId("all");
+                setSelectedArtifactNodeId(null);
+                setSelectedArtifactId(null);
+              }}
+            >
               <Check
                 className={cn(
                   "size-3.5",
@@ -1038,7 +1014,11 @@ export function ArtifactsPage() {
             {datasources.map((datasource) => (
               <DropdownMenuItem
                 key={datasource.id}
-                onSelect={() => setSelectedDatasourceId(datasource.id)}
+                onSelect={() => {
+                  setSelectedDatasourceId(datasource.id);
+                  setSelectedArtifactNodeId(null);
+                  setSelectedArtifactId(null);
+                }}
               >
                 <Check
                   className={cn(
@@ -1061,7 +1041,9 @@ export function ArtifactsPage() {
             )}
           </span>
           <Separator orientation="vertical" className="h-4" />
-          <span>{categories.size.toLocaleString()} categories</span>
+          <span>
+            {ARTIFACT_NAVIGATION_CATEGORIES.length.toLocaleString()} categories
+          </span>
         </div>
       </section>
 
@@ -1076,14 +1058,14 @@ export function ArtifactsPage() {
         orientation="horizontal"
         className="min-h-0 min-w-0 flex-1"
       >
-        <ResizablePanel defaultSize="38%" minSize="24%">
+        <ResizablePanel defaultSize="32%" minSize="24%">
           <ArtifactTreeViewer
             artifacts={visibleArtifacts}
             entryCount={artifactEntryCount}
             occurrenceCount={artifactOccurrenceCount}
             showEmptyArtifacts={showEmptyArtifacts}
             treeData={artifactTree}
-            selectedTreeNodeId={selectedArtifactNode?.id ?? null}
+            selectedTreeNodeId={selectedArtifactNodeId}
             emptyText={
               activeCase
                 ? visibleArtifacts.length > 0
@@ -1092,6 +1074,10 @@ export function ArtifactsPage() {
                 : "Create or select a case before viewing artifacts."
             }
             onShowEmptyArtifactsChange={setShowEmptyArtifacts}
+            onSelectAllEvidence={() => {
+              setSelectedArtifactNodeId(null);
+              setSelectedArtifactId(null);
+            }}
             onSelectArtifactNode={(artifactNode) => {
               const firstArtifact = artifactNode.artifacts?.[0] ?? artifactNode.artifact;
 
@@ -1119,7 +1105,7 @@ export function ArtifactsPage() {
 
         <ResizableHandle withHandle />
 
-        <ResizablePanel defaultSize="62%" minSize="34%">
+        <ResizablePanel defaultSize="68%" minSize="34%">
           <ArtifactPropertiesPanel
             artifact={selectedArtifact}
             artifactOptions={selectedArtifactOptions}
@@ -1234,6 +1220,7 @@ function ArtifactTreeViewer({
   occurrenceCount,
   showEmptyArtifacts,
   onShowEmptyArtifactsChange,
+  onSelectAllEvidence,
   onSelectArtifactNode,
   onRequestRemoveArtifact,
   onRequestRemoveCategory,
@@ -1246,6 +1233,7 @@ function ArtifactTreeViewer({
   occurrenceCount: number;
   showEmptyArtifacts: boolean;
   onShowEmptyArtifactsChange: (showEmptyArtifacts: boolean) => void;
+  onSelectAllEvidence: () => void;
   onSelectArtifactNode: (artifactNode: ArtifactTreeNode) => void;
   onRequestRemoveArtifact: (artifactNode: ArtifactTreeNode) => void;
   onRequestRemoveCategory: (categoryNode: ArtifactTreeNode) => void;
@@ -1257,45 +1245,53 @@ function ArtifactTreeViewer({
 
   return (
     <section
-      className="h-full min-h-0 min-w-0 overflow-hidden border-r"
-      aria-label="Artifact tree"
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r bg-background"
+      aria-label="Artifact navigation"
     >
-      <div className="flex h-8 items-center justify-between border-b px-2">
-        <div className="text-xs font-medium uppercase text-muted-foreground">
-          Artifact Tree
+      <div className="flex h-10 shrink-0 items-end border-b px-2">
+        <div className="flex h-full items-center border-b-2 border-primary px-3 text-[11px] font-semibold uppercase">
+          Artifacts
         </div>
-        <div className="flex min-w-0 items-center gap-2">
-          <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Checkbox
-              className="size-3.5 rounded-sm"
-              checked={showEmptyArtifacts}
-              onCheckedChange={(checked) => {
-                onShowEmptyArtifactsChange(checked === true);
-              }}
-            />
-            Empty
-          </label>
-          <Badge
-            variant="secondary"
-            className="h-5 max-w-44 rounded-sm text-[11px]"
+      </div>
+
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            className={cn(
+              "h-10 w-full shrink-0 justify-start rounded-none border-b px-6 text-sm font-semibold uppercase hover:bg-accent",
+              selectedTreeNodeId === null &&
+                "bg-primary/20 text-foreground hover:bg-primary/25 dark:bg-primary/25 dark:hover:bg-primary/30",
+            )}
             title={formatEntryHitLabel(
               entryCount,
               occurrenceCount,
               artifacts.length,
             )}
+            onClick={onSelectAllEvidence}
           >
-            <span className="truncate">
-              {formatEntryHitLabel(
-                entryCount,
-                occurrenceCount,
-                artifacts.length,
-              )}
+            <span className="truncate">All Evidence</span>
+            <span className="ml-auto tabular-nums">
+              {entryCount.toLocaleString()}
             </span>
-          </Badge>
-        </div>
-      </div>
-      <div ref={treePanel.ref} className="h-[calc(100%-2rem)]">
-        {artifacts.length === 0 || treeData.length === 0 ? (
+          </Button>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="min-w-48">
+          <ContextMenuCheckboxItem
+            checked={showEmptyArtifacts}
+            className="text-xs"
+            onCheckedChange={(checked) => {
+              onShowEmptyArtifactsChange(checked === true);
+            }}
+          >
+            Show empty artifacts
+          </ContextMenuCheckboxItem>
+        </ContextMenuContent>
+      </ContextMenu>
+
+      <div ref={treePanel.ref} className="min-h-0 flex-1">
+        {treeData.length === 0 ? (
           <div className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
             {emptyText}
           </div>
@@ -1306,13 +1302,12 @@ function ArtifactTreeViewer({
               data={treeData}
               width="100%"
               height={treePanel.size.height}
-              rowHeight={30}
+              rowHeight={40}
               indent={0}
-              openByDefault
+              openByDefault={false}
               disableDrag
               disableDrop
-              selection={selectedTreeNodeId ?? treeData[0]?.id}
-              className="py-1"
+              selection={selectedTreeNodeId ?? undefined}
               aria-label="Artifacts grouped by category"
             >
               {(props) => (
@@ -1342,117 +1337,98 @@ function ArtifactTreeRow({
   onRequestRemoveArtifact: (artifactNode: ArtifactTreeNode) => void;
   onRequestRemoveCategory: (categoryNode: ArtifactTreeNode) => void;
 }) {
-  const connectorWidth = node.level * 16;
+  const connectorWidth = node.level * 14;
+  const isCategory = node.data.kind === "category";
+  const displayName = isCategory
+    ? node.data.name.toLowerCase() === "other"
+      ? "Custom"
+      : node.data.name.replace(/[_-]+/g, " ")
+    : node.data.name;
   const Icon =
     node.data.kind === "artifact"
       ? getArtifactTreeIcon(node.data.icon)
       : node.data.kind === "group"
         ? FolderOpen
-      : node.data.kind === "category"
-        ? Database
         : FileText;
   const iconClassName =
     node.data.kind === "artifact"
       ? "text-muted-foreground"
       : node.data.kind === "group"
         ? "text-amber-600 dark:text-amber-400"
-      : node.data.kind === "category"
-        ? "text-primary"
         : "text-muted-foreground";
+  const countTitle = formatEntryHitLabel(
+    node.data.entryCount,
+    node.data.occurrenceCount,
+    node.data.count,
+  );
 
   const row = (
-    <div style={style} className="px-1">
+    <div style={style}>
       <div
         className={cn(
-          "flex h-7 items-center rounded-sm",
-          node.isSelected && "bg-accent",
+          "flex h-full items-center border-b border-border/40",
+          node.isSelected && !isCategory && "bg-primary/15",
         )}
-        style={{ paddingLeft: `${connectorWidth + 4}px` }}
+        style={{ paddingLeft: `${isCategory ? 2 : connectorWidth + 2}px` }}
       >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-5 shrink-0 rounded-sm"
-          disabled={node.isLeaf}
-          aria-label={node.isOpen ? "Collapse artifact group" : "Expand artifact group"}
-          onClick={() => {
-            if (node.isInternal) {
-              node.toggle();
+        {node.isLeaf ? (
+          <span className="size-6 shrink-0" aria-hidden="true" />
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="size-6 shrink-0 rounded-none"
+            aria-label={
+              node.isOpen ? "Collapse artifact group" : "Expand artifact group"
             }
-          }}
-        >
-          <ChevronRight
-            className={cn(
-              "size-3 text-muted-foreground transition-transform",
-              node.isOpen && "rotate-90",
-              node.isLeaf && "invisible",
-            )}
-            aria-hidden="true"
-          />
-        </Button>
+            onClick={() => node.toggle()}
+          >
+            <ChevronRight
+              className={cn(
+                "size-3.5 text-muted-foreground transition-transform",
+                node.isOpen && "rotate-90",
+              )}
+              aria-hidden="true"
+            />
+          </Button>
+        )}
         <Button
           type="button"
           variant="ghost"
-          className="h-7 min-w-0 flex-1 justify-start gap-1.5 rounded-sm px-1.5 text-xs font-normal"
+          className={cn(
+            "h-full min-w-0 flex-1 justify-start gap-1.5 rounded-none px-1.5 hover:bg-accent",
+            isCategory
+              ? "text-sm font-semibold uppercase"
+              : "text-xs font-medium",
+          )}
           onClick={() => {
-            node.select();
-
             if (node.data.kind === "artifact") {
+              node.select();
               onSelectArtifactNode(node.data);
             } else if (node.isInternal) {
               node.toggle();
             }
           }}
         >
-          <Icon className={cn("size-3.5 shrink-0", iconClassName)} aria-hidden="true" />
+          {!isCategory ? (
+            <Icon
+              className={cn("size-3.5 shrink-0", iconClassName)}
+              aria-hidden="true"
+            />
+          ) : null}
           <span className="min-w-0 flex-1 truncate text-left">
-            {node.data.name}
+            {displayName}
           </span>
-          {node.data.kind === "artifact" && node.data.artifact ? (
-            node.data.entryCount !== 1 || node.data.count > 1 ? (
-              <Badge
-                variant="outline"
-                className="h-4 max-w-40 rounded-sm px-1 text-[10px]"
-                title={formatEntryHitLabel(
-                  node.data.entryCount,
-                  node.data.occurrenceCount,
-                  node.data.count,
-                )}
-              >
-                <span className="truncate">
-                  {formatEntryHitLabel(
-                    node.data.entryCount,
-                    node.data.occurrenceCount,
-                    node.data.count,
-                  )}
-                </span>
-              </Badge>
-            ) : (
-              <span className="max-w-32 truncate text-[10px] text-muted-foreground">
-                {getPayloadSummary(node.data.artifact) ||
-                  formatDateTime(node.data.artifact.createdAt)}
-              </span>
-            )
-          ) : (
-            <Badge
-              variant="outline"
-              className="h-4 max-w-40 rounded-sm px-1 text-[10px]"
-              title={formatEntryHitLabel(
-                node.data.entryCount,
-                node.data.occurrenceCount,
-                node.data.count,
-              )}
-            >
-              <span className="truncate">
-                {formatEntryHitLabel(
-                  node.data.entryCount,
-                  node.data.occurrenceCount,
-                  node.data.count,
-                )}
-              </span>
-            </Badge>
-          )}
+          <span
+            className={cn(
+              "shrink-0 tabular-nums",
+              isCategory ? "text-sm font-semibold" : "text-xs font-medium",
+            )}
+            title={countTitle}
+          >
+            {node.data.entryCount.toLocaleString()}
+          </span>
         </Button>
       </div>
     </div>
@@ -1819,11 +1795,11 @@ function CustomTableArtifactPreview({
     return (
       <div
         key={key}
-        style={{
-          ...style,
-          width: tableWidth,
-        }}
-        className="flex border-t text-xs"
+        style={style}
+        className={cn(
+          "flex w-full border-t text-xs hover:bg-muted/40",
+          index % 2 === 1 && "bg-muted/15",
+        )}
       >
         {table.columns.map((column, columnIndex) => {
           const value = formatTableCell(row?.[column.key]);
@@ -1834,6 +1810,7 @@ function CustomTableArtifactPreview({
               className="flex h-full items-center border-r px-2 text-[11px] last:border-r-0"
               style={{
                 width: columnWidths[columnIndex],
+                flexGrow: 1,
               }}
               title={value}
             >
@@ -1904,6 +1881,7 @@ function CustomTableArtifactPreview({
                             className="flex h-full items-center border-r text-[11px] font-medium text-muted-foreground last:border-r-0"
                             style={{
                               width: columnWidths[columnIndex],
+                              flexGrow: 1,
                             }}
                             title={column.label}
                           >
@@ -1940,7 +1918,7 @@ function CustomTableArtifactPreview({
                         ))}
                         {showSources ? (
                           <div
-                            className="flex h-full items-center px-2 text-[11px] font-medium uppercase text-muted-foreground"
+                            className="flex h-full shrink-0 items-center px-2 text-[11px] font-medium uppercase text-muted-foreground"
                             style={{ width: CUSTOM_TABLE_SOURCES_COLUMN_WIDTH }}
                           >
                             Occurrences
