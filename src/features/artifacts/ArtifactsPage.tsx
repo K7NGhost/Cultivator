@@ -89,6 +89,7 @@ import {
   type CustomTableView,
   type CustomTableViewRow,
 } from "@/features/artifacts/customTableGrouping";
+import { getCustomTableViewportLayout } from "@/features/artifacts/customTableLayout";
 import type {
   ArtifactModelDefinition,
   StoredArtifactRecord,
@@ -175,6 +176,29 @@ function useElementSize<TElement extends HTMLElement>() {
   }, []);
 
   return { ref, size };
+}
+
+function useNativeScrollbarSize() {
+  const [scrollbarSize, setScrollbarSize] = useState(0);
+
+  useLayoutEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const measurement = document.createElement("div");
+    measurement.style.position = "fixed";
+    measurement.style.width = "100px";
+    measurement.style.height = "100px";
+    measurement.style.overflow = "scroll";
+    measurement.style.visibility = "hidden";
+    measurement.style.pointerEvents = "none";
+    document.body.appendChild(measurement);
+    setScrollbarSize(measurement.offsetWidth - measurement.clientWidth);
+    measurement.remove();
+  }, []);
+
+  return scrollbarSize;
 }
 
 function getErrorMessage(caughtError: unknown) {
@@ -1743,6 +1767,7 @@ function CustomTableArtifactPreview({
   subtitle?: string;
   table: CustomTableView;
 }) {
+  const scrollbarSize = useNativeScrollbarSize();
   const [sort, setSort] = useState<CustomTableSortState>(() => ({
     key: table.columns[0]?.key ?? "",
     direction: "asc",
@@ -1773,12 +1798,6 @@ function CustomTableArtifactPreview({
   );
   const showSources =
     table.sources.length > 1 || table.totalOccurrences !== table.rows.length;
-  const tableWidth = useMemo(
-    () =>
-      columnWidths.reduce((total, width) => total + width, 0) +
-      (showSources ? CUSTOM_TABLE_SOURCES_COLUMN_WIDTH : 0),
-    [columnWidths, showSources],
-  );
   const sortableRows = useMemo(
     () => table.rows.map((row) => row.values),
     [table.rows],
@@ -1787,45 +1806,6 @@ function CustomTableArtifactPreview({
     sortableRows,
     sort,
   );
-  const rowRenderer = ({ index, key, style }: ListRowProps) => {
-    const rowIndex = sortedIndexes[index] ?? index;
-    const groupedRow = table.rows[rowIndex];
-    const row = groupedRow?.values;
-
-    return (
-      <div
-        key={key}
-        style={style}
-        className={cn(
-          "flex w-full border-t text-xs hover:bg-muted/40",
-          index % 2 === 1 && "bg-muted/15",
-        )}
-      >
-        {table.columns.map((column, columnIndex) => {
-          const value = formatTableCell(row?.[column.key]);
-
-          return (
-            <div
-              key={column.key}
-              className="flex h-full items-center border-r px-2 text-[11px] last:border-r-0"
-              style={{
-                width: columnWidths[columnIndex],
-                flexGrow: 1,
-              }}
-              title={value}
-            >
-              <span className="block min-w-0 truncate">
-                {value || "-"}
-              </span>
-            </div>
-          );
-        })}
-        {showSources && groupedRow ? (
-          <CustomTableSourcesCell row={groupedRow} table={table} />
-        ) : null}
-      </div>
-    );
-  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1856,98 +1836,183 @@ function CustomTableArtifactPreview({
               {({ height, width }) => {
                 const viewportWidth = Math.max(0, width);
                 const viewportHeight = Math.max(0, height);
-                const renderedTableWidth = Math.max(tableWidth, viewportWidth);
-                const bodyHeight = Math.max(
-                  0,
-                  viewportHeight - CUSTOM_TABLE_HEADER_HEIGHT,
-                );
+                const layout = getCustomTableViewportLayout({
+                  baseColumnWidths: columnWidths,
+                  fixedTrailingWidth: showSources
+                    ? CUSTOM_TABLE_SOURCES_COLUMN_WIDTH
+                    : 0,
+                  headerHeight: CUSTOM_TABLE_HEADER_HEIGHT,
+                  rowCount: table.rows.length,
+                  rowHeight: CUSTOM_TABLE_ROW_HEIGHT,
+                  scrollbarSize,
+                  viewportHeight,
+                  viewportWidth,
+                });
+                const rowRenderer = ({
+                  index,
+                  key,
+                  style,
+                }: ListRowProps) => {
+                  const sourceRowIndex = sortedIndexes[index] ?? index;
+                  const groupedRow = table.rows[sourceRowIndex];
+
+                  return (
+                    <div
+                      key={key}
+                      role="row"
+                      style={{ ...style, width: layout.tableContentWidth }}
+                      className={cn(
+                        "flex border-b text-xs hover:bg-muted/40",
+                        index % 2 === 1 && "bg-muted/15",
+                      )}
+                    >
+                      {table.columns.map((column, columnIndex) => {
+                        const value = formatTableCell(
+                          groupedRow?.values[column.key],
+                        );
+                        const isLastDataColumn =
+                          columnIndex === table.columns.length - 1;
+
+                        return (
+                          <div
+                            key={column.key}
+                            role="gridcell"
+                            className={cn(
+                              "flex h-full shrink-0 items-center px-2 text-[11px]",
+                              (showSources || !isLastDataColumn) && "border-r",
+                            )}
+                            style={{ width: layout.columnWidths[columnIndex] }}
+                            title={value}
+                          >
+                            <span className="block min-w-0 truncate">
+                              {value || "-"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                      {showSources && groupedRow ? (
+                        <CustomTableSourcesCell
+                          row={groupedRow}
+                          table={table}
+                        />
+                      ) : null}
+                    </div>
+                  );
+                };
 
                 return (
                   <div
-                    className="h-full overflow-auto"
+                    className="h-full overflow-x-auto overflow-y-hidden"
                     style={{ height: viewportHeight, width: viewportWidth }}
                   >
-                    <div style={{ width: renderedTableWidth }}>
+                    <div style={{ width: layout.renderedTableWidth }}>
                       <div
-                        className="flex border-b bg-background text-xs"
+                        role="row"
+                        className="flex bg-background text-xs"
                         style={{
                           height: CUSTOM_TABLE_HEADER_HEIGHT,
-                          width: renderedTableWidth,
+                          width: layout.renderedTableWidth,
                         }}
                       >
-                        {table.columns.map((column, columnIndex) => (
-                          <div
-                            key={column.key}
-                            className="flex h-full items-center border-r text-[11px] font-medium text-muted-foreground last:border-r-0"
-                            style={{
-                              width: columnWidths[columnIndex],
-                              flexGrow: 1,
-                            }}
-                            title={column.label}
-                          >
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="xs"
-                              className="h-full w-full justify-start gap-1 rounded-none px-2 text-[11px] font-medium uppercase text-muted-foreground"
-                              aria-sort={
-                                sort.key === column.key
-                                  ? sort.direction === "asc"
-                                    ? "ascending"
-                                    : "descending"
-                                  : "none"
-                              }
-                              onClick={() => {
-                                setSort((current) =>
-                                  getNextCustomTableSort(
-                                    current,
-                                    column.key,
-                                  ),
-                                );
+                        {table.columns.map((column, columnIndex) => {
+                          const isLastDataColumn =
+                            columnIndex === table.columns.length - 1;
+
+                          return (
+                            <div
+                              key={column.key}
+                              role="columnheader"
+                              className={cn(
+                                "flex h-full shrink-0 items-center border-b text-[11px] font-medium text-muted-foreground",
+                                (showSources ||
+                                  !isLastDataColumn ||
+                                  layout.scrollbarGutterWidth > 0) &&
+                                  "border-r",
+                              )}
+                              style={{
+                                width: layout.columnWidths[columnIndex],
                               }}
+                              title={column.label}
                             >
-                              <span className="min-w-0 truncate">
-                                {column.label}
-                              </span>
-                              <CustomTableSortIcon
-                                columnKey={column.key}
-                                sort={sort}
-                              />
-                            </Button>
-                          </div>
-                        ))}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="xs"
+                                className="h-full w-full justify-start gap-1 rounded-none px-2 text-[11px] font-medium uppercase text-muted-foreground"
+                                aria-sort={
+                                  sort.key === column.key
+                                    ? sort.direction === "asc"
+                                      ? "ascending"
+                                      : "descending"
+                                    : "none"
+                                }
+                                onClick={() => {
+                                  setSort((current) =>
+                                    getNextCustomTableSort(
+                                      current,
+                                      column.key,
+                                    ),
+                                  );
+                                }}
+                              >
+                                <span className="min-w-0 truncate">
+                                  {column.label}
+                                </span>
+                                <CustomTableSortIcon
+                                  columnKey={column.key}
+                                  sort={sort}
+                                />
+                              </Button>
+                            </div>
+                          );
+                        })}
                         {showSources ? (
                           <div
-                            className="flex h-full shrink-0 items-center px-2 text-[11px] font-medium uppercase text-muted-foreground"
-                            style={{ width: CUSTOM_TABLE_SOURCES_COLUMN_WIDTH }}
+                            role="columnheader"
+                            className={cn(
+                              "flex h-full shrink-0 items-center border-b px-2 text-[11px] font-medium uppercase text-muted-foreground",
+                              layout.scrollbarGutterWidth > 0 && "border-r",
+                            )}
+                            style={{
+                              width: CUSTOM_TABLE_SOURCES_COLUMN_WIDTH,
+                            }}
                           >
                             Occurrences
                           </div>
                         ) : null}
+                        {layout.scrollbarGutterWidth > 0 ? (
+                          <div
+                            aria-hidden="true"
+                            className="h-full shrink-0 border-b bg-muted/20"
+                            style={{ width: layout.scrollbarGutterWidth }}
+                          />
+                        ) : null}
                       </div>
                       <List
-                        height={bodyHeight}
+                        aria-label={`${table.name} artifact rows`}
+                        height={layout.bodyHeight}
                         overscanRowCount={8}
                         rowCount={table.rows.length}
                         rowHeight={CUSTOM_TABLE_ROW_HEIGHT}
                         rowRenderer={rowRenderer}
-                        width={renderedTableWidth}
+                        style={{ overflowX: "hidden" }}
+                        width={layout.renderedTableWidth}
                       />
-                      {isSorting ? (
-                        <div className="absolute right-3 top-10 flex items-center gap-2 rounded-sm border bg-background/95 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
-                          <span
-                            className="size-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground"
-                            aria-hidden="true"
-                          />
-                          Loading all entries
-                        </div>
-                      ) : null}
                     </div>
                   </div>
                 );
               }}
             </AutoSizer>
           )}
+          {isSorting ? (
+            <div className="absolute right-3 top-3 flex items-center gap-2 rounded-sm border bg-background/95 px-2 py-1 text-[11px] text-muted-foreground shadow-sm">
+              <span
+                className="size-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground"
+                aria-hidden="true"
+              />
+              Loading all entries
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
