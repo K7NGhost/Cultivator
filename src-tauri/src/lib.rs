@@ -40,7 +40,8 @@ const SEARCH_PROGRESS_EVENT: &str = "search-progress";
 const SEARCH_SUMMARIES_EVENT: &str = "search-summaries";
 const SEARCH_WORKER_FLAG: &str = "--cultivator-search-worker";
 const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "psd", "nef", "tiff", "bmp", "tcc", "tif", "webp",
+    "jpg", "jpeg", "png", "gif", "psd", "nef", "tiff", "bmp", "tcc", "tif", "webp", "heic", "heif",
+    "hif", "avif",
 ];
 const VIDEO_EXTENSIONS: &[&str] = &[
     "asf", "mov", "m1v", "m2v", "m4v", "mp4", "mpeg", "mpg", "mpe", "rm", "wmv", "mpv", "flv",
@@ -670,6 +671,15 @@ async fn list_media_gallery(
     datasource_id: Option<String>,
 ) -> Result<plugins::MediaGallery, String> {
     plugins::list_media_gallery(case_database_path, datasource_id).await
+}
+
+#[tauri::command]
+async fn render_media_thumbnail(
+    app_handle: tauri::AppHandle,
+    case_database_path: String,
+    source_path: String,
+) -> Result<String, String> {
+    plugins::render_media_thumbnail(app_handle, case_database_path, source_path).await
 }
 
 #[tauri::command]
@@ -1968,6 +1978,9 @@ fn inferred_mime_type(path: &Path) -> Option<&'static str> {
         "webp" => Some("image/webp"),
         "bmp" => Some("image/bmp"),
         "tif" | "tiff" => Some("image/tiff"),
+        "heic" => Some("image/heic"),
+        "heif" | "hif" => Some("image/heif"),
+        "avif" => Some("image/avif"),
         "mp4" | "m4v" => Some("video/mp4"),
         "mov" => Some("video/quicktime"),
         "avi" => Some("video/x-msvideo"),
@@ -2198,6 +2211,7 @@ pub fn run() {
             delete_plugin_artifact,
             delete_plugin_artifacts,
             list_media_gallery,
+            render_media_thumbnail,
             remove_datasource,
             run_datasource_plugins,
             cancel_plugin_run,

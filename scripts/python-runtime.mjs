@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 const GITHUB_RELEASES_API =
   "https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest";
 const DEFAULT_PYTHON_VERSION = "3.12";
+const MEDIA_PREVIEW_PACKAGES = ["Pillow==12.3.0", "pillow-heif==1.4.0"];
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const RUNTIME_ROOT = path.join(REPO_ROOT, "src-tauri", "python-runtime");
@@ -127,6 +128,7 @@ export async function setupPythonRuntime() {
     process.env.CULTIVATOR_REFRESH_PYTHON_RUNTIME !== "1" &&
     (await pathExists(paths.pythonExecutable))
   ) {
+    ensureMediaPreviewPackages(paths.pythonExecutable);
     return {
       target,
       paths,
@@ -153,12 +155,36 @@ export async function setupPythonRuntime() {
 
   await rm(paths.runtimeDir, { recursive: true, force: true });
   await cp(extractedPythonRoot, paths.runtimeDir, { recursive: true });
+  ensureMediaPreviewPackages(paths.pythonExecutable);
 
   return {
     target,
     paths,
     assetName: asset.name,
   };
+}
+
+function ensureMediaPreviewPackages(pythonExecutable) {
+  try {
+    execFileSync(
+      pythonExecutable,
+      ["-I", "-c", "import PIL; import pillow_heif"],
+      { env: createPythonRuntimeEnv(), stdio: "ignore" },
+    );
+  } catch {
+    execFileSync(
+      pythonExecutable,
+      [
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--no-warn-script-location",
+        ...MEDIA_PREVIEW_PACKAGES,
+      ],
+      { env: createPythonRuntimeEnv(), stdio: "inherit" },
+    );
+  }
 }
 
 async function fetchLatestRelease() {

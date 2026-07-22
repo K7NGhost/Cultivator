@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   FixedSizeGrid,
   type GridChildComponentProps,
@@ -10,6 +11,7 @@ import {
   Clapperboard,
   FileImage,
   Film,
+  FolderSearch,
   Images,
   RefreshCw,
   Video,
@@ -18,6 +20,12 @@ import ReactPlayer from "react-player";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Separator } from "@/components/ui/separator";
 import {
   Sheet,
@@ -33,6 +41,7 @@ import {
   subscribeToDataSourcesChanged,
 } from "@/features/datasources/dataSourceRepository";
 import type { DataSourceRecord } from "@/features/datasources/types";
+import { MediaImagePreview } from "@/features/media/components/MediaImagePreview";
 import {
   type FileViewMediaPage,
   listFileViewMediaPage,
@@ -42,6 +51,7 @@ import type { MediaGalleryResult, MediaItem } from "@/features/media/types";
 import { cn } from "@/lib/utils";
 
 type MediaGalleryProps = {
+  caseDatabasePath: string | null;
   detailTitle: string;
   emptyText: string;
   icon: typeof FileImage;
@@ -62,6 +72,7 @@ type ElementSize = {
 };
 
 type VirtualizedMediaGridData = {
+  caseDatabasePath: string | null;
   columnCount: number;
   mediaType: "image" | "video";
   onSelectItem: (item: MediaItem) => void;
@@ -434,6 +445,7 @@ export function MediaPage() {
 
         <TabsContent value="photos" className="m-0 min-h-0 flex-1">
           <MediaGallery
+            caseDatabasePath={activeCase?.databasePath ?? null}
             title="Photo Gallery"
             icon={FileImage}
             tiles={gallery.photos}
@@ -454,6 +466,7 @@ export function MediaPage() {
         </TabsContent>
         <TabsContent value="videos" className="m-0 min-h-0 flex-1">
           <MediaGallery
+            caseDatabasePath={activeCase?.databasePath ?? null}
             title="Video Gallery"
             icon={Video}
             tiles={gallery.videos}
@@ -480,6 +493,7 @@ export function MediaPage() {
 }
 
 function MediaGallery({
+  caseDatabasePath,
   detailTitle,
   emptyText,
   icon: Icon,
@@ -523,6 +537,7 @@ function MediaGallery({
         <div className="min-h-0 flex-1 overflow-hidden p-2">
           {tiles.length > 0 ? (
             <VirtualizedMediaGrid
+              caseDatabasePath={caseDatabasePath}
               mediaType={mediaType}
               onSelectItem={onSelectItem}
               selectedPath={selectedItem?.path ?? null}
@@ -542,11 +557,13 @@ function MediaGallery({
 }
 
 function VirtualizedMediaGrid({
+  caseDatabasePath,
   mediaType,
   onSelectItem,
   selectedPath,
   tiles,
 }: {
+  caseDatabasePath: string | null;
   mediaType: "image" | "video";
   onSelectItem: (item: MediaItem) => void;
   selectedPath: string | null;
@@ -566,6 +583,7 @@ function VirtualizedMediaGrid({
     MEDIA_TILE_GAP;
   const rowCount = Math.ceil(tiles.length / columnCount);
   const gridData: VirtualizedMediaGridData = {
+    caseDatabasePath,
     columnCount,
     mediaType,
     onSelectItem,
@@ -610,6 +628,7 @@ function MediaGridCell({
   return (
     <div style={style} className="p-1">
       <MediaTilePreview
+        caseDatabasePath={data.caseDatabasePath}
         className="h-full w-full"
         isSelected={data.selectedPath === tile.path}
         mediaType={data.mediaType}
@@ -621,12 +640,14 @@ function MediaGridCell({
 }
 
 function MediaTilePreview({
+  caseDatabasePath,
   className,
   isSelected,
   mediaType,
   onSelectItem,
   tile,
 }: {
+  caseDatabasePath: string | null;
   className?: string;
   isSelected: boolean;
   mediaType: "image" | "video";
@@ -635,8 +656,7 @@ function MediaTilePreview({
 }) {
   const source = convertFileSrc(tile.thumbnailPath || tile.mediaPath);
   const videoSource = `${source}#t=0.1`;
-
-  return (
+  const tileButton = (
     <button
       type="button"
       className={cn(
@@ -647,14 +667,13 @@ function MediaTilePreview({
       aria-label={tile.name}
       title={tile.path}
       onClick={() => onSelectItem(tile)}
+      onContextMenu={() => onSelectItem(tile)}
     >
       {mediaType === "image" ? (
-        <img
-          src={source}
-          alt={tile.name}
+        <MediaImagePreview
+          caseDatabasePath={caseDatabasePath}
+          item={tile}
           className="h-full w-full object-cover"
-          draggable={false}
-          loading="lazy"
         />
       ) : (
         <video
@@ -667,6 +686,29 @@ function MediaTilePreview({
       )}
     </button>
   );
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{tileButton}</ContextMenuTrigger>
+      <ContextMenuContent className="min-w-44">
+        <ContextMenuItem
+          className="text-xs"
+          onSelect={() => void revealMediaItemPath(tile)}
+        >
+          <FolderSearch className="size-3.5" aria-hidden="true" />
+          Open file location
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+async function revealMediaItemPath(item: MediaItem) {
+  try {
+    await revealItemInDir(item.mediaPath || item.path);
+  } catch (error) {
+    console.error(`Failed to reveal ${item.path}`, error);
+  }
 }
 
 function VideoPlayerSheet({

@@ -30,19 +30,17 @@ use sqlx::{
 };
 #[cfg(feature = "python-plugins")]
 use std::io::{self, BufRead, BufReader, Write};
+#[cfg(feature = "python-plugins")]
+use std::thread::ThreadId;
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
     sync::atomic::{AtomicU64, Ordering},
     sync::{Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
-};
-#[cfg(feature = "python-plugins")]
-use std::{
-    hash::{Hash, Hasher},
-    thread::ThreadId,
 };
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
@@ -61,6 +59,187 @@ const LEGACY_DEMO_PLUGIN_IDS: &[&str] = &[
     "sample-error",
 ];
 const LEGACY_DEMO_ARTIFACT_KINDS: &[&str] = &["file_metadata", "text_sample"];
+const MEDIA_PREVIEW_MAX_DIMENSION: u32 = 1_600;
+const MEDIA_PREVIEW_PYTHON: &str = r#"
+import struct
+import sys
+import zlib
+
+from PIL import Image, ImageOps
+
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except ImportError:
+    pass
+
+
+def paeth_predictor(left, above, upper_left):
+    estimate = left + above - upper_left
+    left_distance = abs(estimate - left)
+    above_distance = abs(estimate - above)
+    upper_left_distance = abs(estimate - upper_left)
+    if left_distance <= above_distance and left_distance <= upper_left_distance:
+        return left
+    if above_distance <= upper_left_distance:
+        return above
+    return upper_left
+
+
+def unfilter_cgbi_row(row, previous_row, channels, filter_type, row_number):
+    if filter_type == 1:
+        for index in range(len(row)):
+            left = row[index - channels] if index >= channels else 0
+            row[index] = (row[index] + left) & 0xFF
+    elif filter_type == 2:
+        for index in range(len(row)):
+            row[index] = (row[index] + previous_row[index]) & 0xFF
+    elif filter_type == 3:
+        for index in range(len(row)):
+            left = row[index - channels] if index >= channels else 0
+            row[index] = (row[index] + ((left + previous_row[index]) // 2)) & 0xFF
+    elif filter_type == 4:
+        for index in range(len(row)):
+            left = row[index - channels] if index >= channels else 0
+            upper_left = previous_row[index - channels] if index >= channels else 0
+            prediction = paeth_predictor(left, previous_row[index], upper_left)
+            row[index] = (row[index] + prediction) & 0xFF
+    elif filter_type != 0:
+        raise ValueError(f"Unsupported CgBI PNG filter {filter_type} on row {row_number}")
+
+
+def decode_cgbi_png(path):
+    with open(path, "rb") as source:
+        data = source.read()
+
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("CgBI image does not have a valid PNG signature")
+
+    position = 8
+    header = None
+    compressed_rows = []
+    found_cgbi = False
+    while position + 12 <= len(data):
+        chunk_length = struct.unpack(">I", data[position : position + 4])[0]
+        chunk_type = data[position + 4 : position + 8]
+        chunk_start = position + 8
+        chunk_end = chunk_start + chunk_length
+        if chunk_end + 4 > len(data):
+            raise ValueError("CgBI image contains a truncated PNG chunk")
+
+        chunk_data = data[chunk_start:chunk_end]
+        if chunk_type == b"CgBI":
+            found_cgbi = True
+        elif chunk_type == b"IHDR":
+            header = struct.unpack(">IIBBBBB", chunk_data)
+        elif chunk_type == b"IDAT":
+            compressed_rows.append(chunk_data)
+        elif chunk_type == b"IEND":
+            break
+        position = chunk_end + 4
+
+    if not found_cgbi or header is None or not compressed_rows:
+        raise ValueError("CgBI image is missing required PNG chunks")
+
+    width, height, bit_depth, color_type, compression, filtering, interlace = header
+    if bit_depth != 8 or color_type not in (2, 6):
+        raise ValueError(
+            f"Unsupported CgBI format: bit depth {bit_depth}, color type {color_type}"
+        )
+    if compression != 0 or filtering != 0 or interlace not in (0, 1):
+        raise ValueError("Unsupported CgBI PNG encoding")
+    if width == 0 or height == 0 or width * height > 50_000_000:
+        raise ValueError(f"Unsafe CgBI image dimensions: {width} x {height}")
+
+    channels = 4 if color_type == 6 else 3
+    row_size = width * channels
+    passes = (
+        ((0, 0, 1, 1),)
+        if interlace == 0
+        else (
+            (0, 0, 8, 8),
+            (4, 0, 8, 8),
+            (0, 4, 4, 8),
+            (2, 0, 4, 4),
+            (0, 2, 2, 4),
+            (1, 0, 2, 2),
+            (0, 1, 1, 2),
+        )
+    )
+    pass_dimensions = []
+    expected_size = 0
+    for start_x, start_y, step_x, step_y in passes:
+        pass_width = (width - start_x + step_x - 1) // step_x if width > start_x else 0
+        pass_height = (
+            (height - start_y + step_y - 1) // step_y if height > start_y else 0
+        )
+        pass_dimensions.append((start_x, start_y, step_x, step_y, pass_width, pass_height))
+        if pass_width and pass_height:
+            expected_size += pass_height * (pass_width * channels + 1)
+
+    raw_rows = zlib.decompress(b"".join(compressed_rows), -zlib.MAX_WBITS)
+    if len(raw_rows) != expected_size:
+        raise ValueError(
+            f"CgBI pixel data has {len(raw_rows)} bytes; expected {expected_size}"
+        )
+
+    pixels = bytearray(height * row_size)
+    source_offset = 0
+    for start_x, start_y, step_x, step_y, pass_width, pass_height in pass_dimensions:
+        if not pass_width or not pass_height:
+            continue
+
+        pass_row_size = pass_width * channels
+        previous_row = bytearray(pass_row_size)
+        for pass_row in range(pass_height):
+            filter_type = raw_rows[source_offset]
+            source_offset += 1
+            row = bytearray(raw_rows[source_offset : source_offset + pass_row_size])
+            source_offset += pass_row_size
+            target_y = start_y + pass_row * step_y
+            unfilter_cgbi_row(row, previous_row, channels, filter_type, target_y)
+
+            for pass_column in range(pass_width):
+                target_x = start_x + pass_column * step_x
+                source_pixel = pass_column * channels
+                target_pixel = (target_y * width + target_x) * channels
+                pixels[target_pixel : target_pixel + channels] = row[
+                    source_pixel : source_pixel + channels
+                ]
+            previous_row = row
+
+    corrected = bytearray(len(pixels))
+    if channels == 4:
+        for index in range(0, len(pixels), 4):
+            blue, green, red, alpha = pixels[index : index + 4]
+            if alpha:
+                red = min(255, (red * 255 + alpha // 2) // alpha)
+                green = min(255, (green * 255 + alpha // 2) // alpha)
+                blue = min(255, (blue * 255 + alpha // 2) // alpha)
+            corrected[index : index + 4] = (red, green, blue, alpha)
+        return Image.frombytes("RGBA", (width, height), bytes(corrected))
+
+    for index in range(0, len(pixels), 3):
+        blue, green, red = pixels[index : index + 3]
+        corrected[index : index + 3] = (red, green, blue)
+    return Image.frombytes("RGB", (width, height), bytes(corrected))
+
+
+def open_media_image(path):
+    with open(path, "rb") as source:
+        header = source.read(16)
+    if len(header) >= 16 and header[12:16] == b"CgBI":
+        return decode_cgbi_png(path)
+    return Image.open(path)
+
+
+source_path, output_path, max_dimension = sys.argv[1], sys.argv[2], int(sys.argv[3])
+with open_media_image(source_path) as source:
+    source.seek(0)
+    image = ImageOps.exif_transpose(source)
+    image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+    image.convert("RGB").save(output_path, "JPEG", quality=88, optimize=True)
+"#;
 
 static NEXT_ID_SUFFIX: AtomicU64 = AtomicU64::new(1);
 static PLUGIN_CANCELLATIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -1276,13 +1455,32 @@ pub async fn list_media_gallery(
     datasource_id: Option<String>,
 ) -> Result<builtin::MediaGallery, String> {
     let pool = open_case_database(&case_database_path).await?;
+    ensure_datasource_tables(&pool).await?;
     ensure_plugin_tables(&pool).await?;
+    sqlx::query(
+        r#"
+          DELETE FROM media_gallery_items
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM data_sources
+            WHERE data_sources.id = media_gallery_items.datasource_id
+          )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .map_err(|error| format!("Failed to remove orphaned media gallery items: {error}"))?;
     let rows = sqlx::query(
         r#"
-          SELECT payload
+          SELECT media_gallery_items.payload
           FROM media_gallery_items
-          WHERE ($1 IS NULL OR datasource_id = $1)
-          ORDER BY media_type ASC, name ASC, path ASC
+          INNER JOIN data_sources
+            ON data_sources.id = media_gallery_items.datasource_id
+          WHERE ($1 IS NULL OR media_gallery_items.datasource_id = $1)
+          ORDER BY
+            media_gallery_items.media_type ASC,
+            media_gallery_items.name ASC,
+            media_gallery_items.path ASC
         "#,
     )
     .bind(datasource_id)
@@ -1297,6 +1495,10 @@ pub async fn list_media_gallery(
         let item = serde_json::from_str::<builtin::MediaItem>(&payload_text)
             .map_err(|error| format!("Failed to read media gallery item: {error}"))?;
 
+        if !Path::new(&item.media_path).is_file() {
+            continue;
+        }
+
         match item.media_type {
             builtin::MediaType::Image => photos.push(item),
             builtin::MediaType::Video => videos.push(item),
@@ -1308,6 +1510,123 @@ pub async fn list_media_gallery(
         videos,
         scanned_files: 0,
     })
+}
+
+pub async fn render_media_thumbnail(
+    app_handle: AppHandle,
+    case_database_path: String,
+    source_path: String,
+) -> Result<String, String> {
+    let runtime = resolve_python_runtime(&app_handle)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        render_media_thumbnail_file(&runtime, &case_database_path, &source_path)
+    })
+    .await
+    .map_err(|error| format!("Media preview worker failed: {error}"))?
+}
+
+fn render_media_thumbnail_file(
+    python_runtime: &PythonRuntime,
+    case_database_path: &str,
+    source_path: &str,
+) -> Result<String, String> {
+    let source = fs::canonicalize(source_path)
+        .map_err(|error| format!("Media file is unavailable '{}': {error}", source_path))?;
+    let source_metadata = fs::metadata(&source).map_err(|error| {
+        format!(
+            "Failed to inspect media file '{}': {error}",
+            source.display()
+        )
+    })?;
+
+    if !source_metadata.is_file() {
+        return Err(format!("Media path is not a file: '{}'", source.display()));
+    }
+
+    let case_folder = PathBuf::from(case_database_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "Case database path has no parent folder.".to_string())?;
+    let cache_root = case_folder.join("artifacts").join("media-previews");
+    fs::create_dir_all(&cache_root).map_err(|error| {
+        format!(
+            "Failed to create media preview cache '{}': {error}",
+            cache_root.display()
+        )
+    })?;
+
+    let mut hasher = DefaultHasher::new();
+    source.to_string_lossy().hash(&mut hasher);
+    source_metadata.len().hash(&mut hasher);
+    source_metadata.modified().ok().hash(&mut hasher);
+    let cache_key = hasher.finish();
+    let cached_path = cache_root.join(format!("{cache_key:016x}.jpg"));
+
+    if cached_path.is_file() {
+        return Ok(cached_path.to_string_lossy().to_string());
+    }
+
+    let temporary_path = cache_root.join(format!(
+        ".{cache_key:016x}-{}-{}.tmp.jpg",
+        std::process::id(),
+        NEXT_ID_SUFFIX.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut command = ProcessCommand::new(&python_runtime.executable);
+    command
+        .arg("-I")
+        .arg("-B")
+        .arg("-c")
+        .arg(MEDIA_PREVIEW_PYTHON)
+        .arg(&source)
+        .arg(&temporary_path)
+        .arg(MEDIA_PREVIEW_MAX_DIMENSION.to_string());
+
+    if let Some(python_home) = &python_runtime.home {
+        command.env("PYTHONHOME", python_home);
+    }
+
+    command.env("PYTHONDONTWRITEBYTECODE", "1");
+    apply_python_library_path(&mut command, &python_runtime.library_paths);
+
+    let output = command.output().map_err(|error| {
+        format!(
+            "Failed to start media preview decoder '{}': {error}",
+            python_runtime.executable.display()
+        )
+    })?;
+
+    if !output.status.success() || !temporary_path.is_file() {
+        // A failed conversion may leave a partial JPEG. It must never be reused.
+        let _ = fs::remove_file(&temporary_path);
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        let diagnostics = diagnostics.trim();
+        return Err(if diagnostics.is_empty() {
+            format!("Could not decode media file '{}'.", source.display())
+        } else {
+            format!(
+                "Could not decode media file '{}': {diagnostics}",
+                source.display()
+            )
+        });
+    }
+
+    match fs::rename(&temporary_path, &cached_path) {
+        Ok(()) => {}
+        Err(_) if cached_path.is_file() => {
+            // Another tile completed the same cache entry first.
+            let _ = fs::remove_file(&temporary_path);
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temporary_path);
+            return Err(format!(
+                "Failed to cache media preview '{}': {error}",
+                cached_path.display()
+            ));
+        }
+    }
+
+    Ok(cached_path.to_string_lossy().to_string())
 }
 
 pub async fn remove_datasource(
@@ -1882,6 +2201,11 @@ async fn run_builtin_plugin_stage(
     let output_root = plugin
         .output_directory_name()
         .map(|directory| builtin_plugin_output_root(case_folder_path, directory, &datasource.id));
+    if plugin_id == "archive-extractor" {
+        if let Some(output_root) = &output_root {
+            invalidate_media_items_under_path(pool, &datasource.id, output_root).await?;
+        }
+    }
     let options = resolved_plugin_options(&manifest, plugin_options);
     let related_manifests = related_manifests
         .into_iter()
@@ -3109,7 +3433,6 @@ fn python_runtime_library_paths(runtime_dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
-#[cfg(feature = "python-plugins")]
 fn apply_python_library_path(command: &mut ProcessCommand, library_paths: &[PathBuf]) {
     let key = path_env_key();
     let mut paths = library_paths.to_vec();
@@ -5209,6 +5532,33 @@ async fn replace_media_gallery_items(
     Ok(())
 }
 
+async fn invalidate_media_items_under_path(
+    pool: &SqlitePool,
+    datasource_id: &str,
+    root: &Path,
+) -> Result<(), String> {
+    let normalized_root = normalize_case_database_path(&root.to_string_lossy());
+
+    sqlx::query(
+        r#"
+          DELETE FROM media_gallery_items
+          WHERE datasource_id = $1
+            AND (
+              replace(path, '\', '/') = $2
+              OR replace(path, '\', '/') LIKE $3 ESCAPE '\'
+            )
+        "#,
+    )
+    .bind(datasource_id)
+    .bind(&normalized_root)
+    .bind(create_path_descendant_like_pattern(&normalized_root))
+    .execute(pool)
+    .await
+    .map_err(|error| format!("Failed to invalidate replaced media files: {error}"))?;
+
+    Ok(())
+}
+
 fn request_plugin_run_cancellation(run_id: &str) -> Result<(), String> {
     let cancellations = PLUGIN_CANCELLATIONS.get_or_init(|| Mutex::new(HashSet::new()));
     let mut cancellations = cancellations
@@ -5749,6 +6099,84 @@ mod tests {
             std::process::id(),
             NEXT_ID_SUFFIX.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    #[tokio::test]
+    async fn archive_output_invalidation_preserves_unrelated_media() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        ensure_plugin_tables(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+              INSERT INTO plugin_jobs (
+                id, case_id, datasource_id, plugin_id, status, started_at
+              )
+              VALUES ('job', 'case', 'datasource-1', 'image-metadata', 'complete', 'now')
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for (id, datasource_id, path) in [
+            (
+                "root",
+                "datasource-1",
+                "C:\\case\\artifacts\\extracted\\datasource-1",
+            ),
+            (
+                "child",
+                "datasource-1",
+                "C:/case/artifacts/extracted/datasource-1/photo.heic",
+            ),
+            (
+                "sibling",
+                "datasource-1",
+                "C:/case/artifacts/extracted/datasource-10/photo.jpg",
+            ),
+            ("original", "datasource-1", "C:/evidence/photo.jpg"),
+            (
+                "other-source",
+                "datasource-2",
+                "C:/case/artifacts/extracted/datasource-1/photo.jpg",
+            ),
+        ] {
+            sqlx::query(
+                r#"
+                  INSERT INTO media_gallery_items (
+                    id, job_id, datasource_id, media_type, path, name, payload, updated_at
+                  )
+                  VALUES ($1, 'job', $2, 'image', $3, 'photo', '{}', 'now')
+                "#,
+            )
+            .bind(id)
+            .bind(datasource_id)
+            .bind(path)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        invalidate_media_items_under_path(
+            &pool,
+            "datasource-1",
+            Path::new("C:\\case\\artifacts\\extracted\\datasource-1"),
+        )
+        .await
+        .unwrap();
+
+        let remaining = sqlx::query("SELECT id FROM media_gallery_items ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get::<String, _>("id"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(remaining, vec!["original", "other-source", "sibling"]);
     }
 
     #[test]

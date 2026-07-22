@@ -15,7 +15,9 @@ bun run tauri dev
 The Tauri wrapper enables the `python-plugins` Cargo feature, installs or
 refreshes the redistributable CPython runtime under `src-tauri/python-runtime`,
 and configures `PYO3_PYTHON`, `PYTHONHOME`, and platform loader paths before
-starting Tauri. For release packaging, build with the Python feature enabled:
+starting Tauri. The setup also installs the pinned Pillow and pillow-heif
+packages used to create browser-compatible previews without modifying original
+evidence files. For release packaging, build with the Python feature enabled:
 
 ```powershell
 bun run tauri build

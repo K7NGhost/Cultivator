@@ -29,6 +29,16 @@ export async function listMediaGallery(
   });
 }
 
+export async function renderMediaThumbnail(
+  caseDatabasePath: string,
+  sourcePath: string,
+): Promise<string> {
+  return invoke<string>("render_media_thumbnail", {
+    caseDatabasePath,
+    sourcePath,
+  });
+}
+
 export async function listFileViewMediaPage(
   roots: string[],
   mediaType: "image" | "video",
