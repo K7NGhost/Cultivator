@@ -38,6 +38,8 @@ type = "contacts"
 target = "infotainment"
 mode = "path_glob"
 path_glob = ["*/recents_storage", "*/favorites_storage"]
+# Optional: use stricter member paths when Archive Extractor is selective.
+archive_path_glob = ["root/private/var/mobile/Library/Recents/recents_storage"]
 entry = "plugin.py"
 function = "run"
 \`\`\`
@@ -53,6 +55,7 @@ def run(context):
 The required target must be one of "ios", "android", "windows", "macos", "infotainment", or "other".
 
 Cultivator indexes case files, matches plugins by path_glob/path_regex, and calls run(context) once per matched file task.
+When present, archive_path_glob replaces path_glob only while Archive Extractor is in plugin-specific mode. This prevents intentionally broad runtime globs from extracting unrelated archive members.
 
 ## Context
 
@@ -67,6 +70,7 @@ Cultivator indexes case files, matches plugins by path_glob/path_regex, and call
 - context["plugin"]["name"]: str
 - context["plugin"]["target"]: "ios" | "android" | "windows" | "macos" | "infotainment" | "other"
 - context["plugin"]["mode"]: "each_file" | "path_glob" | "path_regex"
+- context["plugin"]["matched_files"]: list[str]
 - context["task"]["plugin_id"]: str
 - context["task"]["file_path"]: str
 - context["task"]["datasource_id"]: str

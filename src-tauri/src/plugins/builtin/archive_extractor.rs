@@ -1,15 +1,19 @@
 use crate::plugins::{PythonPluginManifest, PythonPluginMode};
 use flate2::read::GzDecoder;
-use globset::{GlobBuilder, GlobMatcher};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
-use regex::Regex;
+use regex::RegexSet;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs,
     io::{self, Read},
     path::{Component, Path, PathBuf},
+    sync::{Mutex, OnceLock},
 };
 use zip::ZipArchive;
+
+static ACTIVE_OUTPUT_ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,10 +45,25 @@ pub struct ArchiveExtractionProgress {
     pub current_archive: String,
 }
 
-enum ArchiveEntryMatcher {
-    All,
-    Globs(Vec<GlobMatcher>),
-    Regex(Regex),
+struct ArchiveEntryMatchers {
+    all: bool,
+    globs: GlobSet,
+    regexes: RegexSet,
+}
+
+struct ActiveOutputGuard {
+    output_root: PathBuf,
+}
+
+impl Drop for ActiveOutputGuard {
+    fn drop(&mut self) {
+        if let Ok(mut roots) = ACTIVE_OUTPUT_ROOTS
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+        {
+            roots.remove(&self.output_root);
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -68,11 +87,11 @@ pub fn execute_with_progress<F>(
 where
     F: FnMut(ArchiveExtractionProgress),
 {
-    let is_selective = selected_manifests.is_some();
+    let _active_output_guard = acquire_output_root(&output_root)?;
     let matchers = selected_manifests
         .map(build_archive_entry_matchers)
         .transpose()?;
-    if output_root.exists() && !is_selective {
+    if output_root.exists() {
         fs::remove_dir_all(&output_root).map_err(|error| {
             format!(
                 "Failed to clear archive extraction output '{}': {error}",
@@ -102,7 +121,7 @@ where
     let archives = collect_archives(paths, &mut summary.scanned_files);
     let archive_entry_counts = archives
         .iter()
-        .map(|(path, kind)| archive_entry_count(path, *kind).unwrap_or(1))
+        .map(|(path, kind)| archive_entry_count(path, *kind, matchers.as_ref()).unwrap_or(1))
         .collect::<Vec<_>>();
     let total_entries = archive_entry_counts.iter().sum::<u64>();
     let mut completed_entries = 0u64;
@@ -123,7 +142,7 @@ where
             *archive_kind,
             &archive_output,
             &mut summary.errors,
-            matchers.as_deref(),
+            matchers.as_ref(),
             |entry_index| {
                 progress(ArchiveExtractionProgress {
                     completed_entries: completed_entries + entry_index,
@@ -160,6 +179,23 @@ where
     }
 
     Ok(summary)
+}
+
+fn acquire_output_root(output_root: &Path) -> Result<ActiveOutputGuard, String> {
+    let output_root = output_root.to_path_buf();
+    let mut roots = ACTIVE_OUTPUT_ROOTS
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .map_err(|_| "Archive Extractor run lock is unavailable.".to_string())?;
+
+    if !roots.insert(output_root.clone()) {
+        return Err(format!(
+            "Archive Extractor is already running for '{}'. Cancel or wait for that run before starting another.",
+            output_root.display()
+        ));
+    }
+
+    Ok(ActiveOutputGuard { output_root })
 }
 
 fn collect_archives(paths: Vec<String>, scanned_files: &mut u64) -> Vec<(PathBuf, ArchiveKind)> {
@@ -215,7 +251,7 @@ fn extract_archive(
     kind: ArchiveKind,
     archive_output: &Path,
     errors: &mut Vec<String>,
-    matchers: Option<&[ArchiveEntryMatcher]>,
+    matchers: Option<&ArchiveEntryMatchers>,
     progress: impl FnMut(u64),
 ) -> Result<ArchiveExtractionRecord, String> {
     match kind {
@@ -261,7 +297,7 @@ fn extract_zip_archive(
     archive_path: &Path,
     archive_output: &Path,
     errors: &mut Vec<String>,
-    matchers: Option<&[ArchiveEntryMatcher]>,
+    matchers: Option<&ArchiveEntryMatchers>,
     mut progress: impl FnMut(u64),
 ) -> Result<ArchiveExtractionRecord, String> {
     let input = fs::File::open(archive_path).map_err(|error| {
@@ -284,6 +320,7 @@ fn extract_zip_archive(
         extracted_bytes: 0,
         skipped_entries: 0,
     };
+    let mut matched_entries = 0u64;
 
     fs::create_dir_all(archive_output).map_err(|error| {
         format!(
@@ -293,7 +330,6 @@ fn extract_zip_archive(
     })?;
 
     for index in 0..archive.len() {
-        progress(index as u64);
         let mut file = match archive.by_index(index) {
             Ok(file) => file,
             Err(error) => {
@@ -309,6 +345,8 @@ fn extract_zip_archive(
         if matchers.is_some_and(|matchers| !archive_entry_matches(matchers, &entry_name)) {
             continue;
         }
+        progress(matched_entries);
+        matched_entries += 1;
         let Some(enclosed_name) = file.enclosed_name() else {
             errors.push(format!(
                 "Skipped unsafe archive entry '{}' from '{}'.",
@@ -392,7 +430,7 @@ fn extract_tar_archive<R: Read>(
     archive_path: &Path,
     archive_output: &Path,
     errors: &mut Vec<String>,
-    matchers: Option<&[ArchiveEntryMatcher]>,
+    matchers: Option<&ArchiveEntryMatchers>,
     mut progress: impl FnMut(u64),
 ) -> Result<ArchiveExtractionRecord, String> {
     let mut archive = tar::Archive::new(input);
@@ -410,6 +448,7 @@ fn extract_tar_archive<R: Read>(
         extracted_bytes: 0,
         skipped_entries: 0,
     };
+    let mut matched_entries = 0u64;
 
     fs::create_dir_all(archive_output).map_err(|error| {
         format!(
@@ -419,7 +458,6 @@ fn extract_tar_archive<R: Read>(
     })?;
 
     for (index, entry) in entries.enumerate() {
-        progress(index as u64);
         record.entries += 1;
         let mut entry = match entry {
             Ok(entry) => entry,
@@ -448,6 +486,8 @@ fn extract_tar_archive<R: Read>(
         if matchers.is_some_and(|matchers| !archive_entry_matches(matchers, &entry_name)) {
             continue;
         }
+        progress(matched_entries);
+        matched_entries += 1;
 
         let Some(destination) = sanitized_destination_path(archive_output, &entry_path) else {
             errors.push(format!("Skipped unsafe or empty TAR entry '{entry_name}'."));
@@ -520,63 +560,119 @@ fn extract_tar_archive<R: Read>(
 
 fn build_archive_entry_matchers(
     manifests: Vec<PythonPluginManifest>,
-) -> Result<Vec<ArchiveEntryMatcher>, String> {
-    manifests
-        .into_iter()
-        .map(|manifest| match manifest.mode {
-            PythonPluginMode::EachFile => Ok(ArchiveEntryMatcher::All),
-            PythonPluginMode::PathGlob => manifest
-                .path_glob
-                .iter()
-                .map(|pattern| {
-                    GlobBuilder::new(&pattern.replace('\\', "/"))
+) -> Result<ArchiveEntryMatchers, String> {
+    let mut all = false;
+    let mut glob_builder = GlobSetBuilder::new();
+    let mut regex_patterns = Vec::new();
+
+    for manifest in manifests {
+        match manifest.mode {
+            PythonPluginMode::EachFile => all = true,
+            PythonPluginMode::PathGlob => {
+                let patterns = if manifest.archive_path_glob.is_empty() {
+                    &manifest.path_glob
+                } else {
+                    &manifest.archive_path_glob
+                };
+
+                for pattern in patterns {
+                    let glob = GlobBuilder::new(&pattern.replace('\\', "/"))
                         .case_insensitive(true)
                         .literal_separator(false)
                         .build()
-                        .map(|glob| glob.compile_matcher())
-                        .map_err(|error| format!("Invalid archive path glob '{pattern}': {error}"))
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(ArchiveEntryMatcher::Globs),
-            PythonPluginMode::PathRegex => {
-                Regex::new(manifest.path_regex.as_deref().unwrap_or("$^"))
-                    .map(ArchiveEntryMatcher::Regex)
-                    .map_err(|error| format!("Invalid archive path regex: {error}"))
+                        .map_err(|error| {
+                            format!(
+                                "Invalid archive path glob '{pattern}' for plugin '{}': {error}",
+                                manifest.id
+                            )
+                        })?;
+                    glob_builder.add(glob);
+                }
             }
-        })
-        .collect()
-}
-
-fn archive_entry_matches(matchers: &[ArchiveEntryMatcher], entry_name: &str) -> bool {
-    let normalized = entry_name.replace('\\', "/");
-    let rooted = format!("root/{normalized}");
-    let file_name = normalized.rsplit('/').next().unwrap_or(&normalized);
-    matchers.iter().any(|matcher| match matcher {
-        ArchiveEntryMatcher::All => true,
-        ArchiveEntryMatcher::Globs(globs) => globs.iter().any(|glob| {
-            glob.is_match(&normalized) || glob.is_match(&rooted) || glob.is_match(file_name)
-        }),
-        ArchiveEntryMatcher::Regex(regex) => {
-            regex.is_match(&normalized) || regex.is_match(&rooted) || regex.is_match(file_name)
+            PythonPluginMode::PathRegex => {
+                regex_patterns.push(manifest.path_regex.unwrap_or_else(|| "$^".to_string()))
+            }
         }
+    }
+
+    let globs = glob_builder
+        .build()
+        .map_err(|error| format!("Failed to build archive path globs: {error}"))?;
+    let regexes = RegexSet::new(regex_patterns)
+        .map_err(|error| format!("Invalid archive path regex: {error}"))?;
+
+    Ok(ArchiveEntryMatchers {
+        all,
+        globs,
+        regexes,
     })
 }
 
-fn archive_entry_count(path: &Path, kind: ArchiveKind) -> Option<u64> {
+fn archive_entry_matches(matchers: &ArchiveEntryMatchers, entry_name: &str) -> bool {
+    if matchers.all {
+        return true;
+    }
+
+    let normalized = entry_name.replace('\\', "/");
+    let rooted = format!("root/{normalized}");
+    let file_name = normalized.rsplit('/').next().unwrap_or(&normalized);
+    let matches = [normalized.as_str(), rooted.as_str(), file_name]
+        .into_iter()
+        .any(|candidate| {
+            matchers.globs.is_match(candidate) || matchers.regexes.is_match(candidate)
+        });
+    matches
+}
+
+fn archive_entry_count(
+    path: &Path,
+    kind: ArchiveKind,
+    matchers: Option<&ArchiveEntryMatchers>,
+) -> Option<u64> {
     let input = fs::File::open(path).ok()?;
     match kind {
-        ArchiveKind::Zip => ZipArchive::new(input)
-            .ok()
-            .map(|archive| archive.len() as u64),
-        ArchiveKind::Tar => tar::Archive::new(input)
-            .entries()
-            .ok()
-            .map(|entries| entries.count() as u64),
-        ArchiveKind::TarGz => tar::Archive::new(GzDecoder::new(input))
-            .entries()
-            .ok()
-            .map(|entries| entries.count() as u64),
+        ArchiveKind::Zip => {
+            let mut archive = ZipArchive::new(input).ok()?;
+            if matchers.is_none() {
+                return Some(archive.len() as u64);
+            }
+
+            let count = (0..archive.len())
+                .filter_map(|index| {
+                    archive
+                        .by_index(index)
+                        .ok()
+                        .map(|file| file.name().to_string())
+                })
+                .filter(|name| {
+                    matchers.is_some_and(|matchers| archive_entry_matches(matchers, name))
+                })
+                .count();
+            Some(count as u64)
+        }
+        ArchiveKind::Tar => matching_tar_entry_count(tar::Archive::new(input), matchers),
+        ArchiveKind::TarGz => {
+            matching_tar_entry_count(tar::Archive::new(GzDecoder::new(input)), matchers)
+        }
     }
+}
+
+fn matching_tar_entry_count<R: Read>(
+    mut archive: tar::Archive<R>,
+    matchers: Option<&ArchiveEntryMatchers>,
+) -> Option<u64> {
+    let entries = archive.entries().ok()?;
+    let count = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            entry
+                .path()
+                .ok()
+                .map(|path| path.to_string_lossy().to_string())
+        })
+        .filter(|name| matchers.is_none_or(|matchers| archive_entry_matches(matchers, name)))
+        .count();
+    Some(count as u64)
 }
 
 fn archive_kind(path: &Path) -> Option<ArchiveKind> {
@@ -718,6 +814,7 @@ mod tests {
             target: PythonPluginTarget::Other,
             mode: PythonPluginMode::PathGlob,
             path_glob: vec!["*/Library/SMS/sms.db".to_string()],
+            archive_path_glob: Vec::new(),
             path_regex: None,
             entry: "plugin.py".to_string(),
             function: "run".to_string(),
@@ -736,7 +833,51 @@ mod tests {
     }
 
     #[test]
-    fn selectively_extracts_matching_tar_gz_members() {
+    fn archive_specific_globs_override_broad_runtime_globs() {
+        let matchers = build_archive_entry_matchers(vec![PythonPluginManifest {
+            id: "backup-info".to_string(),
+            name: "Backup Info".to_string(),
+            organization_folder: None,
+            author: "Test".to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+            plugin_type: "other".to_string(),
+            target: PythonPluginTarget::Other,
+            mode: PythonPluginMode::PathGlob,
+            path_glob: vec!["*Info.plist".to_string()],
+            archive_path_glob: vec!["root/Info.plist".to_string()],
+            path_regex: None,
+            entry: "plugin.py".to_string(),
+            function: "run".to_string(),
+            options: Vec::new(),
+        }])
+        .expect("matcher should compile");
+
+        assert!(archive_entry_matches(&matchers, "Info.plist"));
+        assert!(!archive_entry_matches(
+            &matchers,
+            "private/var/containers/Bundle/Application/App.app/Info.plist"
+        ));
+    }
+
+    #[test]
+    fn prevents_concurrent_runs_for_the_same_output_root() {
+        let output_root = std::env::temp_dir().join(format!(
+            "cultivator-archive-lock-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let first = acquire_output_root(&output_root).expect("acquire first run lock");
+
+        assert!(acquire_output_root(&output_root).is_err());
+        drop(first);
+        assert!(acquire_output_root(&output_root).is_ok());
+    }
+
+    #[test]
+    fn selective_run_replaces_previous_full_extraction() {
         let test_root = std::env::temp_dir().join(format!(
             "cultivator-tar-test-{}",
             SystemTime::now()
@@ -769,6 +910,21 @@ mod tests {
             .finish()
             .expect("finish gzip");
 
+        let full_summary = execute_with_progress(
+            vec![archive_path.to_string_lossy().to_string()],
+            output_root.clone(),
+            None,
+            |_| {},
+        )
+        .expect("extract every archive member");
+        let extracted_root = output_root.join("0000-test.tar.gz");
+
+        assert_eq!(full_summary.extracted_files, 2);
+        assert!(extracted_root.join("private/Library/SMS/sms.db").is_file());
+        assert!(extracted_root
+            .join("private/Media/DCIM/photo.jpg")
+            .is_file());
+
         let manifest = PythonPluginManifest {
             id: "sms".to_string(),
             name: "SMS".to_string(),
@@ -780,21 +936,31 @@ mod tests {
             target: PythonPluginTarget::Other,
             mode: PythonPluginMode::PathGlob,
             path_glob: vec!["*/Library/SMS/sms.db".to_string()],
+            archive_path_glob: Vec::new(),
             path_regex: None,
             entry: "plugin.py".to_string(),
             function: "run".to_string(),
             options: Vec::new(),
         };
+        let mut progress_events = Vec::new();
         let summary = execute_with_progress(
-            vec![archive_path.to_string_lossy().to_string()],
+            vec![
+                archive_path.to_string_lossy().to_string(),
+                output_root.to_string_lossy().to_string(),
+            ],
             output_root.clone(),
             Some(vec![manifest]),
-            |_| {},
+            |event| {
+                progress_events.push((event.completed_entries, event.total_entries));
+            },
         )
         .expect("extract archive");
-        let extracted_root = output_root.join("0000-test.tar.gz");
 
         assert_eq!(summary.extracted_files, 1);
+        assert_eq!(summary.archive_count, 1);
+        assert!(progress_events
+            .iter()
+            .all(|(_, total_entries)| *total_entries == 1));
         assert!(extracted_root.join("private/Library/SMS/sms.db").is_file());
         assert!(!extracted_root.join("private/Media/DCIM/photo.jpg").exists());
         fs::remove_dir_all(test_root).expect("remove test directory");

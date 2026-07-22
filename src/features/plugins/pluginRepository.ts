@@ -61,6 +61,7 @@ export async function createPythonPlugin(
             | "other";
           mode: "each_file" | "path_glob" | "path_regex";
           pathGlob?: string[];
+          archivePathGlob?: string[];
           pathRegex?: string;
           entry: string;
           function: string;

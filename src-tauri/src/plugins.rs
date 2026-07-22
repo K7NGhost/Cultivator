@@ -102,6 +102,13 @@ pub struct PythonPluginManifest {
         deserialize_with = "deserialize_path_globs"
     )]
     pub path_glob: Vec<String>,
+    #[serde(
+        default,
+        alias = "archive_path_glob",
+        alias = "archive_path_globs",
+        deserialize_with = "deserialize_path_globs"
+    )]
+    pub archive_path_glob: Vec<String>,
     #[serde(default, alias = "path_regex")]
     pub path_regex: Option<String>,
     #[serde(default = "default_plugin_entry")]
@@ -2141,6 +2148,11 @@ fn execute_python_plugin(
     let plan = build_plugin_execution_plan(plugin, datasource, &all_files)?;
     let matched_files = plan.tasks.len() as u64;
     let scanned_files = plan.scanned_files;
+    let matched_file_paths = plan
+        .tasks
+        .iter()
+        .map(|task| task.file_path.clone())
+        .collect::<Vec<_>>();
     let mut records = Vec::new();
 
     reset_thread_logs()?;
@@ -2167,6 +2179,7 @@ fn execute_python_plugin(
                 datasource,
                 &plugin.manifest,
                 task,
+                &matched_file_paths,
             )?;
             let result = function.call1((context,))?;
             records.extend(normalize_python_result(&result, &task.file_path)?);
@@ -2222,6 +2235,7 @@ fn build_plugin_context<'py>(
     datasource: &DatasourceForPlugins,
     plugin: &PythonPluginManifest,
     task: &PluginExecutionTask,
+    matched_files: &[String],
 ) -> PyResult<Bound<'py, PyDict>> {
     let context = PyDict::new(py);
     let case = PyDict::new(py);
@@ -2245,7 +2259,9 @@ fn build_plugin_context<'py>(
 
     plugin_dict.set_item("id", plugin.id.as_str())?;
     plugin_dict.set_item("name", plugin.name.as_str())?;
+    plugin_dict.set_item("target", plugin_target_value(&plugin.target))?;
     plugin_dict.set_item("mode", plugin_mode_label(&plugin.mode))?;
+    plugin_dict.set_item("matched_files", PyList::new(py, matched_files)?)?;
 
     file.set_item("path", task.target_file.path.as_str())?;
     file.set_item("name", task.target_file.name.as_str())?;
@@ -3759,7 +3775,7 @@ def load_plugin(plugin, plugin_directory):
     return module
 
 
-def build_context(input_data, task):
+def build_context(input_data, task, matched_files):
     artifacts_path = os.path.join(input_data["case_folder_path"], "artifacts")
     target_file = task["target_file"]
     plugin = input_data["plugin"]
@@ -3779,7 +3795,9 @@ def build_context(input_data, task):
         "plugin": {
             "id": plugin["id"],
             "name": plugin["name"],
+            "target": plugin["target"],
             "mode": plugin["mode"],
+            "matched_files": matched_files,
         },
         "options": input_data.get("options", {}),
         "file": {
@@ -3804,10 +3822,11 @@ def main():
         module = load_plugin(input_data["plugin"], input_data["plugin_directory"])
         function = getattr(module, input_data["plugin"]["function"])
     records = []
+    matched_files = [item["file_path"] for item in input_data["tasks"]]
 
     for task in input_data["tasks"]:
         with contextlib.redirect_stdout(sys.stderr):
-            result = function(build_context(input_data, task))
+            result = function(build_context(input_data, task, matched_files))
         records.extend(normalize_result(result, task["file_path"]))
 
     for artifact in artifacts:
@@ -4378,7 +4397,9 @@ context["datasource"]["paths"]
 
 context["plugin"]["id"]
 context["plugin"]["name"]
+context["plugin"]["target"]
 context["plugin"]["mode"]
+context["plugin"]["matched_files"]
 
 context["task"]["plugin_id"]
 context["task"]["file_path"]
@@ -5768,5 +5789,87 @@ mod tests {
         assert!(resolve_plugin_organization_folder(&root, "../outside").is_err());
         assert!(resolve_plugin_organization_folder(&root, "VLEAPP//Ford").is_err());
         assert!(resolve_plugin_organization_folder(&root, "C:\\outside").is_err());
+    }
+
+    #[cfg(feature = "python-plugins")]
+    #[test]
+    fn plugin_context_exposes_target_and_all_matched_files() {
+        let datasource = DatasourceForPlugins {
+            id: "datasource-1".to_string(),
+            case_id: "case-1".to_string(),
+            name: "Fixture".to_string(),
+            paths: vec!["C:\\evidence".to_string()],
+            plugin_ids: vec!["fixture-plugin".to_string()],
+        };
+        let plugin = PythonPluginManifest {
+            id: "fixture-plugin".to_string(),
+            name: "Fixture Plugin".to_string(),
+            organization_folder: None,
+            author: "Cultivator".to_string(),
+            version: "1.0.0".to_string(),
+            description: "Fixture".to_string(),
+            plugin_type: "other".to_string(),
+            target: PythonPluginTarget::Ios,
+            mode: PythonPluginMode::PathGlob,
+            path_glob: vec!["**/*.plist".to_string()],
+            archive_path_glob: Vec::new(),
+            path_regex: None,
+            entry: "plugin.py".to_string(),
+            function: "run".to_string(),
+            options: Vec::new(),
+        };
+        let task = PluginExecutionTask {
+            plugin_id: plugin.id.clone(),
+            file_path: "C:\\evidence\\one.plist".to_string(),
+            datasource_id: datasource.id.clone(),
+            case_id: datasource.case_id.clone(),
+            target_file: TargetFile {
+                path: "C:\\evidence\\one.plist".to_string(),
+                name: "one.plist".to_string(),
+                extension: "plist".to_string(),
+                size: 10,
+            },
+        };
+        let matched_files = vec![
+            "C:\\evidence\\one.plist".to_string(),
+            "C:\\evidence\\two.plist".to_string(),
+        ];
+
+        Python::attach(|py| {
+            let context = build_plugin_context(
+                py,
+                "C:\\case.sqlite",
+                "C:\\case",
+                &datasource,
+                &plugin,
+                &task,
+                &matched_files,
+            )
+            .unwrap();
+            let plugin_context = context
+                .get_item("plugin")
+                .unwrap()
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            assert_eq!(
+                plugin_context
+                    .get_item("target")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "ios"
+            );
+            assert_eq!(
+                plugin_context
+                    .get_item("matched_files")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<Vec<String>>()
+                    .unwrap(),
+                matched_files
+            );
+        });
     }
 }

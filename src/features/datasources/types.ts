@@ -19,6 +19,7 @@ export type DataSourcePlugin = {
   target: DataSourcePluginTarget;
   mode: "each_file" | "path_glob" | "path_regex";
   pathGlob?: string | string[];
+  archivePathGlob?: string | string[];
   pathRegex?: string;
   entry: string;
   function: string;
