@@ -213,10 +213,12 @@ impl BuiltinPlugin for ImageMetadataPlugin {
     fn run(&self, context: &mut BuiltinPluginContext<'_>) -> Result<(), String> {
         let gallery = image_metadata::execute_with_progress(context.paths.clone(), |event| {
             context.progress(
-                event.matched_files,
+                event.scanned_files,
                 event.total_files,
                 format!(
-                    "Found {} media file{}",
+                    "Scanned {} of {} files; found {} media file{}",
+                    event.scanned_files,
+                    event.total_files,
                     event.matched_files,
                     if event.matched_files == 1 { "" } else { "s" }
                 ),
