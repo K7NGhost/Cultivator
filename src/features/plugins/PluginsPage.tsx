@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   AlertCircle,
   Copy,
+  Download,
   Folder,
   FolderInput,
   FolderOpen,
@@ -10,7 +12,9 @@ import {
   Play,
   RefreshCw,
   Trash2,
+  Upload,
 } from "lucide-react";
+import { toast } from "react-toastify";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,6 +63,8 @@ import {
   createPythonPlugin,
   createPythonPluginFolder,
   deletePythonPlugin,
+  exportPythonPlugins,
+  importPythonPlugins,
   listPluginJobs,
   listPluginLogs,
   listPythonPluginFolders,
@@ -216,6 +222,9 @@ export function PluginsPage() {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
     useState(false);
+  const [isImportWarningOpen, setIsImportWarningOpen] = useState(false);
+  const [isImportingPlugins, setIsImportingPlugins] = useState(false);
+  const [isExportingPlugins, setIsExportingPlugins] = useState(false);
   const [createPluginMode, setCreatePluginMode] = useState<CreatePluginMode>(
     getStoredCreatePluginMode,
   );
@@ -694,6 +703,73 @@ export function PluginsPage() {
     }
   }
 
+  async function importPluginBundle() {
+    setIsImportWarningOpen(false);
+    setIsImportingPlugins(true);
+    setLoadState((currentState) => ({ ...currentState, error: null }));
+
+    try {
+      const archivePath = await open({
+        directory: false,
+        multiple: false,
+        filters: [{ name: "ZIP archives", extensions: ["zip"] }],
+        title: "Import Python Plugins",
+      });
+
+      if (typeof archivePath !== "string") {
+        return;
+      }
+
+      const result = await importPythonPlugins(archivePath);
+      await refreshPluginsPage({ showLoading: false });
+      toast.success(
+        `Imported ${result.pluginCount.toLocaleString()} Python plugin${
+          result.pluginCount === 1 ? "" : "s"
+        }.`,
+        { autoClose: 3500 },
+      );
+    } catch (caughtError) {
+      setLoadState({
+        error: getErrorMessage(caughtError),
+        isLoading: false,
+      });
+    } finally {
+      setIsImportingPlugins(false);
+    }
+  }
+
+  async function exportPluginBundle() {
+    setIsExportingPlugins(true);
+    setLoadState((currentState) => ({ ...currentState, error: null }));
+
+    try {
+      const archivePath = await save({
+        defaultPath: "cultivator-python-plugins.zip",
+        filters: [{ name: "ZIP archives", extensions: ["zip"] }],
+        title: "Export Python Plugins",
+      });
+
+      if (typeof archivePath !== "string") {
+        return;
+      }
+
+      const result = await exportPythonPlugins(archivePath);
+      toast.success(
+        `Exported ${result.pluginCount.toLocaleString()} Python plugin${
+          result.pluginCount === 1 ? "" : "s"
+        }.`,
+        { autoClose: 3500 },
+      );
+    } catch (caughtError) {
+      setLoadState({
+        error: getErrorMessage(caughtError),
+        isLoading: false,
+      });
+    } finally {
+      setIsExportingPlugins(false);
+    }
+  }
+
   useEffect(() => {
     void refreshPluginsPage();
   }, [activeCase?.id]);
@@ -725,6 +801,34 @@ export function PluginsPage() {
         >
           <Plus className="size-3.5" aria-hidden="true" />
           Add Plugin
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          className="h-7 rounded-sm px-2 text-xs"
+          disabled={isImportingPlugins || isExportingPlugins}
+          onClick={() => setIsImportWarningOpen(true)}
+        >
+          <Upload className="size-3.5" aria-hidden="true" />
+          {isImportingPlugins ? "Importing" : "Import ZIP"}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          className="h-7 rounded-sm px-2 text-xs"
+          disabled={
+            movablePlugins.length === 0 ||
+            isImportingPlugins ||
+            isExportingPlugins
+          }
+          onClick={() => {
+            void exportPluginBundle();
+          }}
+        >
+          <Download className="size-3.5" aria-hidden="true" />
+          {isExportingPlugins ? "Exporting" : "Export ZIP"}
         </Button>
         <Button
           type="button"
@@ -1237,6 +1341,53 @@ export function PluginsPage() {
           </ResizablePanelGroup>
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      <Dialog
+        open={isImportWarningOpen}
+        onOpenChange={setIsImportWarningOpen}
+      >
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md rounded-sm p-0">
+          <DialogHeader className="border-b px-3 py-2">
+            <DialogTitle className="text-sm">Import Python Plugins</DialogTitle>
+            <DialogDescription className="text-xs">
+              Review the security warning before choosing a plugin bundle.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-2 px-3 py-3 text-xs">
+            <AlertCircle
+              className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400"
+              aria-hidden="true"
+            />
+            <p className="leading-5 text-muted-foreground">
+              Only import plugins you trust. Imported Python plugins execute
+              with your user account&apos;s permissions and can access files
+              available to Cultivator.
+            </p>
+          </div>
+          <DialogFooter className="border-t px-3 py-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-sm text-xs"
+              onClick={() => setIsImportWarningOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 rounded-sm text-xs"
+              onClick={() => {
+                void importPluginBundle();
+              }}
+            >
+              <Upload className="size-3.5" aria-hidden="true" />
+              Choose ZIP
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={isCreateDialogOpen}

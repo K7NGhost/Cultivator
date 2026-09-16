@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   CreatedPythonPlugin,
+  PluginBundleExportResult,
+  PluginBundleImportResult,
   PluginJobRecord,
   PluginLogRecord,
   PluginRunSummary,
@@ -83,6 +85,22 @@ export async function createPythonPlugin(
 export async function deletePythonPlugin(pluginId: string): Promise<void> {
   await invoke("delete_python_plugin", {
     request: { pluginId },
+  });
+}
+
+export async function exportPythonPlugins(
+  archivePath: string,
+): Promise<PluginBundleExportResult> {
+  return invoke<PluginBundleExportResult>("export_python_plugins", {
+    request: { archivePath },
+  });
+}
+
+export async function importPythonPlugins(
+  archivePath: string,
+): Promise<PluginBundleImportResult> {
+  return invoke<PluginBundleImportResult>("import_python_plugins", {
+    request: { archivePath },
   });
 }
 

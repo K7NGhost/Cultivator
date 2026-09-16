@@ -10,6 +10,20 @@ export type CreatedPythonPlugin = {
   openedInVscode: boolean;
 };
 
+export type PluginBundleExportResult = {
+  archivePath: string;
+  pluginCount: number;
+  fileCount: number;
+  byteCount: number;
+};
+
+export type PluginBundleImportResult = {
+  archivePath: string;
+  pluginCount: number;
+  fileCount: number;
+  byteCount: number;
+};
+
 export type PluginJobRecord = {
   id: string;
   caseId: string;

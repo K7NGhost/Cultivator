@@ -628,6 +628,26 @@ fn move_python_plugin(
 }
 
 #[tauri::command]
+async fn export_python_plugins(
+    app_handle: tauri::AppHandle,
+    request: plugins::ExportPythonPluginsRequest,
+) -> Result<plugins::PluginBundleExportResult, String> {
+    tokio::task::spawn_blocking(move || plugins::export_python_plugins(app_handle, request))
+        .await
+        .map_err(|error| format!("Failed to join plugin export task: {error}"))?
+}
+
+#[tauri::command]
+async fn import_python_plugins(
+    app_handle: tauri::AppHandle,
+    request: plugins::ImportPythonPluginsRequest,
+) -> Result<plugins::PluginBundleImportResult, String> {
+    tokio::task::spawn_blocking(move || plugins::import_python_plugins(app_handle, request))
+        .await
+        .map_err(|error| format!("Failed to join plugin import task: {error}"))?
+}
+
+#[tauri::command]
 async fn list_plugin_jobs(
     case_database_path: String,
 ) -> Result<Vec<plugins::PluginJobRecord>, String> {
@@ -2205,6 +2225,8 @@ pub fn run() {
             create_python_plugin_folder,
             delete_python_plugin,
             move_python_plugin,
+            export_python_plugins,
+            import_python_plugins,
             list_plugin_jobs,
             list_plugin_logs,
             list_plugin_artifacts,

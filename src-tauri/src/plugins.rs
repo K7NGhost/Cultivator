@@ -46,8 +46,13 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 mod builtin;
+mod bundle;
 
 pub use builtin::MediaGallery;
+pub use bundle::{
+    ExportPythonPluginsRequest, ImportPythonPluginsRequest, PluginBundleExportResult,
+    PluginBundleImportResult,
+};
 
 const PYTHON_PLUGIN_RELATIVE_PATH: &[&str] = &["plugins", "python"];
 const LEGACY_DEMO_PLUGIN_IDS: &[&str] = &[
@@ -1034,6 +1039,7 @@ fn search<'py>(
 }
 
 pub fn list_python_plugins(app_handle: AppHandle) -> Result<Vec<PythonPluginManifest>, String> {
+    let _operation_guard = bundle::lock_bundle_operations()?;
     let mut plugins = builtin::plugins()
         .iter()
         .map(|plugin| plugin.manifest())
@@ -1055,6 +1061,7 @@ pub fn list_python_plugins(app_handle: AppHandle) -> Result<Vec<PythonPluginMani
 }
 
 pub fn list_python_plugin_folders(app_handle: AppHandle) -> Result<Vec<String>, String> {
+    let _operation_guard = bundle::lock_bundle_operations()?;
     let plugin_root = ensure_python_plugin_directory(&app_handle)?;
     discover_python_plugin_organization_folders(&plugin_root)
 }
@@ -1097,6 +1104,7 @@ pub fn create_python_plugin_folder(
     app_handle: AppHandle,
     request: CreatePythonPluginFolderRequest,
 ) -> Result<String, String> {
+    let _operation_guard = bundle::lock_bundle_operations()?;
     let plugin_root = ensure_python_plugin_directory(&app_handle)?;
     let folder = resolve_plugin_organization_folder(&plugin_root, &request.folder)?;
 
@@ -1115,6 +1123,7 @@ pub fn create_python_plugin(
     app_handle: AppHandle,
     request: CreatePythonPluginRequest,
 ) -> Result<CreatedPythonPlugin, String> {
+    let _operation_guard = bundle::lock_bundle_operations()?;
     let manifest_text = add_missing_manifest_metadata(&create_plugin_manifest_text(&request)?)?;
     let manifest = toml::from_str::<PythonPluginManifest>(&manifest_text)
         .map_err(|error| format!("Failed to parse plugin.toml: {error}"))?;
@@ -1195,6 +1204,7 @@ pub fn delete_python_plugin(
     app_handle: AppHandle,
     request: DeletePythonPluginRequest,
 ) -> Result<(), String> {
+    let _operation_guard = bundle::lock_bundle_operations()?;
     let plugin_id = request.plugin_id.trim();
 
     if plugin_id.is_empty() {
@@ -1235,6 +1245,7 @@ pub fn move_python_plugin(
     app_handle: AppHandle,
     request: MovePythonPluginRequest,
 ) -> Result<String, String> {
+    let _operation_guard = bundle::lock_bundle_operations()?;
     let plugin_id = request.plugin_id.trim();
     if plugin_id.is_empty() {
         return Err("Plugin id is required.".to_string());
@@ -1271,6 +1282,26 @@ pub fn move_python_plugin(
         .map_err(|error| format!("Failed to move Python plugin '{plugin_id}': {error}"))?;
 
     Ok(destination.to_string_lossy().to_string())
+}
+
+pub fn export_python_plugins(
+    app_handle: AppHandle,
+    request: ExportPythonPluginsRequest,
+) -> Result<PluginBundleExportResult, String> {
+    let _operation_guard = bundle::lock_bundle_operations()?;
+    let plugin_root = ensure_python_plugin_directory(&app_handle)?;
+    let plugins = load_python_plugins(&app_handle)?;
+    bundle::export_python_plugins(&plugin_root, &plugins, request)
+}
+
+pub fn import_python_plugins(
+    app_handle: AppHandle,
+    request: ImportPythonPluginsRequest,
+) -> Result<PluginBundleImportResult, String> {
+    let _operation_guard = bundle::lock_bundle_operations()?;
+    let plugin_root = ensure_python_plugin_directory(&app_handle)?;
+    let installed_plugins = load_python_plugins(&app_handle)?;
+    bundle::import_python_plugins(&plugin_root, &installed_plugins, request)
 }
 
 pub async fn list_plugin_jobs(case_database_path: String) -> Result<Vec<PluginJobRecord>, String> {
@@ -1573,6 +1604,13 @@ fn render_media_thumbnail_file(
         NEXT_ID_SUFFIX.fetch_add(1, Ordering::Relaxed)
     ));
     let mut command = ProcessCommand::new(&python_runtime.executable);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Preview decoding runs in the background, including in release builds.
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     command
         .arg("-I")
         .arg("-B")
@@ -1909,10 +1947,13 @@ pub async fn run_datasource_plugins(
     ensure_plugin_tables(&pool).await?;
 
     let mut datasource = load_datasource_for_plugins(&pool, &datasource_id).await?;
-    let plugin_map = load_python_plugins(&app_handle)?
-        .into_iter()
-        .map(|plugin| (plugin.manifest.id.clone(), plugin))
-        .collect::<HashMap<_, _>>();
+    let plugin_map = {
+        let _operation_guard = bundle::lock_bundle_operations()?;
+        load_python_plugins(&app_handle)?
+            .into_iter()
+            .map(|plugin| (plugin.manifest.id.clone(), plugin))
+            .collect::<HashMap<_, _>>()
+    };
     let requested_plugin_ids = plugin_ids.unwrap_or_else(|| datasource.plugin_ids.clone());
     let mut jobs = Vec::new();
     let related_manifests = requested_plugin_ids
@@ -4919,6 +4960,12 @@ fn validate_manifest(manifest: &PythonPluginManifest, plugin_dir: &Path) -> Resu
     if manifest.id.trim().is_empty() {
         return Err("Python plugin manifest id is required.".to_string());
     }
+    if !is_safe_plugin_id(&manifest.id) {
+        return Err(format!(
+            "Python plugin id '{}' may only contain letters, numbers, '.', '_', and '-'.",
+            manifest.id
+        ));
+    }
 
     if manifest.name.trim().is_empty() {
         return Err(format!("Python plugin '{}' requires a name.", manifest.id));
@@ -4949,11 +4996,41 @@ fn validate_manifest(manifest: &PythonPluginManifest, plugin_dir: &Path) -> Resu
         ));
     }
 
-    let entry_path = plugin_dir.join(&manifest.entry);
-
-    if !entry_path.is_file() {
+    let entry = manifest.entry.trim();
+    let entry_relative_path = Path::new(entry);
+    if entry.is_empty()
+        || entry_relative_path.is_absolute()
+        || !entry_relative_path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
         return Err(format!(
-            "Python plugin '{}' entry file does not exist: {}",
+            "Python plugin '{}' entry must be a relative path contained by the plugin directory.",
+            manifest.id
+        ));
+    }
+
+    let canonical_plugin_dir = plugin_dir.canonicalize().map_err(|error| {
+        format!(
+            "Failed to inspect Python plugin '{}' directory '{}': {error}",
+            manifest.id,
+            plugin_dir.display()
+        )
+    })?;
+    let entry_path = plugin_dir.join(entry_relative_path);
+    let canonical_entry_path = entry_path.canonicalize().map_err(|error| {
+        format!(
+            "Python plugin '{}' entry file does not exist or cannot be inspected '{}': {error}",
+            manifest.id,
+            entry_path.display()
+        )
+    })?;
+    if !canonical_entry_path.starts_with(&canonical_plugin_dir)
+        || canonical_entry_path == canonical_plugin_dir
+        || !canonical_entry_path.is_file()
+    {
+        return Err(format!(
+            "Python plugin '{}' entry must be a file contained by the plugin directory: {}",
             manifest.id,
             entry_path.display()
         ));
