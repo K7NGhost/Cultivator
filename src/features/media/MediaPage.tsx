@@ -42,6 +42,7 @@ import {
 } from "@/features/datasources/dataSourceRepository";
 import type { DataSourceRecord } from "@/features/datasources/types";
 import { MediaImagePreview } from "@/features/media/components/MediaImagePreview";
+import { MediaVideoPreview } from "@/features/media/components/MediaVideoPreview";
 import {
   type FileViewMediaPage,
   listFileViewMediaPage,
@@ -654,8 +655,6 @@ function MediaTilePreview({
   onSelectItem: (item: MediaItem) => void;
   tile: MediaItem;
 }) {
-  const source = convertFileSrc(tile.thumbnailPath || tile.mediaPath);
-  const videoSource = `${source}#t=0.1`;
   const tileButton = (
     <button
       type="button"
@@ -676,13 +675,7 @@ function MediaTilePreview({
           className="h-full w-full object-cover"
         />
       ) : (
-        <video
-          src={videoSource}
-          className="h-full w-full object-cover"
-          muted
-          playsInline
-          preload="metadata"
-        />
+        <MediaVideoPreview item={tile} className="h-full w-full" />
       )}
     </button>
   );
