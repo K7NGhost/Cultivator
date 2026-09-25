@@ -63,9 +63,7 @@ import {
 } from "@/features/files/fileTagRepository";
 import {
   cancelDatasourcePluginRun,
-  getMediaTaggingStatus,
   listPythonPlugins,
-  mediaTaggingPluginId,
   pluginRunUpdatedDatasourcePaths,
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
@@ -76,8 +74,10 @@ import {
   showPluginRunStartedToast,
 } from "@/features/plugins/pluginToasts";
 import type { PythonPlugin } from "@/features/plugins/types";
+import { useModelDownloadConsent } from "@/features/plugins/useModelDownloadConsent";
 import { cn } from "@/lib/utils";
 import { notifyFilesWorkspaceReady } from "@/app/startupEvents";
+import { normalizeRevealPath, useRevealRequest } from "@/app/reveal";
 
 function getPluginTargetLabel(target: PythonPlugin["target"]) {
   switch (target) {
@@ -191,9 +191,7 @@ export function FilesPage() {
     useState<DataSourceRecord | null>(null);
   const [availablePlugins, setAvailablePlugins] = useState<PythonPlugin[]>([]);
   const [selectedRunPluginIds, setSelectedRunPluginIds] = useState<string[]>([]);
-  const [mediaTaggingConsentResolver, setMediaTaggingConsentResolver] = useState<
-    ((confirmed: boolean) => void) | null
-  >(null);
+  const { confirmModelDownloads, modelDownloadDialog } = useModelDownloadConsent();
   const [pluginOptionValues, setPluginOptionValues] = useState<
     Record<string, Record<string, string>>
   >({});
@@ -643,7 +641,7 @@ export function FilesPage() {
 
   async function loadDirectoryEntries(
     node: EvidenceTreeNode,
-    options: { pushHistory?: boolean } = {},
+    options: { pushHistory?: boolean; selectPath?: string } = {},
   ) {
     if (node.kind !== "directory") {
       return;
@@ -669,8 +667,15 @@ export function FilesPage() {
         "list_directory_entries",
         { path: node.path },
       );
+      const selectPath = options.selectPath
+        ? normalizeRevealPath(options.selectPath)
+        : null;
       setVisibleEntries(entries);
-      setSelectedEntry(entries[0] ?? null);
+      setSelectedEntry(
+        (selectPath &&
+          entries.find((entry) => normalizeRevealPath(entry.path) === selectPath)) ||
+          (entries[0] ?? null),
+      );
     } catch (caughtError) {
       setEntriesError(
         caughtError instanceof Error
@@ -683,6 +688,53 @@ export function FilesPage() {
       setIsEntriesLoading(false);
     }
   }
+
+  /** Opens the folder holding `filePath` with that file selected. */
+  function revealFile(filePath: string) {
+    const separatorIndex = Math.max(
+      filePath.lastIndexOf("/"),
+      filePath.lastIndexOf("\\"),
+    );
+
+    if (separatorIndex <= 0) {
+      return;
+    }
+
+    const parentPath = filePath.slice(0, separatorIndex);
+
+    if (
+      selectedDirectory &&
+      !selectedFileView &&
+      normalizeRevealPath(selectedDirectory.path) === normalizeRevealPath(parentPath)
+    ) {
+      const target = normalizeRevealPath(filePath);
+      const match = visibleEntries.find(
+        (entry) => normalizeRevealPath(entry.path) === target,
+      );
+
+      if (match) {
+        setSelectedEntry(match);
+        return;
+      }
+    }
+
+    const parentName = parentPath.slice(
+      Math.max(parentPath.lastIndexOf("/"), parentPath.lastIndexOf("\\")) + 1,
+    );
+
+    void loadDirectoryEntries(
+      {
+        id: `reveal:${parentPath}`,
+        name: parentName || parentPath,
+        path: parentPath,
+        kind: "directory",
+        files: 0,
+      },
+      { pushHistory: true, selectPath: filePath },
+    );
+  }
+
+  useRevealRequest("file", (target) => revealFile(target.path));
 
   function openFolderEntry(entry: EvidenceDirectoryEntry) {
     const fileViewId = entry.id.startsWith("file-view:")
@@ -1151,57 +1203,21 @@ export function FilesPage() {
     });
   }
 
-  function requestMediaTaggingDownloadConsent(): Promise<boolean> {
-    return new Promise((resolve) => {
-      setMediaTaggingConsentResolver(() => resolve);
-    });
-  }
-
-  function resolveMediaTaggingDownloadConsent(confirmed: boolean) {
-    setMediaTaggingConsentResolver(
-      (current: ((confirmed: boolean) => void) | null) => {
-        current?.(confirmed);
-        return null;
-      },
-    );
-  }
-
   async function runSelectedPlugins() {
     if (!activeCase || !pluginRunDataSource) {
       return;
     }
 
     const runDataSource = pluginRunDataSource;
-    let runPluginIds = selectedRunPluginIds;
 
-    if (runPluginIds.length === 0) {
+    if (selectedRunPluginIds.length === 0) {
       setDataSourceError("Select at least one plugin to run.");
       return;
     }
 
-    if (runPluginIds.includes(mediaTaggingPluginId)) {
-      let isModelReady = false;
-
-      try {
-        const status = await getMediaTaggingStatus();
-        isModelReady = status.packagesInstalled && status.modelCached;
-      } catch {
-        isModelReady = false;
-      }
-
-      if (!isModelReady) {
-        const confirmed = await requestMediaTaggingDownloadConsent();
-
-        if (!confirmed) {
-          runPluginIds = runPluginIds.filter(
-            (pluginId) => pluginId !== mediaTaggingPluginId,
-          );
-
-          if (runPluginIds.length === 0) {
-            return;
-          }
-        }
-      }
+    const runPluginIds = await confirmModelDownloads(selectedRunPluginIds);
+    if (runPluginIds.length === 0) {
+      return;
     }
 
     setIsRunningPlugins(true);
@@ -1733,44 +1749,7 @@ export function FilesPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={mediaTaggingConsentResolver !== null}
-        onOpenChange={(isOpen) => {
-          if (!isOpen) {
-            resolveMediaTaggingDownloadConsent(false);
-          }
-        }}
-      >
-        <DialogContent className="w-[min(28rem,calc(100vw-2rem))] rounded-sm p-0">
-          <DialogHeader className="border-b px-3 py-2">
-            <DialogTitle className="text-sm">Download AI Captioning Model</DialogTitle>
-            <DialogDescription className="text-xs">
-              Media Tagging needs a one-time download (~1.5 GB) of a local
-              captioning model. It runs entirely on this machine{" "}
-              &mdash; evidence is never sent anywhere. Continue?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="border-t p-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="xs"
-              className="h-7 rounded-sm px-2 text-xs"
-              onClick={() => resolveMediaTaggingDownloadConsent(false)}
-            >
-              Skip Media Tagging
-            </Button>
-            <Button
-              type="button"
-              size="xs"
-              className="h-7 rounded-sm px-2 text-xs"
-              onClick={() => resolveMediaTaggingDownloadConsent(true)}
-            >
-              Download and Run
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {modelDownloadDialog}
 
       <footer className="flex h-6 shrink-0 items-center gap-3 border-t px-2 text-[11px] text-muted-foreground">
         <span>

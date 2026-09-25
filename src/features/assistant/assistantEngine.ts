@@ -54,15 +54,34 @@ export type AssistantIndex = {
   people: AssistantPerson[];
 };
 
+/** Why a result matched the content part of a question. */
+export type AssistantMatch = {
+  reason: "exact" | "meaning";
+  tier: "strong" | "related";
+  score?: number;
+};
+
+export type Matched<T> = T & { match?: AssistantMatch };
+
+/**
+ * Meaning-search scores from the local model, keyed by `semanticKey(...)`.
+ * Only items that cleared the related cutoff are present.
+ */
+export type SemanticScores = Map<string, { score: number; tier: "strong" | "related" }>;
+
 export type AssistantResults = {
   searched: AssistantTarget[];
-  messages: AssistantMessage[];
+  messages: Matched<AssistantMessage>[];
   calls: AssistantCall[];
   contacts: AssistantContact[];
-  photos: AssistantMedia[];
-  videos: AssistantMedia[];
+  photos: Matched<AssistantMedia>[];
+  videos: Matched<AssistantMedia>[];
   notes: string[];
 };
+
+export function semanticKey(refKind: "artifact" | "media", refId: string) {
+  return `${refKind}:${refId}`;
+}
 
 export const ALL_TARGETS: AssistantTarget[] = ["messages", "calls", "contacts", "photos", "videos"];
 
@@ -134,7 +153,16 @@ export function indexAssistantData(
   return { messages, calls, contacts, photos, videos, people };
 }
 
-export function runAssistantQuery(query: AssistantQuery, index: AssistantIndex): AssistantResults {
+/**
+ * Filters the index by the parsed question. When `semantic` scores are
+ * given, a message or photo also matches the question's content words by
+ * meaning (not only by exact words), and results are ranked by relevance.
+ */
+export function runAssistantQuery(
+  query: AssistantQuery,
+  index: AssistantIndex,
+  semantic?: SemanticScores | null,
+): AssistantResults {
   const searched = query.targets.length > 0 ? query.targets : ALL_TARGETS;
   const notes = [...query.notes];
   const allPeople = [...query.people.with, ...query.people.from, ...query.people.to];
@@ -152,26 +180,32 @@ export function runAssistantQuery(query: AssistantQuery, index: AssistantIndex):
 
   if (searched.includes("messages")) {
     results.messages = index.messages
-      .filter((message) => {
+      .flatMap((message) => {
         const participants = [message.sender, ...message.recipients];
         if (!query.people.with.every((person) => participants.some((value) => personMatches(person, value)))) {
-          return false;
+          return [];
         }
         if (query.people.from.length > 0 && !query.people.from.some((person) => personMatches(person, message.sender))) {
-          return false;
+          return [];
         }
         if (
           query.people.to.length > 0 &&
           !query.people.to.some((person) => message.recipients.some((value) => personMatches(person, value)))
         ) {
-          return false;
+          return [];
         }
-        return (
-          inDateRange(message.at, query.dateRange) &&
-          matchesKeywords([message.body, ...participants].join(" "), query.keywords)
+        if (!inDateRange(message.at, query.dateRange)) {
+          return [];
+        }
+        const match = contentMatch(
+          [message.body, ...participants].join(" "),
+          semanticKey("artifact", message.id),
+          query.keywords,
+          semantic,
         );
+        return match === null ? [] : [{ ...message, match }];
       })
-      .sort(byDate);
+      .sort(byRelevance);
   }
 
   if (searched.includes("calls")) {
@@ -227,15 +261,19 @@ export function runAssistantQuery(query: AssistantQuery, index: AssistantIndex):
         continue;
       }
       results[target] = index[target]
-        .filter(
-          (entry) =>
-            inDateRange(entry.at, query.dateRange) &&
-            matchesKeywords(
-              [entry.item.name, entry.item.caption ?? "", ...(entry.item.tags ?? [])].join(" "),
-              query.keywords,
-            ),
-        )
-        .sort(byDate);
+        .flatMap((entry) => {
+          if (!inDateRange(entry.at, query.dateRange)) {
+            return [];
+          }
+          const match = contentMatch(
+            [entry.item.name, entry.item.caption ?? "", ...(entry.item.tags ?? [])].join(" "),
+            semanticKey("media", entry.item.path),
+            query.keywords,
+            semantic,
+          );
+          return match === null ? [] : [{ ...entry, match }];
+        })
+        .sort(byRelevance);
     }
 
     const captioned = index.photos.some((entry) => entry.item.caption);
@@ -247,6 +285,24 @@ export function runAssistantQuery(query: AssistantQuery, index: AssistantIndex):
   }
 
   return results;
+}
+
+/**
+ * Every message exchanged among exactly the same people as `message`, oldest
+ * first, so a single hit can be read in the context of its conversation.
+ */
+export function conversationOf(message: AssistantMessage, messages: AssistantMessage[]) {
+  const key = conversationKey(message);
+  return messages.filter((candidate) => conversationKey(candidate) === key).sort(byDate);
+}
+
+function conversationKey(message: AssistantMessage) {
+  const participants = [message.sender, ...message.recipients].map((value) => {
+    const { name, phone } = splitParticipant(value);
+    const digits = digitsOf(phone);
+    return digits.length >= 7 ? digits : name.toLowerCase();
+  });
+  return Array.from(new Set(participants)).sort().join("|");
 }
 
 export function personMatches(person: AssistantPerson, value: string) {
@@ -372,8 +428,43 @@ function toStringList(value: unknown): string[] {
   return value ? [String(value)] : [];
 }
 
+/**
+ * `undefined`: the question has no content words, so everything passes.
+ * `null`: content words given and the item matches neither exactly nor by meaning.
+ */
+function contentMatch(
+  haystack: string,
+  key: string,
+  keywords: string[],
+  semantic: SemanticScores | null | undefined,
+): AssistantMatch | null | undefined {
+  if (keywords.length === 0) {
+    return undefined;
+  }
+
+  const scored = semantic?.get(key);
+  if (matchesKeywords(haystack, keywords)) {
+    return { reason: "exact", tier: "strong", score: scored?.score };
+  }
+  return scored ? { reason: "meaning", tier: scored.tier, score: scored.score } : null;
+}
+
 function byDate<T extends { at: Date | null }>(left: T, right: T) {
   return (left.at?.getTime() ?? 0) - (right.at?.getTime() ?? 0);
+}
+
+/** Strong before related, exact before meaning-only, then best score, then oldest. */
+function byRelevance<T extends { at: Date | null; match?: AssistantMatch }>(left: T, right: T) {
+  const tier = (match?: AssistantMatch) => (match?.tier === "related" ? 1 : 0);
+  const reason = (match?: AssistantMatch) => (match?.reason === "meaning" ? 1 : 0);
+  const score = (match?: AssistantMatch) => match?.score ?? 0;
+
+  return (
+    tier(left.match) - tier(right.match) ||
+    reason(left.match) - reason(right.match) ||
+    score(right.match) - score(left.match) ||
+    byDate(left, right)
+  );
 }
 
 function escapeRegExp(value: string) {

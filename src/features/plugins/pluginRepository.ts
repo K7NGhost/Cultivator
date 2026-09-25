@@ -14,14 +14,41 @@ import { waitForPluginProgressListener } from "@/features/plugins/pluginToasts";
 export const archiveExtractorPluginId = "archive-extractor";
 export const hashCalculatorPluginId = "hash-calculator";
 export const mediaTaggingPluginId = "media-tagging";
+export const semanticIndexPluginId = "semantic-index";
 
-export type MediaTaggingStatus = {
+export type ModelStatus = {
   packagesInstalled: boolean;
   modelCached: boolean;
 };
 
-export async function getMediaTaggingStatus(): Promise<MediaTaggingStatus> {
-  return invoke<MediaTaggingStatus>("get_media_tagging_status");
+export async function getMediaTaggingStatus(): Promise<ModelStatus> {
+  return invoke<ModelStatus>("get_media_tagging_status");
+}
+
+export async function getSemanticModelStatus(): Promise<ModelStatus> {
+  return invoke<ModelStatus>("get_semantic_model_status");
+}
+
+export type SemanticScore = {
+  refKind: "artifact" | "media";
+  refId: string;
+  score: number;
+  z: number;
+  tier: "strong" | "related";
+};
+
+export type SemanticSearchResult = {
+  corrections: Array<{ from: string; to: string }>;
+  scores: SemanticScore[];
+  indexedCount: number;
+  unindexedCount: number;
+};
+
+export async function semanticSearch(
+  caseDatabasePath: string,
+  text: string,
+): Promise<SemanticSearchResult> {
+  return invoke<SemanticSearchResult>("semantic_search", { caseDatabasePath, text });
 }
 
 export function pluginRunUpdatedDatasourcePaths(summary: PluginRunSummary) {

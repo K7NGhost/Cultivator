@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  conversationOf,
   indexAssistantData,
   parseDate,
   runAssistantQuery,
+  semanticKey,
+  type SemanticScores,
 } from "../src/features/assistant/assistantEngine";
 import { parseAssistantQuery } from "../src/features/assistant/assistantQuery";
 import type { StoredArtifactRecord } from "../src/features/artifacts/types";
@@ -186,6 +189,89 @@ describe("assistant query execution", () => {
     expect(results.calls.map((result) => result.id)).toEqual(["c-jane"]);
     expect(results.photos).toEqual([]);
     expect(results.notes.some((note) => note.includes("aren't linked to people"))).toBe(true);
+  });
+});
+
+describe("meaning search", () => {
+  function askWithMeaning(text: string, scores: SemanticScores) {
+    const query = parseAssistantQuery(text, { people: index.people, now });
+    return runAssistantQuery(query, index, scores);
+  }
+
+  test("adds messages that match by meaning but not by exact words", () => {
+    const scores: SemanticScores = new Map([
+      [semanticKey("artifact", "m-mar"), { score: 0.64, tier: "strong" as const }],
+      [semanticKey("artifact", "m-apr"), { score: 0.55, tier: "related" as const }],
+    ]);
+
+    const results = askWithMeaning("messages about money", scores);
+
+    expect(results.messages.map((message) => [message.id, message.match?.reason, message.match?.tier])).toEqual([
+      ["m-mar", "meaning", "strong"],
+      ["m-apr", "meaning", "related"],
+    ]);
+  });
+
+  test("ranks exact hits before meaning-only hits and keeps structural filters", () => {
+    const scores: SemanticScores = new Map([
+      [semanticKey("artifact", "m-mar"), { score: 0.8, tier: "strong" as const }],
+      [semanticKey("artifact", "m-jun"), { score: 0.7, tier: "strong" as const }],
+      [semanticKey("artifact", "m-jul"), { score: 0.69, tier: "strong" as const }],
+    ]);
+
+    const results = askWithMeaning("messages from jane about the audit", scores);
+
+    // m-may and m-jun ("Auditors") are exact hits; m-mar is meaning-only despite
+    // its higher score; m-jul is from John, so the sender filter drops it.
+    expect(results.messages.map((message) => [message.id, message.match?.reason])).toEqual([
+      ["m-jun", "exact"],
+      ["m-may", "exact"],
+      ["m-mar", "meaning"],
+    ]);
+  });
+
+  test("finds photos by meaning of their caption", () => {
+    const scores: SemanticScores = new Map([
+      [semanticKey("media", "demo-phone/DCIM/Camera/IMG_0331.jpg"), { score: 0.6, tier: "strong" as const }],
+    ]);
+
+    const results = askWithMeaning("photos of vehicles", scores);
+
+    expect(results.photos.map((entry) => [entry.item.name, entry.match?.reason])).toEqual([
+      ["IMG_0331.jpg", "meaning"],
+    ]);
+  });
+
+  test("questions without content words ignore meaning scores", () => {
+    const scores: SemanticScores = new Map([
+      [semanticKey("artifact", "m-mom"), { score: 0.9, tier: "strong" as const }],
+    ]);
+
+    const results = askWithMeaning("messages between john and jane march - jun 2025", scores);
+
+    expect(results.messages.map((message) => message.id)).toEqual(["m-mar", "m-apr", "m-may", "m-jun"]);
+    expect(results.messages.every((message) => message.match === undefined)).toBe(true);
+  });
+});
+
+describe("conversation threads", () => {
+  test("collects every message between the same people, in both directions, oldest first", () => {
+    const anchor = index.messages.find((message) => message.id === "m-may")!;
+
+    expect(conversationOf(anchor, index.messages).map((message) => message.id)).toEqual([
+      "m-jan",
+      "m-mar",
+      "m-apr",
+      "m-may",
+      "m-jun",
+      "m-jul",
+    ]);
+  });
+
+  test("keeps other conversations out", () => {
+    const anchor = index.messages.find((message) => message.id === "m-mom")!;
+
+    expect(conversationOf(anchor, index.messages).map((message) => message.id)).toEqual(["m-mom"]);
   });
 });
 

@@ -189,6 +189,56 @@ export async function createDataSource(
   return nextDataSource;
 }
 
+/**
+ * Adds plugins to an existing datasource's selection, so later "Run plugins"
+ * runs include them. Plugins already selected are skipped.
+ */
+export async function addDataSourcePlugins(input: {
+  caseDatabasePath: string;
+  caseId: string;
+  dataSourceId: string;
+  plugins: Array<{ id: string; name: string }>;
+}): Promise<void> {
+  await ensureDataSourceTables(input.caseDatabasePath);
+
+  await withCaseDatabaseWriteLock(input.caseDatabasePath, async () => {
+    const database = await getCaseDatabase(input.caseDatabasePath);
+    const existingRows = await database.select<DataSourcePluginRow[]>(
+      `
+        SELECT data_source_id, plugin_id
+        FROM data_source_plugins
+        WHERE data_source_id = $1
+      `,
+      [input.dataSourceId],
+    );
+    const existingPluginIds = new Set(existingRows.map((row) => row.plugin_id));
+    const now = new Date().toISOString();
+
+    for (const plugin of input.plugins) {
+      if (existingPluginIds.has(plugin.id)) {
+        continue;
+      }
+      existingPluginIds.add(plugin.id);
+
+      await database.execute(
+        `
+          INSERT INTO data_source_plugins (
+            id,
+            data_source_id,
+            plugin_id,
+            plugin_name,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, $5)
+        `,
+        [createId("datasource-plugin"), input.dataSourceId, plugin.id, plugin.name, now],
+      );
+    }
+  });
+
+  notifyDataSourcesChanged(input.caseId);
+}
+
 export function notifyDataSourcesChanged(caseId: string) {
   for (const cacheKey of dataSourceListRequests.keys()) {
     if (cacheKey.endsWith(`\u0000${caseId}`)) {

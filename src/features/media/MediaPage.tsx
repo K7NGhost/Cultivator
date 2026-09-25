@@ -37,6 +37,12 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  isSameOrInsidePath,
+  normalizeRevealPath,
+  useRevealRequest,
+  type RevealTarget,
+} from "@/app/reveal";
 import { useCases } from "@/features/cases/case-provider";
 import {
   listDataSources,
@@ -114,6 +120,21 @@ export function MediaPage() {
     "image" | "video" | null
   >(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<"photos" | "videos">("photos");
+  const [pendingReveal, setPendingReveal] = useState<
+    Extract<RevealTarget, { kind: "media" }> | null
+  >(null);
+  // Which datasource/source the gallery on screen was loaded for, so a reveal
+  // never judges a stale gallery while the next one is still loading.
+  const [loadedGalleryKey, setLoadedGalleryKey] = useState<string | null>(null);
+
+  useRevealRequest("media", (target) => {
+    setMediaSource("plugin");
+    setSearchQuery("");
+    setActiveTab(target.mediaType === "video" ? "videos" : "photos");
+    setPendingReveal(target);
+  });
+
   useEffect(() => {
     if (!activeCase) {
       setDataSources([]);
@@ -228,6 +249,7 @@ export function MediaPage() {
         const mediaGallery = normalizeMediaGallery(nextGallery);
 
         setGallery(mediaGallery);
+        setLoadedGalleryKey(`${mediaSource}\u0000${selectedDataSourceId}`);
         setFileViewPages(pages);
         setSelectedItem((currentItem) => {
           if (
@@ -291,6 +313,47 @@ export function MediaPage() {
       setPlayerItem(item);
     }
   };
+  useEffect(() => {
+    if (
+      !pendingReveal ||
+      isLoading ||
+      isDataSourcesLoading ||
+      loadedGalleryKey !== `${mediaSource}\u0000${selectedDataSourceId}`
+    ) {
+      return;
+    }
+
+    const targetPath = normalizeRevealPath(pendingReveal.path);
+    const items = pendingReveal.mediaType === "video" ? gallery.videos : gallery.photos;
+    const match = items.find((item) => normalizeRevealPath(item.path) === targetPath);
+
+    if (match) {
+      handleSelectItem(match);
+      setPendingReveal(null);
+      return;
+    }
+
+    const owner = dataSources.find((dataSource) =>
+      dataSource.paths.some((root) => isSameOrInsidePath(pendingReveal.path, root)),
+    );
+
+    if (owner && owner.id !== selectedDataSourceId) {
+      setSelectedDataSourceId(owner.id);
+      return;
+    }
+
+    setError(`Could not find ${pendingReveal.path} in the media gallery.`);
+    setPendingReveal(null);
+  }, [
+    dataSources,
+    gallery,
+    isDataSourcesLoading,
+    isLoading,
+    loadedGalleryKey,
+    mediaSource,
+    pendingReveal,
+    selectedDataSourceId,
+  ]);
   const handleLoadMore = async (mediaType: "image" | "video") => {
     const page = fileViewPages[mediaType];
     const selectedDataSource = dataSources.find(
@@ -427,7 +490,8 @@ export function MediaPage() {
       )}
 
       <Tabs
-        defaultValue="photos"
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value === "videos" ? "videos" : "photos")}
         className="flex min-h-0 flex-1 flex-col gap-0"
       >
         <section className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
@@ -611,6 +675,22 @@ function VirtualizedMediaGrid({
     Math.round((columnWidth - MEDIA_TILE_GAP) * MEDIA_TILE_ASPECT_RATIO) +
     MEDIA_TILE_GAP;
   const rowCount = Math.ceil(tiles.length / columnCount);
+  const gridRef = useRef<FixedSizeGrid<VirtualizedMediaGridData> | null>(null);
+  const hasSize = size.width > 0 && size.height > 0;
+
+  useEffect(() => {
+    const index = selectedPath
+      ? tiles.findIndex((tile) => tile.path === selectedPath)
+      : -1;
+
+    if (index >= 0 && hasSize) {
+      gridRef.current?.scrollToItem({
+        align: "smart",
+        rowIndex: Math.floor(index / columnCount),
+      });
+    }
+  }, [columnCount, hasSize, selectedPath, tiles]);
+
   const gridData: VirtualizedMediaGridData = {
     caseDatabasePath,
     columnCount,
@@ -624,6 +704,7 @@ function VirtualizedMediaGrid({
     <div ref={containerRef} className="h-full min-h-0 w-full overflow-hidden">
       {size.width > 0 && size.height > 0 ? (
         <FixedSizeGrid<VirtualizedMediaGridData>
+          ref={gridRef}
           columnCount={columnCount}
           columnWidth={columnWidth}
           height={size.height}

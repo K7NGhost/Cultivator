@@ -41,13 +41,12 @@ import type {
 import {
   archiveExtractorPluginId,
   cancelDatasourcePluginRun,
-  getMediaTaggingStatus,
   hashCalculatorPluginId,
   listPythonPlugins,
-  mediaTaggingPluginId,
   pluginRunUpdatedDatasourcePaths,
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
+import { useModelDownloadConsent } from "@/features/plugins/useModelDownloadConsent";
 import {
   createPluginRunId,
   showPluginRunFailedToast,
@@ -206,9 +205,7 @@ export function DataSourceWizardDialog({
   );
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [mediaTaggingConsentResolver, setMediaTaggingConsentResolver] = useState<
-    ((confirmed: boolean) => void) | null
-  >(null);
+  const { confirmModelDownloads, modelDownloadDialog } = useModelDownloadConsent();
   const selectedPlugins = useMemo(() => {
     return availablePlugins.filter((plugin) =>
       selectedPluginIds.includes(plugin.id),
@@ -268,21 +265,6 @@ export function DataSourceWizardDialog({
   function updateType(nextType: DataSourceType) {
     setType(nextType);
     setSelectedPluginIds(DEFAULT_SELECTED_PLUGIN_IDS);
-  }
-
-  function requestMediaTaggingDownloadConsent(): Promise<boolean> {
-    return new Promise((resolve) => {
-      setMediaTaggingConsentResolver(() => resolve);
-    });
-  }
-
-  function resolveMediaTaggingDownloadConsent(confirmed: boolean) {
-    setMediaTaggingConsentResolver(
-      (current: ((confirmed: boolean) => void) | null) => {
-        current?.(confirmed);
-        return null;
-      },
-    );
   }
 
   useEffect(() => {
@@ -413,31 +395,10 @@ export function DataSourceWizardDialog({
         plugins: selectedPlugins,
       });
       const activeCaseSnapshot = activeCase;
-      let importRunnablePluginIds = getImportRunnablePluginIds(
-        createdDatasource.pluginIds,
+      const importRunnablePluginIds = await confirmModelDownloads(
+        getImportRunnablePluginIds(createdDatasource.pluginIds),
       );
       const pluginMapSnapshot = new Map(pluginMap);
-
-      if (importRunnablePluginIds.includes(mediaTaggingPluginId)) {
-        let isModelReady = false;
-
-        try {
-          const status = await getMediaTaggingStatus();
-          isModelReady = status.packagesInstalled && status.modelCached;
-        } catch {
-          isModelReady = false;
-        }
-
-        if (!isModelReady) {
-          const confirmed = await requestMediaTaggingDownloadConsent();
-
-          if (!confirmed) {
-            importRunnablePluginIds = importRunnablePluginIds.filter(
-              (pluginId) => pluginId !== mediaTaggingPluginId,
-            );
-          }
-        }
-      }
 
       resetWizard();
       onOpenChange(false);
@@ -869,44 +830,7 @@ export function DataSourceWizardDialog({
       </DialogContent>
     </Dialog>
 
-    <Dialog
-      open={mediaTaggingConsentResolver !== null}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen) {
-          resolveMediaTaggingDownloadConsent(false);
-        }
-      }}
-    >
-      <DialogContent className="w-[min(28rem,calc(100vw-2rem))] rounded-sm p-0">
-        <DialogHeader className="border-b px-3 py-2">
-          <DialogTitle className="text-sm">Download AI Captioning Model</DialogTitle>
-          <DialogDescription className="text-xs">
-            Media Tagging needs a one-time download (~1.5 GB) of a local
-            captioning model. It runs entirely on this machine{" "}
-            &mdash; evidence is never sent anywhere. Continue?
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter className="border-t p-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="xs"
-            className="h-7 rounded-sm px-2 text-xs"
-            onClick={() => resolveMediaTaggingDownloadConsent(false)}
-          >
-            Skip Media Tagging
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            className="h-7 rounded-sm px-2 text-xs"
-            onClick={() => resolveMediaTaggingDownloadConsent(true)}
-          >
-            Download and Run
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    {modelDownloadDialog}
     </>
   );
 }
