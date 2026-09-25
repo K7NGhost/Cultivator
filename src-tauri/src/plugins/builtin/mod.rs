@@ -1,5 +1,7 @@
 mod archive_extractor;
+mod hash_calculator;
 mod image_metadata;
+mod media_tagging;
 
 use crate::plugins::PythonPluginManifest;
 use serde_json::Value as JsonValue;
@@ -18,11 +20,38 @@ pub struct BuiltinArtifact {
     pub payload: JsonValue,
 }
 
+pub struct BuiltinFileHash {
+    pub file_path: String,
+    pub file_size: Option<u64>,
+    pub file_modified_ms: Option<u128>,
+    pub md5: String,
+    pub sha1: String,
+    pub sha256: String,
+}
+
+pub struct BuiltinMediaTagUpdate {
+    pub path: String,
+    pub caption: Option<String>,
+    pub tags: Vec<String>,
+}
+
+/// The result of captioning one image, produced by the `caption_batch`
+/// capability injected into the context by the plugin runner. `error` is set
+/// (with `caption: None`) when that specific file could not be captioned;
+/// the batch as a whole still succeeds so one bad file doesn't fail the run.
+pub struct MediaCaptionResult {
+    pub path: String,
+    pub caption: Option<String>,
+    pub error: Option<String>,
+}
+
 pub(crate) struct BuiltinPluginEffects {
     pub logs: Vec<(String, String)>,
     pub artifacts: Option<Vec<BuiltinArtifact>>,
     pub media: Option<MediaGallery>,
     pub derived_paths: Vec<String>,
+    pub file_hashes: Option<Vec<BuiltinFileHash>>,
+    pub media_tag_updates: Option<Vec<BuiltinMediaTagUpdate>>,
 }
 
 pub struct BuiltinPluginContext<'a> {
@@ -33,6 +62,7 @@ pub struct BuiltinPluginContext<'a> {
     progress: &'a mut dyn FnMut(BuiltinPluginProgress),
     #[allow(dead_code)]
     cancelled: &'a dyn Fn() -> bool,
+    caption_batch: &'a mut dyn FnMut(&[String]) -> Result<Vec<MediaCaptionResult>, String>,
     effects: BuiltinPluginEffects,
 }
 
@@ -50,6 +80,7 @@ impl<'a> BuiltinPluginContext<'a> {
         related_manifests: Vec<PythonPluginManifest>,
         progress: &'a mut dyn FnMut(BuiltinPluginProgress),
         cancelled: &'a dyn Fn() -> bool,
+        caption_batch: &'a mut dyn FnMut(&[String]) -> Result<Vec<MediaCaptionResult>, String>,
     ) -> Self {
         Self {
             paths,
@@ -58,11 +89,14 @@ impl<'a> BuiltinPluginContext<'a> {
             related_manifests,
             progress,
             cancelled,
+            caption_batch,
             effects: BuiltinPluginEffects {
                 logs: Vec::new(),
                 artifacts: None,
                 media: None,
                 derived_paths: Vec::new(),
+                file_hashes: None,
+                media_tag_updates: None,
             },
         }
     }
@@ -105,6 +139,28 @@ impl<'a> BuiltinPluginContext<'a> {
         self.effects.derived_paths.push(path.into());
     }
 
+    pub fn add_file_hash(&mut self, hash: BuiltinFileHash) {
+        self.effects
+            .file_hashes
+            .get_or_insert_with(Vec::new)
+            .push(hash);
+    }
+
+    pub fn add_media_tag_update(&mut self, update: BuiltinMediaTagUpdate) {
+        self.effects
+            .media_tag_updates
+            .get_or_insert_with(Vec::new)
+            .push(update);
+    }
+
+    /// Captions a batch of image paths using the locally installed AI model,
+    /// installing/loading it on first use. Returns one result per input path,
+    /// in the same order; a per-file failure is reported in that entry's
+    /// `error` rather than failing the whole batch.
+    pub fn caption_images(&mut self, paths: &[String]) -> Result<Vec<MediaCaptionResult>, String> {
+        (self.caption_batch)(paths)
+    }
+
     pub(crate) fn into_effects(self) -> BuiltinPluginEffects {
         self.effects
     }
@@ -128,6 +184,8 @@ pub trait BuiltinPlugin: Send + Sync {
 
 struct ArchiveExtractorPlugin;
 struct ImageMetadataPlugin;
+struct HashCalculatorPlugin;
+struct MediaTaggingPlugin;
 
 impl BuiltinPlugin for ArchiveExtractorPlugin {
     fn manifest(&self) -> PythonPluginManifest {
@@ -238,6 +296,110 @@ impl BuiltinPlugin for ImageMetadataPlugin {
     }
 }
 
+impl BuiltinPlugin for HashCalculatorPlugin {
+    fn manifest(&self) -> PythonPluginManifest {
+        hash_calculator::manifest()
+    }
+
+    fn run(&self, context: &mut BuiltinPluginContext<'_>) -> Result<(), String> {
+        let paths = context.paths.clone();
+        let outcome = hash_calculator::execute_with_progress(paths, |event| {
+            context.progress(
+                event.completed,
+                event.total,
+                format!("Hashed {} of {} files", event.completed, event.total),
+            );
+        })?;
+        let count = outcome.hashes.len();
+        for hash in outcome.hashes {
+            context.add_file_hash(hash);
+        }
+        for warning in outcome.warnings {
+            context.log("warn", warning);
+        }
+        context.log(
+            "info",
+            format!(
+                "Hashed {count} file{} (MD5, SHA-1, SHA-256).",
+                if count == 1 { "" } else { "s" }
+            ),
+        );
+
+        Ok(())
+    }
+}
+
+impl BuiltinPlugin for MediaTaggingPlugin {
+    fn manifest(&self) -> PythonPluginManifest {
+        media_tagging::manifest()
+    }
+
+    /// Runs after the default-order analyzers (Image Metadata included) so
+    /// their `media_gallery_items` rows already exist for this plugin's
+    /// update-in-place writes to attach to.
+    fn execution_order(&self) -> i32 {
+        150
+    }
+
+    fn run(&self, context: &mut BuiltinPluginContext<'_>) -> Result<(), String> {
+        let image_paths = media_tagging::collect_image_paths(context.paths.clone());
+        let total = image_paths.len() as u64;
+        let mut completed = 0u64;
+        let mut tagged = 0u64;
+
+        context.progress(0, total, "Preparing media tagging");
+
+        for chunk in image_paths.chunks(media_tagging::BATCH_SIZE) {
+            if context.is_cancelled() {
+                break;
+            }
+
+            let chunk_paths = chunk
+                .iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect::<Vec<_>>();
+            let results = context.caption_images(&chunk_paths)?;
+
+            for result in results {
+                completed += 1;
+
+                match result.caption {
+                    Some(caption) => {
+                        let tags = media_tagging::derive_tags(&caption);
+                        context.add_media_tag_update(BuiltinMediaTagUpdate {
+                            path: result.path,
+                            caption: Some(caption),
+                            tags,
+                        });
+                        tagged += 1;
+                    }
+                    None => {
+                        if let Some(error) = result.error {
+                            context.log("warn", format!("Skipped '{}': {error}", result.path));
+                        }
+                    }
+                }
+            }
+
+            context.progress(
+                completed,
+                total,
+                format!("Tagged {tagged} of {total} images"),
+            );
+        }
+
+        context.log(
+            "info",
+            format!(
+                "Generated captions and tags for {tagged} of {total} image{}.",
+                if total == 1 { "" } else { "s" }
+            ),
+        );
+
+        Ok(())
+    }
+}
+
 static BUILTIN_PLUGINS: OnceLock<Mutex<Vec<&'static dyn BuiltinPlugin>>> = OnceLock::new();
 
 pub(crate) fn register(plugin: &'static dyn BuiltinPlugin) {
@@ -274,12 +436,30 @@ impl ImageMetadataPlugin {
     }
 }
 
+impl HashCalculatorPlugin {
+    const fn new() -> Self {
+        Self
+    }
+}
+
+impl MediaTaggingPlugin {
+    const fn new() -> Self {
+        Self
+    }
+}
+
 register_builtin_plugin!(
     register_archive_extractor,
     ARCHIVE_EXTRACTOR,
     ArchiveExtractorPlugin
 );
 register_builtin_plugin!(register_image_metadata, IMAGE_METADATA, ImageMetadataPlugin);
+register_builtin_plugin!(
+    register_hash_calculator,
+    HASH_CALCULATOR,
+    HashCalculatorPlugin
+);
+register_builtin_plugin!(register_media_tagging, MEDIA_TAGGING, MediaTaggingPlugin);
 
 pub fn plugins() -> Vec<&'static dyn BuiltinPlugin> {
     BUILTIN_PLUGINS
@@ -314,5 +494,7 @@ mod tests {
         assert_eq!(ids.len(), manifests.len());
         assert!(ids.contains("archive-extractor"));
         assert!(ids.contains("image-metadata"));
+        assert!(ids.contains("hash-calculator"));
+        assert!(ids.contains("media-tagging"));
     }
 }

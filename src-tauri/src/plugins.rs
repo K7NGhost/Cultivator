@@ -29,7 +29,8 @@ use sqlx::{
     Row, SqlitePool,
 };
 #[cfg(feature = "python-plugins")]
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader};
+use std::io::Write;
 #[cfg(feature = "python-plugins")]
 use std::thread::ThreadId;
 use std::{
@@ -65,6 +66,9 @@ const LEGACY_DEMO_PLUGIN_IDS: &[&str] = &[
 ];
 const LEGACY_DEMO_ARTIFACT_KINDS: &[&str] = &["file_metadata", "text_sample"];
 const MEDIA_PREVIEW_MAX_DIMENSION: u32 = 1_600;
+const MEDIA_TAGGING_MODEL_ID: &str = "Salesforce/blip-image-captioning-base";
+const MEDIA_TAGGING_PACKAGES: &[&str] = &["torch", "transformers"];
+const MEDIA_TAGGING_PYTHON: &str = include_str!("plugins/builtin/media_tagging_inference.py");
 const MEDIA_PREVIEW_PYTHON: &str = r#"
 import struct
 import sys
@@ -1557,6 +1561,38 @@ pub async fn render_media_thumbnail(
     .map_err(|error| format!("Media preview worker failed: {error}"))?
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaTaggingStatus {
+    /// True once torch/transformers are importable in the bundled runtime.
+    /// False the very first time a user tries the feature.
+    pub packages_installed: bool,
+    /// True once the model weights appear present in the on-disk cache.
+    /// A best-effort check (directory presence, not a full integrity check)
+    /// used only to decide whether the frontend needs to show a download
+    /// consent dialog before running the plugin.
+    pub model_cached: bool,
+}
+
+/// Reports whether running Media Tagging would need to download anything,
+/// without triggering any download itself. The frontend uses this to decide
+/// whether to show a one-time "this will download ~300MB" consent dialog.
+pub async fn get_media_tagging_status(app_handle: AppHandle) -> Result<MediaTaggingStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = resolve_python_runtime(&app_handle)?;
+        let packages_installed = media_tagging_packages_installed(&runtime);
+        let cache_dir = media_tagging_cache_dir(&app_handle)?;
+        let model_cached = media_tagging_model_cached(&cache_dir);
+
+        Ok(MediaTaggingStatus {
+            packages_installed,
+            model_cached,
+        })
+    })
+    .await
+    .map_err(|error| format!("Media tagging status check failed: {error}"))?
+}
+
 fn render_media_thumbnail_file(
     python_runtime: &PythonRuntime,
     case_database_path: &str,
@@ -1665,6 +1701,213 @@ fn render_media_thumbnail_file(
     }
 
     Ok(cached_path.to_string_lossy().to_string())
+}
+
+fn configure_python_command(command: &mut ProcessCommand, runtime: &PythonRuntime) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Media tagging runs in the background, including in release builds.
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    if let Some(python_home) = &runtime.home {
+        command.env("PYTHONHOME", python_home);
+    }
+
+    command.env("PYTHONDONTWRITEBYTECODE", "1");
+    apply_python_library_path(command, &runtime.library_paths);
+}
+
+/// Checks whether the media tagging dependencies (torch, transformers) are
+/// importable in the bundled runtime. Deliberately separate from the
+/// Pillow/pillow-heif install that runs eagerly for every user: these
+/// packages are only pulled in the first time someone actually runs the
+/// Media Tagging plugin.
+fn media_tagging_packages_installed(runtime: &PythonRuntime) -> bool {
+    let mut check_command = ProcessCommand::new(&runtime.executable);
+    configure_python_command(&mut check_command, runtime);
+    check_command
+        .arg("-I")
+        .arg("-B")
+        .arg("-c")
+        .arg("import torch, transformers");
+
+    check_command
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// The on-disk directory `huggingface_hub` caches a model's snapshot under
+/// when `HF_HOME` points at our cache dir, e.g.
+/// `<cache_dir>/hub/models--Salesforce--blip-image-captioning-base`. Used
+/// only for a lightweight "is this already downloaded" check surfaced to
+/// the frontend before it asks the user to confirm a download — never as
+/// the source of truth for whether the model can actually be loaded.
+fn media_tagging_model_cache_marker(cache_dir: &Path) -> PathBuf {
+    let marker_name = format!("models--{}", MEDIA_TAGGING_MODEL_ID.replace('/', "--"));
+    cache_dir.join("hub").join(marker_name)
+}
+
+fn media_tagging_model_cached(cache_dir: &Path) -> bool {
+    let marker = media_tagging_model_cache_marker(cache_dir);
+    fs::read_dir(&marker)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
+
+fn ensure_media_tagging_packages(runtime: &PythonRuntime) -> Result<(), String> {
+    if media_tagging_packages_installed(runtime) {
+        return Ok(());
+    }
+
+    let mut install_command = ProcessCommand::new(&runtime.executable);
+    configure_python_command(&mut install_command, runtime);
+    install_command
+        .arg("-I")
+        .arg("-B")
+        .arg("-m")
+        .arg("pip")
+        .arg("install")
+        .arg("--disable-pip-version-check")
+        .arg("--no-warn-script-location");
+    for package in MEDIA_TAGGING_PACKAGES {
+        install_command.arg(package);
+    }
+
+    let output = install_command.output().map_err(|error| {
+        format!(
+            "Failed to install media tagging dependencies '{}': {error}",
+            runtime.executable.display()
+        )
+    })?;
+
+    if !output.status.success() {
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        let diagnostics = diagnostics.trim();
+        return Err(if diagnostics.is_empty() {
+            "Failed to install media tagging dependencies (torch, transformers)."
+                .to_string()
+        } else {
+            format!("Failed to install media tagging dependencies: {diagnostics}")
+        });
+    }
+
+    Ok(())
+}
+
+fn media_tagging_cache_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    let mut dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    dir.push("models");
+    dir.push("huggingface");
+    fs::create_dir_all(&dir).map_err(|error| {
+        format!(
+            "Failed to create media tagging model cache '{}': {error}",
+            dir.display()
+        )
+    })?;
+
+    Ok(dir)
+}
+
+#[derive(Deserialize)]
+struct MediaCaptionResultRaw {
+    path: String,
+    #[serde(default)]
+    caption: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// Runs one batch of images through the local captioning model. Errors
+/// returned from here (missing runtime, failed dependency install, failed
+/// model load) are fatal for the whole plugin job, matching the guide's
+/// contract that a systemic failure commits nothing. A single image that
+/// fails to caption is instead reported per-entry via `error` so the rest
+/// of the batch still succeeds.
+fn run_media_captioning_batch(
+    app_handle: &AppHandle,
+    paths: &[String],
+) -> Result<Vec<builtin::MediaCaptionResult>, String> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let runtime = resolve_python_runtime(app_handle)?;
+    ensure_media_tagging_packages(&runtime)?;
+    let cache_dir = media_tagging_cache_dir(app_handle)?;
+    let request = serde_json::json!({
+        "modelId": MEDIA_TAGGING_MODEL_ID,
+        "cacheDir": cache_dir.to_string_lossy(),
+        "paths": paths,
+    });
+    let request_text = serde_json::to_string(&request)
+        .map_err(|error| format!("Failed to encode media tagging request: {error}"))?;
+
+    let mut command = ProcessCommand::new(&runtime.executable);
+    configure_python_command(&mut command, &runtime);
+    command
+        .arg("-I")
+        .arg("-B")
+        .arg("-c")
+        .arg(MEDIA_TAGGING_PYTHON)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "Failed to start media tagging model '{}': {error}",
+            runtime.executable.display()
+        )
+    })?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "Failed to open media tagging stdin.".to_string())?;
+        stdin
+            .write_all(request_text.as_bytes())
+            .map_err(|error| format!("Failed to send media tagging request: {error}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("Media tagging process failed: {error}"))?;
+
+    if !output.status.success() {
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        let diagnostics = diagnostics.trim();
+        return Err(if diagnostics.is_empty() {
+            "Media tagging failed to run.".to_string()
+        } else {
+            format!("Media tagging failed: {diagnostics}")
+        });
+    }
+
+    let stdout_text = String::from_utf8_lossy(&output.stdout);
+    let last_line = stdout_text
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default();
+    let raw_results: Vec<MediaCaptionResultRaw> = serde_json::from_str(last_line)
+        .map_err(|error| format!("Failed to parse media tagging output: {error}"))?;
+
+    Ok(raw_results
+        .into_iter()
+        .map(|raw| builtin::MediaCaptionResult {
+            path: raw.path,
+            caption: raw.caption,
+            error: raw.error,
+        })
+        .collect())
 }
 
 pub async fn remove_datasource(
@@ -1945,6 +2188,7 @@ pub async fn run_datasource_plugins(
     let pool = open_case_database(&case_database_path).await?;
 
     ensure_plugin_tables(&pool).await?;
+    ensure_file_hash_table(&pool).await?;
 
     let mut datasource = load_datasource_for_plugins(&pool, &datasource_id).await?;
     let plugin_map = {
@@ -2255,6 +2499,7 @@ async fn run_builtin_plugin_stage(
     let progress_app_handle = app_handle.clone();
     let progress_run_id = run_id.unwrap_or_default().to_string();
     let progress_plugin_id = plugin_id.clone();
+    let caption_app_handle = app_handle.clone();
     let output = tauri::async_runtime::spawn_blocking(move || {
         let mut reporter = |progress: builtin::BuiltinPluginProgress| {
             if progress.total == 0 && progress.completed == 0 && progress.message.is_none() {
@@ -2273,6 +2518,7 @@ async fn run_builtin_plugin_stage(
             );
         };
         let cancellation = || is_plugin_run_cancelled(Some(&progress_run_id)).unwrap_or(false);
+        let mut caption_batch = |paths: &[String]| run_media_captioning_batch(&caption_app_handle, paths);
         let mut context = builtin::BuiltinPluginContext::new(
             execution_paths,
             output_root,
@@ -2280,6 +2526,7 @@ async fn run_builtin_plugin_stage(
             related_manifests,
             &mut reporter,
             &cancellation,
+            &mut caption_batch,
         );
 
         plugin.run(&mut context)?;
@@ -2317,6 +2564,14 @@ async fn run_builtin_plugin_stage(
 
             if let Some(gallery) = effects.media {
                 replace_media_gallery_items(pool, &job.id, &datasource.id, &gallery).await?;
+            }
+
+            if let Some(hashes) = effects.file_hashes {
+                upsert_file_hashes(pool, &hashes).await?;
+            }
+
+            if let Some(updates) = effects.media_tag_updates {
+                apply_media_tag_updates(pool, &job.id, &plugin_id, &datasource.id, &updates).await?;
             }
 
             for path in effects.derived_paths {
@@ -5215,6 +5470,92 @@ async fn ensure_file_tag_table(pool: &SqlitePool) -> Result<(), String> {
     Ok(())
 }
 
+async fn ensure_file_hash_table(pool: &SqlitePool) -> Result<(), String> {
+    sqlx::query(
+        r#"
+          CREATE TABLE IF NOT EXISTS file_hashes (
+            id TEXT PRIMARY KEY,
+            file_path TEXT NOT NULL,
+            file_size INTEGER,
+            file_modified_ms INTEGER,
+            md5 TEXT NOT NULL,
+            sha1 TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            hashed_at TEXT NOT NULL,
+            UNIQUE(file_path)
+          )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| format!("Failed to create file_hashes table: {error}"))?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_file_hashes_file_path ON file_hashes(file_path)")
+        .execute(pool)
+        .await
+        .map_err(|error| format!("Failed to create file_hashes index: {error}"))?;
+
+    Ok(())
+}
+
+async fn upsert_file_hashes(
+    pool: &SqlitePool,
+    hashes: &[builtin::BuiltinFileHash],
+) -> Result<(), String> {
+    if hashes.is_empty() {
+        return Ok(());
+    }
+
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| format!("Failed to start file hash update: {error}"))?;
+    let hashed_at = now_iso_like();
+
+    for hash in hashes {
+        sqlx::query(
+            r#"
+              INSERT INTO file_hashes (
+                id,
+                file_path,
+                file_size,
+                file_modified_ms,
+                md5,
+                sha1,
+                sha256,
+                hashed_at
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+              ON CONFLICT(file_path) DO UPDATE SET
+                file_size = excluded.file_size,
+                file_modified_ms = excluded.file_modified_ms,
+                md5 = excluded.md5,
+                sha1 = excluded.sha1,
+                sha256 = excluded.sha256,
+                hashed_at = excluded.hashed_at
+            "#,
+        )
+        .bind(create_id("file-hash"))
+        .bind(&hash.file_path)
+        .bind(hash.file_size.map(|size| size as i64))
+        .bind(hash.file_modified_ms.map(|modified| modified as i64))
+        .bind(&hash.md5)
+        .bind(&hash.sha1)
+        .bind(&hash.sha256)
+        .bind(&hashed_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("Failed to upsert file hash: {error}"))?;
+    }
+
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Failed to finish file hash update: {error}"))?;
+
+    Ok(())
+}
+
 fn normalize_case_database_path(path: &str) -> String {
     path.replace('\\', "/")
 }
@@ -5605,6 +5946,99 @@ async fn replace_media_gallery_items(
         .commit()
         .await
         .map_err(|error| format!("Failed to finish media gallery update: {error}"))?;
+
+    Ok(())
+}
+
+/// Updates existing `media_gallery_items` rows in place with a generated
+/// caption/tags, keyed by path. Unlike `replace_media_gallery_items`, this
+/// never deletes or inserts rows — Media Tagging doesn't own width/height/
+/// thumbnail data, so it must not stomp on Image Metadata's results. A path
+/// with no existing row (Image Metadata hasn't scanned it yet) is skipped
+/// and reported via a job log rather than silently dropped.
+async fn apply_media_tag_updates(
+    pool: &SqlitePool,
+    job_id: &str,
+    plugin_id: &str,
+    datasource_id: &str,
+    updates: &[builtin::BuiltinMediaTagUpdate],
+) -> Result<(), String> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|error| format!("Failed to start media tag update: {error}"))?;
+    let updated_at = now_iso_like();
+    let mut skipped = 0u64;
+
+    for update in updates {
+        let row = sqlx::query(
+            r#"
+              SELECT id, payload
+              FROM media_gallery_items
+              WHERE datasource_id = $1
+                AND path = $2
+            "#,
+        )
+        .bind(datasource_id)
+        .bind(&update.path)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|error| format!("Failed to load media gallery item for tagging: {error}"))?;
+
+        let Some(row) = row else {
+            skipped += 1;
+            continue;
+        };
+
+        let id: String = row.get("id");
+        let payload_text: String = row.get("payload");
+        let mut item = serde_json::from_str::<builtin::MediaItem>(&payload_text)
+            .map_err(|error| format!("Failed to read media gallery item for tagging: {error}"))?;
+        item.caption = update.caption.clone();
+        item.tags = update.tags.clone();
+        let payload = serde_json::to_string(&item)
+            .map_err(|error| format!("Failed to serialize tagged media gallery item: {error}"))?;
+
+        sqlx::query(
+            r#"
+              UPDATE media_gallery_items
+              SET payload = $1,
+                  updated_at = $2
+              WHERE id = $3
+            "#,
+        )
+        .bind(payload)
+        .bind(&updated_at)
+        .bind(&id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("Failed to update tagged media gallery item: {error}"))?;
+    }
+
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("Failed to finish media tag update: {error}"))?;
+
+    if skipped > 0 {
+        insert_plugin_logs(
+            pool,
+            job_id,
+            plugin_id,
+            &[PendingPluginLog {
+                level: "warn".to_string(),
+                message: format!(
+                    "Skipped {skipped} tagged image{} with no matching media gallery entry \u{2014} run Image Metadata first.",
+                    if skipped == 1 { "" } else { "s" }
+                ),
+            }],
+        )
+        .await?;
+    }
 
     Ok(())
 }

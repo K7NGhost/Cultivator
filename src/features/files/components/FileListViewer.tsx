@@ -21,9 +21,11 @@ import {
   Bookmark,
   ChevronLeft,
   ChevronRight,
+  Copy,
   File,
   FileCode2,
   FileImage,
+  Fingerprint,
   Flag,
   FolderOpen,
   MessageSquarePlus,
@@ -55,6 +57,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import type { EvidenceDirectoryEntry } from "@/features/evidence/evidence-provider";
+import type { FileHashRecord } from "@/features/files/fileHashRepository";
 import type {
   FileTagGroup,
   FileTagRecord,
@@ -84,6 +87,7 @@ type FileListViewerProps = {
     comment?: string;
   }) => void;
   tagsByPath?: Record<string, FileTagRecord[]>;
+  hashesByPath?: Record<string, FileHashRecord>;
 };
 
 type FileListPageInfo = {
@@ -149,6 +153,25 @@ function getTagsForEntry(
 
 function hasTag(tags: FileTagRecord[], tagName: string) {
   return tags.some((tag) => tag.tagName === tagName);
+}
+
+function getHashForEntry(
+  hashesByPath: Record<string, FileHashRecord>,
+  entry: EvidenceDirectoryEntry,
+) {
+  return hashesByPath[normalizePath(entry.path)];
+}
+
+function formatHashTooltip(hash: FileHashRecord) {
+  return `MD5: ${hash.md5}\nSHA-1: ${hash.sha1}\nSHA-256: ${hash.sha256}`;
+}
+
+async function copyHashesToClipboard(hash: FileHashRecord) {
+  try {
+    await navigator.clipboard.writeText(formatHashTooltip(hash));
+  } catch (caughtError) {
+    console.error("Failed to copy hashes", caughtError);
+  }
 }
 
 function formatPageRange(pageInfo: FileListPageInfo, visibleCount: number) {
@@ -413,7 +436,15 @@ function SortIcon({
   );
 }
 
-function FileNameCell({ row, tags }: { row: FileRow; tags: FileTagRecord[] }) {
+function FileNameCell({
+  row,
+  tags,
+  hash,
+}: {
+  row: FileRow;
+  tags: FileTagRecord[];
+  hash?: FileHashRecord;
+}) {
   const Icon = getEntryIcon(row.entry);
   const visibleTags = tags.slice(0, 2);
   const hiddenTagCount = Math.max(0, tags.length - visibleTags.length);
@@ -425,6 +456,17 @@ function FileNameCell({ row, tags }: { row: FileRow; tags: FileTagRecord[] }) {
         aria-hidden="true"
       />
       <span className="min-w-0 truncate font-medium">{row.name}</span>
+      {hash && (
+        <span
+          className="shrink-0 leading-none"
+          title={formatHashTooltip(hash)}
+        >
+          <Fingerprint
+            className="size-3 text-emerald-600 dark:text-emerald-400"
+            aria-hidden="true"
+          />
+        </span>
+      )}
       {visibleTags.map((tag) => (
         <Badge
           key={tag.tagName}
@@ -518,6 +560,7 @@ export function FileListViewer({
   onSelectEntry,
   onSetTag,
   tagsByPath = {},
+  hashesByPath = {},
 }: FileListViewerProps) {
   const listShellRef = useRef<HTMLElement | null>(null);
   const [tagDialog, setTagDialog] = useState<{
@@ -782,6 +825,7 @@ export function FileListViewer({
                           onSelectEntry={onSelectEntry}
                           onSetTag={onSetTag}
                           tags={getTagsForEntry(tagsByPath, row.entry)}
+                          hash={getHashForEntry(hashesByPath, row.entry)}
                         />
                       );
                     }}
@@ -882,6 +926,7 @@ function FileListRow({
   onSelectEntry,
   onSetTag,
   tags,
+  hash,
 }: {
   row: FileRow;
   selectedEntry: EvidenceDirectoryEntry | null;
@@ -901,6 +946,7 @@ function FileListRow({
     comment?: string;
   }) => void;
   tags: FileTagRecord[];
+  hash?: FileHashRecord;
 }) {
   const sizeLabel = getEntrySizeLabel(row.entry);
   const modifiedLabel = formatModifiedTime(row.entry.modifiedMs);
@@ -953,7 +999,7 @@ function FileListRow({
           }}
         >
           <div className="min-w-0 px-2">
-            <FileNameCell row={row} tags={tags} />
+            <FileNameCell row={row} tags={tags} hash={hash} />
           </div>
           <div className="truncate px-2 text-muted-foreground">{row.path}</div>
           <div className="truncate px-2">{row.type}</div>
@@ -985,6 +1031,17 @@ function FileListRow({
           >
             <FolderOpen className="size-3.5" aria-hidden="true" />
             Open Containing Folder
+          </ContextMenuItem>
+        )}
+        {hash && (
+          <ContextMenuItem
+            className="text-xs"
+            onSelect={() => {
+              void copyHashesToClipboard(hash);
+            }}
+          >
+            <Copy className="size-3.5" aria-hidden="true" />
+            Copy Hashes
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />

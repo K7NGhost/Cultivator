@@ -1,0 +1,11 @@
+id = "json-chat-export"
+name = "JSON Chat Export"
+author = "Cultivator Team"
+version = "1.0.0"
+description = "Parses JSON message, contact, and call-log exports (messages/*.json, contacts/*.json, calls/*.json) into message, contact, and call artifacts, resolving phone numbers to contact names."
+type = "parser"
+target = "other"
+mode = "path_glob"
+path_glob = ["*/messages/*.json", "*/contacts/*.json", "*/calls/*.json"]
+entry = "plugin.py"
+function = "run"

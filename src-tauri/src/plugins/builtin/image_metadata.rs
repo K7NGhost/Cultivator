@@ -51,6 +51,10 @@ pub struct MediaItem {
     pub media_path: String,
     pub thumbnail_path: String,
     pub metadata: Vec<MediaMetadataField>,
+    #[serde(default)]
+    pub caption: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -405,6 +409,8 @@ fn process_media_item(path: &Path) -> Result<Option<MediaItem>, String> {
         media_path: media_path.clone(),
         thumbnail_path: media_path,
         metadata: item_metadata,
+        caption: None,
+        tags: Vec::new(),
     };
 
     Ok(Some(item))

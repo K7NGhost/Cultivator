@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/resizable";
 import { Separator } from "@/components/ui/separator";
 import { useCases } from "@/features/cases/case-provider";
+import { normalizePath as normalizeEvidencePath } from "@/features/cases/caseDatabase";
 import {
   listDataSources,
   notifyDataSourcesChanged,
@@ -48,6 +49,10 @@ import {
   type FileViewSelection,
 } from "@/features/files/components/FileTreeViewer";
 import {
+  listFileHashesForPaths,
+  type FileHashRecord,
+} from "@/features/files/fileHashRepository";
+import {
   listFileTagsForPaths,
   listFileTagSummaries,
   listTaggedFileEntries,
@@ -58,7 +63,9 @@ import {
 } from "@/features/files/fileTagRepository";
 import {
   cancelDatasourcePluginRun,
+  getMediaTaggingStatus,
   listPythonPlugins,
+  mediaTaggingPluginId,
   pluginRunUpdatedDatasourcePaths,
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
@@ -159,6 +166,10 @@ export function FilesPage() {
   >({});
   const [fileTagSummaries, setFileTagSummaries] = useState<FileTagSummary[]>([]);
   const [fileTagRefreshKey, setFileTagRefreshKey] = useState(0);
+  const [fileHashesByPath, setFileHashesByPath] = useState<
+    Record<string, FileHashRecord>
+  >({});
+  const [fileHashRefreshKey, setFileHashRefreshKey] = useState(0);
   const [directoryHistory, setDirectoryHistory] = useState<EvidenceTreeNode[]>(
     [],
   );
@@ -180,6 +191,9 @@ export function FilesPage() {
     useState<DataSourceRecord | null>(null);
   const [availablePlugins, setAvailablePlugins] = useState<PythonPlugin[]>([]);
   const [selectedRunPluginIds, setSelectedRunPluginIds] = useState<string[]>([]);
+  const [mediaTaggingConsentResolver, setMediaTaggingConsentResolver] = useState<
+    ((confirmed: boolean) => void) | null
+  >(null);
   const [pluginOptionValues, setPluginOptionValues] = useState<
     Record<string, Record<string, string>>
   >({});
@@ -388,6 +402,45 @@ export function FilesPage() {
       isCurrent = false;
     };
   }, [activeCase, fileTagRefreshKey, visibleEntries]);
+
+  useEffect(() => {
+    if (!activeCase) {
+      setFileHashesByPath({});
+      return;
+    }
+
+    const visiblePaths = visibleEntries.map((entry) => entry.path);
+
+    if (visiblePaths.length === 0) {
+      setFileHashesByPath({});
+      return;
+    }
+
+    let isCurrent = true;
+
+    listFileHashesForPaths(activeCase.databasePath, visiblePaths)
+      .then((hashesByPath) => {
+        if (isCurrent) {
+          setFileHashesByPath(hashesByPath);
+        }
+      })
+      .catch((caughtError) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        setEntriesError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : String(caughtError),
+        );
+        setFileHashesByPath({});
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeCase, fileHashRefreshKey, visibleEntries]);
 
   useEffect(() => {
     if (!activeCase) {
@@ -1098,17 +1151,57 @@ export function FilesPage() {
     });
   }
 
+  function requestMediaTaggingDownloadConsent(): Promise<boolean> {
+    return new Promise((resolve) => {
+      setMediaTaggingConsentResolver(() => resolve);
+    });
+  }
+
+  function resolveMediaTaggingDownloadConsent(confirmed: boolean) {
+    setMediaTaggingConsentResolver(
+      (current: ((confirmed: boolean) => void) | null) => {
+        current?.(confirmed);
+        return null;
+      },
+    );
+  }
+
   async function runSelectedPlugins() {
     if (!activeCase || !pluginRunDataSource) {
       return;
     }
 
     const runDataSource = pluginRunDataSource;
-    const runPluginIds = selectedRunPluginIds;
+    let runPluginIds = selectedRunPluginIds;
 
     if (runPluginIds.length === 0) {
       setDataSourceError("Select at least one plugin to run.");
       return;
+    }
+
+    if (runPluginIds.includes(mediaTaggingPluginId)) {
+      let isModelReady = false;
+
+      try {
+        const status = await getMediaTaggingStatus();
+        isModelReady = status.packagesInstalled && status.modelCached;
+      } catch {
+        isModelReady = false;
+      }
+
+      if (!isModelReady) {
+        const confirmed = await requestMediaTaggingDownloadConsent();
+
+        if (!confirmed) {
+          runPluginIds = runPluginIds.filter(
+            (pluginId) => pluginId !== mediaTaggingPluginId,
+          );
+
+          if (runPluginIds.length === 0) {
+            return;
+          }
+        }
+      }
     }
 
     setIsRunningPlugins(true);
@@ -1147,6 +1240,7 @@ export function FilesPage() {
       if (pluginRunUpdatedDatasourcePaths(summary)) {
         notifyDataSourcesChanged(activeCase.id);
       }
+      setFileHashRefreshKey((currentKey) => currentKey + 1);
     } catch (caughtError) {
       showPluginRunFailedToast({
         datasourceName: runDataSource.name,
@@ -1351,6 +1445,7 @@ export function FilesPage() {
                   void handleSetFileTag(input);
                 }}
                 tagsByPath={fileTagsByPath}
+                hashesByPath={fileHashesByPath}
               />
             </ResizablePanel>
 
@@ -1367,6 +1462,11 @@ export function FilesPage() {
                 isLoading={isPreviewLoading}
                 onActiveTabChange={setActivePreviewTab}
                 selectedEntry={selectedEntry}
+                selectedEntryHash={
+                  selectedEntry
+                    ? fileHashesByPath[normalizeEvidencePath(selectedEntry.path)]
+                    : undefined
+                }
               />
             </ResizablePanel>
           </ResizablePanelGroup>
@@ -1628,6 +1728,45 @@ export function FilesPage() {
             >
               <Play className="size-3.5" aria-hidden="true" />
               {isRunningPlugins ? "Running" : "Run Plugins"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={mediaTaggingConsentResolver !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            resolveMediaTaggingDownloadConsent(false);
+          }
+        }}
+      >
+        <DialogContent className="w-[min(28rem,calc(100vw-2rem))] rounded-sm p-0">
+          <DialogHeader className="border-b px-3 py-2">
+            <DialogTitle className="text-sm">Download AI Captioning Model</DialogTitle>
+            <DialogDescription className="text-xs">
+              Media Tagging needs a one-time download (~1.5 GB) of a local
+              captioning model. It runs entirely on this machine{" "}
+              &mdash; evidence is never sent anywhere. Continue?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="border-t p-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              className="h-7 rounded-sm px-2 text-xs"
+              onClick={() => resolveMediaTaggingDownloadConsent(false)}
+            >
+              Skip Media Tagging
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              className="h-7 rounded-sm px-2 text-xs"
+              onClick={() => resolveMediaTaggingDownloadConsent(true)}
+            >
+              Download and Run
             </Button>
           </DialogFooter>
         </DialogContent>

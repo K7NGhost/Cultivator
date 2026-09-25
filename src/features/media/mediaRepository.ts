@@ -72,6 +72,8 @@ export async function listFileViewMediaPage(
       mediaPath: entry.path,
       thumbnailPath: entry.path,
       metadata: [{ label: "Detected by", value: "File extension" }],
+      caption: null,
+      tags: [],
     })),
     totalCount: page.totalCount,
     offset: page.offset,

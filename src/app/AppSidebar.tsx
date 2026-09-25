@@ -12,6 +12,7 @@ import {
   Plug,
   Search,
   ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 
 import {
@@ -44,6 +45,7 @@ const navGroups = [
   {
     label: "Analysis",
     items: [
+      { label: "Assistant", path: "/assistant", icon: Sparkles },
       { label: "Plugins", path: "/plugins", icon: Plug },
       { label: "Artifacts", path: "/artifacts", icon: FileSearch },
       { label: "Timeline", path: "/timeline", icon: Clock3 },

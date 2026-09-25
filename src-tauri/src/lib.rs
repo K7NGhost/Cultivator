@@ -703,6 +703,13 @@ async fn render_media_thumbnail(
 }
 
 #[tauri::command]
+async fn get_media_tagging_status(
+    app_handle: tauri::AppHandle,
+) -> Result<plugins::MediaTaggingStatus, String> {
+    plugins::get_media_tagging_status(app_handle).await
+}
+
+#[tauri::command]
 async fn remove_datasource(
     case_database_path: String,
     case_id: String,
@@ -2234,6 +2241,7 @@ pub fn run() {
             delete_plugin_artifacts,
             list_media_gallery,
             render_media_thumbnail,
+            get_media_tagging_status,
             remove_datasource,
             run_datasource_plugins,
             cancel_plugin_run,

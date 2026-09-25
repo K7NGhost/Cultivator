@@ -21,4 +21,6 @@ export type MediaItem = {
     label: string;
     value: string;
   }>;
+  caption?: string | null;
+  tags: string[];
 };
