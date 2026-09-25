@@ -22,8 +22,9 @@ use std::{
     },
     time::{Duration, Instant, UNIX_EPOCH},
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
+mod embeddings;
 mod plugins;
 pub mod preview;
 #[path = "tauri/commands.rs"]
@@ -707,6 +708,22 @@ async fn get_media_tagging_status(
     app_handle: tauri::AppHandle,
 ) -> Result<plugins::MediaTaggingStatus, String> {
     plugins::get_media_tagging_status(app_handle).await
+}
+
+#[tauri::command]
+async fn get_semantic_model_status(
+    app_handle: tauri::AppHandle,
+) -> Result<embeddings::SemanticModelStatus, String> {
+    embeddings::get_semantic_model_status(app_handle).await
+}
+
+#[tauri::command]
+async fn semantic_search(
+    app_handle: tauri::AppHandle,
+    case_database_path: String,
+    text: String,
+) -> Result<embeddings::SemanticSearchResult, String> {
+    embeddings::semantic_search(app_handle, case_database_path, text).await
 }
 
 #[tauri::command]
@@ -2215,6 +2232,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .manage(SearchRegistry::default())
+        .manage(embeddings::EmbeddingWorker::default())
         .invoke_handler(tauri::generate_handler![
             list_directory,
             list_directory_entries,
@@ -2242,6 +2260,8 @@ pub fn run() {
             list_media_gallery,
             render_media_thumbnail,
             get_media_tagging_status,
+            get_semantic_model_status,
+            semantic_search,
             remove_datasource,
             run_datasource_plugins,
             cancel_plugin_run,
@@ -2260,6 +2280,12 @@ pub fn run() {
             list_sqlite_tables,
             read_sqlite_table_rows
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Don't leave a ~2.5 GB model process behind.
+                app_handle.state::<embeddings::EmbeddingWorker>().shutdown();
+            }
+        });
 }

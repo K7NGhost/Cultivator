@@ -1,3 +1,4 @@
+use crate::embeddings;
 #[cfg(feature = "python-plugins")]
 use globset::{GlobBuilder, GlobMatcher};
 #[cfg(feature = "python-plugins")]
@@ -28,9 +29,9 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     Row, SqlitePool,
 };
+use std::io::Write;
 #[cfg(feature = "python-plugins")]
 use std::io::{self, BufRead, BufReader};
-use std::io::Write;
 #[cfg(feature = "python-plugins")]
 use std::thread::ThreadId;
 use std::{
@@ -46,7 +47,7 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
-mod builtin;
+pub(crate) mod builtin;
 mod bundle;
 
 pub use builtin::MediaGallery;
@@ -68,6 +69,7 @@ const LEGACY_DEMO_ARTIFACT_KINDS: &[&str] = &["file_metadata", "text_sample"];
 const MEDIA_PREVIEW_MAX_DIMENSION: u32 = 1_600;
 const MEDIA_TAGGING_MODEL_ID: &str = "Salesforce/blip-image-captioning-base";
 const MEDIA_TAGGING_PACKAGES: &[&str] = &["torch", "transformers"];
+const MEDIA_TAGGING_IMPORT_CHECK: &str = "import torch, transformers";
 const MEDIA_TAGGING_PYTHON: &str = include_str!("plugins/builtin/media_tagging_inference.py");
 const MEDIA_PREVIEW_PYTHON: &str = r#"
 import struct
@@ -499,8 +501,8 @@ struct PluginExecutionOutput {
 
 #[derive(Clone)]
 #[cfg_attr(not(feature = "python-plugins"), allow(dead_code))]
-struct PythonRuntime {
-    executable: PathBuf,
+pub(crate) struct PythonRuntime {
+    pub(crate) executable: PathBuf,
     home: Option<PathBuf>,
     library_paths: Vec<PathBuf>,
 }
@@ -1580,9 +1582,9 @@ pub struct MediaTaggingStatus {
 pub async fn get_media_tagging_status(app_handle: AppHandle) -> Result<MediaTaggingStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let runtime = resolve_python_runtime(&app_handle)?;
-        let packages_installed = media_tagging_packages_installed(&runtime);
-        let cache_dir = media_tagging_cache_dir(&app_handle)?;
-        let model_cached = media_tagging_model_cached(&cache_dir);
+        let packages_installed = python_packages_installed(&runtime, MEDIA_TAGGING_IMPORT_CHECK);
+        let cache_dir = model_cache_dir(&app_handle)?;
+        let model_cached = hf_model_cached(&cache_dir, MEDIA_TAGGING_MODEL_ID);
 
         Ok(MediaTaggingStatus {
             packages_installed,
@@ -1703,11 +1705,11 @@ fn render_media_thumbnail_file(
     Ok(cached_path.to_string_lossy().to_string())
 }
 
-fn configure_python_command(command: &mut ProcessCommand, runtime: &PythonRuntime) {
+pub(crate) fn configure_python_command(command: &mut ProcessCommand, runtime: &PythonRuntime) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // Media tagging runs in the background, including in release builds.
+        // AI model helpers run in the background, including in release builds.
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
@@ -1720,19 +1722,18 @@ fn configure_python_command(command: &mut ProcessCommand, runtime: &PythonRuntim
     apply_python_library_path(command, &runtime.library_paths);
 }
 
-/// Checks whether the media tagging dependencies (torch, transformers) are
-/// importable in the bundled runtime. Deliberately separate from the
-/// Pillow/pillow-heif install that runs eagerly for every user: these
-/// packages are only pulled in the first time someone actually runs the
-/// Media Tagging plugin.
-fn media_tagging_packages_installed(runtime: &PythonRuntime) -> bool {
+/// Checks whether optional AI dependencies are importable in the bundled
+/// runtime. These are deliberately separate from the Pillow/pillow-heif
+/// install that runs eagerly for every user: they are only pulled in the
+/// first time someone actually runs an AI plugin.
+pub(crate) fn python_packages_installed(runtime: &PythonRuntime, import_check: &str) -> bool {
     let mut check_command = ProcessCommand::new(&runtime.executable);
     configure_python_command(&mut check_command, runtime);
     check_command
         .arg("-I")
         .arg("-B")
         .arg("-c")
-        .arg("import torch, transformers");
+        .arg(import_check);
 
     check_command
         .output()
@@ -1740,26 +1741,25 @@ fn media_tagging_packages_installed(runtime: &PythonRuntime) -> bool {
         .unwrap_or(false)
 }
 
-/// The on-disk directory `huggingface_hub` caches a model's snapshot under
-/// when `HF_HOME` points at our cache dir, e.g.
-/// `<cache_dir>/hub/models--Salesforce--blip-image-captioning-base`. Used
-/// only for a lightweight "is this already downloaded" check surfaced to
-/// the frontend before it asks the user to confirm a download — never as
-/// the source of truth for whether the model can actually be loaded.
-fn media_tagging_model_cache_marker(cache_dir: &Path) -> PathBuf {
-    let marker_name = format!("models--{}", MEDIA_TAGGING_MODEL_ID.replace('/', "--"));
-    cache_dir.join("hub").join(marker_name)
-}
-
-fn media_tagging_model_cached(cache_dir: &Path) -> bool {
-    let marker = media_tagging_model_cache_marker(cache_dir);
+/// Whether `huggingface_hub` has a snapshot of `model_id` under our cache
+/// (`<cache_dir>/hub/models--Org--Name`, since `HF_HOME` points there). Used
+/// only to decide whether to ask the user before a download — never as the
+/// source of truth for whether the model can actually be loaded.
+pub(crate) fn hf_model_cached(cache_dir: &Path, model_id: &str) -> bool {
+    let marker = cache_dir
+        .join("hub")
+        .join(format!("models--{}", model_id.replace('/', "--")));
     fs::read_dir(&marker)
         .map(|mut entries| entries.next().is_some())
         .unwrap_or(false)
 }
 
-fn ensure_media_tagging_packages(runtime: &PythonRuntime) -> Result<(), String> {
-    if media_tagging_packages_installed(runtime) {
+pub(crate) fn ensure_python_packages(
+    runtime: &PythonRuntime,
+    import_check: &str,
+    packages: &[&str],
+) -> Result<(), String> {
+    if python_packages_installed(runtime, import_check) {
         return Ok(());
     }
 
@@ -1773,13 +1773,13 @@ fn ensure_media_tagging_packages(runtime: &PythonRuntime) -> Result<(), String> 
         .arg("install")
         .arg("--disable-pip-version-check")
         .arg("--no-warn-script-location");
-    for package in MEDIA_TAGGING_PACKAGES {
+    for package in packages {
         install_command.arg(package);
     }
 
     let output = install_command.output().map_err(|error| {
         format!(
-            "Failed to install media tagging dependencies '{}': {error}",
+            "Failed to install AI dependencies '{}': {error}",
             runtime.executable.display()
         )
     })?;
@@ -1788,17 +1788,20 @@ fn ensure_media_tagging_packages(runtime: &PythonRuntime) -> Result<(), String> 
         let diagnostics = String::from_utf8_lossy(&output.stderr);
         let diagnostics = diagnostics.trim();
         return Err(if diagnostics.is_empty() {
-            "Failed to install media tagging dependencies (torch, transformers)."
-                .to_string()
+            format!(
+                "Failed to install AI dependencies ({}).",
+                packages.join(", ")
+            )
         } else {
-            format!("Failed to install media tagging dependencies: {diagnostics}")
+            format!("Failed to install AI dependencies: {diagnostics}")
         });
     }
 
     Ok(())
 }
 
-fn media_tagging_cache_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
+/// Shared on-disk cache for every local AI model (`HF_HOME`).
+pub(crate) fn model_cache_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
     let mut dir = app_handle
         .path()
         .app_data_dir()
@@ -1807,7 +1810,7 @@ fn media_tagging_cache_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
     dir.push("huggingface");
     fs::create_dir_all(&dir).map_err(|error| {
         format!(
-            "Failed to create media tagging model cache '{}': {error}",
+            "Failed to create AI model cache '{}': {error}",
             dir.display()
         )
     })?;
@@ -1839,8 +1842,8 @@ fn run_media_captioning_batch(
     }
 
     let runtime = resolve_python_runtime(app_handle)?;
-    ensure_media_tagging_packages(&runtime)?;
-    let cache_dir = media_tagging_cache_dir(app_handle)?;
+    ensure_python_packages(&runtime, MEDIA_TAGGING_IMPORT_CHECK, MEDIA_TAGGING_PACKAGES)?;
+    let cache_dir = model_cache_dir(app_handle)?;
     let request = serde_json::json!({
         "modelId": MEDIA_TAGGING_MODEL_ID,
         "cacheDir": cache_dir.to_string_lossy(),
@@ -2496,10 +2499,16 @@ async fn run_builtin_plugin_stage(
         .into_iter()
         .filter(|related| related.id != plugin_id)
         .collect();
+    let index_sources = if plugin.needs_index_sources() {
+        embeddings::load_unindexed_sources(pool, &datasource.id).await?
+    } else {
+        Vec::new()
+    };
     let progress_app_handle = app_handle.clone();
     let progress_run_id = run_id.unwrap_or_default().to_string();
     let progress_plugin_id = plugin_id.clone();
     let caption_app_handle = app_handle.clone();
+    let embed_app_handle = app_handle.clone();
     let output = tauri::async_runtime::spawn_blocking(move || {
         let mut reporter = |progress: builtin::BuiltinPluginProgress| {
             if progress.total == 0 && progress.completed == 0 && progress.message.is_none() {
@@ -2518,15 +2527,23 @@ async fn run_builtin_plugin_stage(
             );
         };
         let cancellation = || is_plugin_run_cancelled(Some(&progress_run_id)).unwrap_or(false);
-        let mut caption_batch = |paths: &[String]| run_media_captioning_batch(&caption_app_handle, paths);
+        let mut caption_batch =
+            |paths: &[String]| run_media_captioning_batch(&caption_app_handle, paths);
+        let mut embed_batch = |texts: &[String]| {
+            embed_app_handle
+                .state::<embeddings::EmbeddingWorker>()
+                .embed(&embed_app_handle, texts)
+        };
         let mut context = builtin::BuiltinPluginContext::new(
             execution_paths,
             output_root,
             options,
             related_manifests,
+            index_sources,
             &mut reporter,
             &cancellation,
             &mut caption_batch,
+            &mut embed_batch,
         );
 
         plugin.run(&mut context)?;
@@ -2571,7 +2588,12 @@ async fn run_builtin_plugin_stage(
             }
 
             if let Some(updates) = effects.media_tag_updates {
-                apply_media_tag_updates(pool, &job.id, &plugin_id, &datasource.id, &updates).await?;
+                apply_media_tag_updates(pool, &job.id, &plugin_id, &datasource.id, &updates)
+                    .await?;
+            }
+
+            if let Some(vectors) = effects.embeddings {
+                embeddings::upsert_embeddings(pool, &vectors).await?;
             }
 
             for path in effects.derived_paths {
@@ -3663,7 +3685,7 @@ fn ensure_python_plugin_directory(app_handle: &AppHandle) -> Result<PathBuf, Str
     Ok(plugin_root)
 }
 
-fn resolve_python_runtime(app_handle: &AppHandle) -> Result<PythonRuntime, String> {
+pub(crate) fn resolve_python_runtime(app_handle: &AppHandle) -> Result<PythonRuntime, String> {
     if let Ok(executable) = std::env::var("PYO3_PYTHON") {
         let executable = PathBuf::from(executable);
 
@@ -5294,7 +5316,7 @@ fn validate_manifest(manifest: &PythonPluginManifest, plugin_dir: &Path) -> Resu
     Ok(())
 }
 
-async fn open_case_database(database_path: &str) -> Result<SqlitePool, String> {
+pub(crate) async fn open_case_database(database_path: &str) -> Result<SqlitePool, String> {
     let options = SqliteConnectOptions::new()
         .filename(database_path)
         .create_if_missing(false)
@@ -5362,7 +5384,7 @@ async fn ensure_datasource_tables(pool: &SqlitePool) -> Result<(), String> {
     Ok(())
 }
 
-async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
+pub(crate) async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
     sqlx::query(
         r#"
           CREATE TABLE IF NOT EXISTS plugin_jobs (

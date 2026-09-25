@@ -46,6 +46,7 @@ import {
 import { buildCultivatorApiReferenceForLlms } from "@/features/artifacts/llmApiReference";
 import { useCases } from "@/features/cases/case-provider";
 import {
+  addDataSourcePlugins,
   listDataSources,
   notifyDataSourcesChanged,
 } from "@/features/datasources/dataSourceRepository";
@@ -75,7 +76,9 @@ import {
   pluginRunUpdatedDatasourcePaths,
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
+import { AddPluginsDialog } from "@/features/plugins/components/AddPluginsDialog";
 import { createPluginRunId } from "@/features/plugins/pluginToasts";
+import { useModelDownloadConsent } from "@/features/plugins/useModelDownloadConsent";
 import type {
   PluginJobRecord,
   PluginLogRecord,
@@ -219,6 +222,10 @@ export function PluginsPage() {
   const [jobs, setJobs] = useState<PluginJobRecord[]>([]);
   const [logs, setLogs] = useState<PluginLogRecord[]>([]);
   const [activeRuns, setActiveRuns] = useState<ActivePluginRun[]>([]);
+  const [addPluginsDatasource, setAddPluginsDatasource] =
+    useState<DataSourceRecord | null>(null);
+  const [isAddingPlugins, setIsAddingPlugins] = useState(false);
+  const { confirmModelDownloads, modelDownloadDialog } = useModelDownloadConsent();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
     useState(false);
@@ -357,8 +364,16 @@ export function PluginsPage() {
     }
   }
 
-  async function runPlugins(datasource: DataSourceRecord) {
+  async function runPlugins(
+    datasource: DataSourceRecord,
+    requestedPluginIds: string[] = datasource.pluginIds,
+  ) {
     if (!activeCase) {
+      return;
+    }
+
+    const pluginIds = await confirmModelDownloads(requestedPluginIds);
+    if (pluginIds.length === 0) {
       return;
     }
 
@@ -366,7 +381,7 @@ export function PluginsPage() {
     const runId = createPluginRunId();
     const activeRun: ActivePluginRun = {
       datasourceId: datasource.id,
-      pluginIds: datasource.pluginIds,
+      pluginIds,
       runId,
       status: "running",
     };
@@ -378,6 +393,7 @@ export function PluginsPage() {
         caseDatabasePath: activeCase.databasePath,
         caseFolderPath: activeCase.folderPath,
         datasourceId: datasource.id,
+        pluginIds,
         runId,
       });
       setJobs((currentJobs) => mergePluginJobs(currentJobs, summary.jobs));
@@ -394,6 +410,39 @@ export function PluginsPage() {
       setActiveRuns((currentRuns) =>
         currentRuns.filter((currentRun) => currentRun.runId !== runId),
       );
+    }
+  }
+
+  /** Saves the chosen plugins on the datasource, then optionally runs just those. */
+  async function addPluginsToDatasource(pluginIds: string[], runAfterAdding: boolean) {
+    if (!activeCase || !addPluginsDatasource || pluginIds.length === 0) {
+      return;
+    }
+
+    const datasource = addPluginsDatasource;
+    setIsAddingPlugins(true);
+
+    try {
+      await addDataSourcePlugins({
+        caseDatabasePath: activeCase.databasePath,
+        caseId: activeCase.id,
+        dataSourceId: datasource.id,
+        plugins: pluginIds.map((pluginId) => ({
+          id: pluginId,
+          name: pluginMap.get(pluginId)?.name ?? pluginId,
+        })),
+      });
+      setAddPluginsDatasource(null);
+      await refreshPluginsPage({ showLoading: false });
+    } catch (caughtError) {
+      setLoadState({ error: getErrorMessage(caughtError), isLoading: false });
+      return;
+    } finally {
+      setIsAddingPlugins(false);
+    }
+
+    if (runAfterAdding) {
+      await runPlugins(datasource, pluginIds);
     }
   }
 
@@ -1085,7 +1134,7 @@ export function PluginsPage() {
                       <TableHead className="h-7 w-[260px] px-2">Selected Plugins</TableHead>
                       <TableHead className="h-7 w-[110px] px-2">Last Status</TableHead>
                       <TableHead className="h-7 w-[160px] px-2">Last Run</TableHead>
-                      <TableHead className="h-7 w-[180px] px-2">Action</TableHead>
+                      <TableHead className="h-7 w-[200px] px-2">Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1146,22 +1195,36 @@ export function PluginsPage() {
                                   : "Cancel"}
                               </Button>
                             ) : (
-                              <Button
-                                type="button"
-                                size="xs"
-                                className="h-7 rounded-sm px-2 text-xs"
-                                disabled={
-                                  !activeCase ||
-                                  datasource.pluginIds.length === 0 ||
-                                  isRunning
-                                }
-                                onClick={() => {
-                                  void runPlugins(datasource);
-                                }}
-                              >
-                                <Play className="size-3.5" aria-hidden="true" />
-                                Run plugins
-                              </Button>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="xs"
+                                  className="h-7 rounded-sm px-2 text-xs"
+                                  disabled={!activeCase}
+                                  title="Add more plugins to this datasource"
+                                  onClick={() => setAddPluginsDatasource(datasource)}
+                                >
+                                  <Plus className="size-3.5" aria-hidden="true" />
+                                  Add
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="xs"
+                                  className="h-7 rounded-sm px-2 text-xs"
+                                  disabled={
+                                    !activeCase ||
+                                    datasource.pluginIds.length === 0 ||
+                                    isRunning
+                                  }
+                                  onClick={() => {
+                                    void runPlugins(datasource);
+                                  }}
+                                >
+                                  <Play className="size-3.5" aria-hidden="true" />
+                                  Run plugins
+                                </Button>
+                              </div>
                             )}
                           </TableCell>
                         </TableRow>
@@ -1935,6 +1998,19 @@ export function PluginsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AddPluginsDialog
+        key={addPluginsDatasource?.id ?? "closed"}
+        canRun={!activeRuns.some((run) => run.datasourceId === addPluginsDatasource?.id)}
+        datasource={addPluginsDatasource}
+        isAdding={isAddingPlugins}
+        plugins={plugins}
+        onAdd={(pluginIds, runAfterAdding) => {
+          void addPluginsToDatasource(pluginIds, runAfterAdding);
+        }}
+        onClose={() => setAddPluginsDatasource(null)}
+      />
+      {modelDownloadDialog}
     </div>
   );
 }

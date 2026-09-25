@@ -69,6 +69,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useRevealRequest } from "@/app/reveal";
 import { useCases } from "@/features/cases/case-provider";
 import { listDataSources } from "@/features/datasources/dataSourceRepository";
 import type { DataSourceRecord } from "@/features/datasources/types";
@@ -928,6 +929,35 @@ export function ArtifactsPage() {
   useEffect(() => {
     void refreshArtifacts();
   }, [activeCase?.id]);
+
+  // An artifact another page asked to show (e.g. an Assistant result).
+  const [pendingArtifactId, setPendingArtifactId] = useState<string | null>(null);
+
+  useRevealRequest("artifact", (target) => {
+    setSelectedDatasourceId("all");
+    setPendingArtifactId(target.artifactId);
+
+    // Plugins may have produced it after this page last loaded.
+    if (!artifacts.some((artifact) => artifact.id === target.artifactId)) {
+      void refreshArtifacts();
+    }
+  });
+
+  useEffect(() => {
+    if (!pendingArtifactId || loadState.isLoading) {
+      return;
+    }
+
+    const node = findArtifactNodeContainingArtifact(artifactTree, pendingArtifactId);
+
+    if (node) {
+      setSelectedArtifactNodeId(node.id);
+      setSelectedArtifactId(pendingArtifactId);
+    } else {
+      setLoadState({ error: "That artifact is no longer in this case.", isLoading: false });
+    }
+    setPendingArtifactId(null);
+  }, [artifactTree, loadState.isLoading, pendingArtifactId]);
 
   async function removeArtifacts() {
     if (!activeCase || !removalTarget) {

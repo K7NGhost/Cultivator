@@ -2,6 +2,7 @@ mod archive_extractor;
 mod hash_calculator;
 mod image_metadata;
 mod media_tagging;
+mod semantic_index;
 
 use crate::plugins::PythonPluginManifest;
 use serde_json::Value as JsonValue;
@@ -45,6 +46,17 @@ pub struct MediaCaptionResult {
     pub error: Option<String>,
 }
 
+/// Text the runner found that isn't in the semantic index yet.
+pub struct BuiltinIndexSource {
+    pub hash: String,
+    pub text: String,
+}
+
+pub struct BuiltinEmbedding {
+    pub hash: String,
+    pub vector: Vec<f32>,
+}
+
 pub(crate) struct BuiltinPluginEffects {
     pub logs: Vec<(String, String)>,
     pub artifacts: Option<Vec<BuiltinArtifact>>,
@@ -52,17 +64,25 @@ pub(crate) struct BuiltinPluginEffects {
     pub derived_paths: Vec<String>,
     pub file_hashes: Option<Vec<BuiltinFileHash>>,
     pub media_tag_updates: Option<Vec<BuiltinMediaTagUpdate>>,
+    pub embeddings: Option<Vec<BuiltinEmbedding>>,
 }
+
+pub(crate) type CaptionBatch<'a> =
+    &'a mut dyn FnMut(&[String]) -> Result<Vec<MediaCaptionResult>, String>;
+pub(crate) type EmbedBatch<'a> = &'a mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>, String>;
 
 pub struct BuiltinPluginContext<'a> {
     pub paths: Vec<String>,
     pub output_root: Option<PathBuf>,
     pub options: JsonValue,
     pub related_manifests: Vec<PythonPluginManifest>,
+    /// Filled by the runner only for plugins whose `needs_index_sources()` is true.
+    pub index_sources: Vec<BuiltinIndexSource>,
     progress: &'a mut dyn FnMut(BuiltinPluginProgress),
     #[allow(dead_code)]
     cancelled: &'a dyn Fn() -> bool,
-    caption_batch: &'a mut dyn FnMut(&[String]) -> Result<Vec<MediaCaptionResult>, String>,
+    caption_batch: CaptionBatch<'a>,
+    embed_batch: EmbedBatch<'a>,
     effects: BuiltinPluginEffects,
 }
 
@@ -73,23 +93,28 @@ pub struct BuiltinPluginProgress {
 }
 
 impl<'a> BuiltinPluginContext<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         paths: Vec<String>,
         output_root: Option<PathBuf>,
         options: JsonValue,
         related_manifests: Vec<PythonPluginManifest>,
+        index_sources: Vec<BuiltinIndexSource>,
         progress: &'a mut dyn FnMut(BuiltinPluginProgress),
         cancelled: &'a dyn Fn() -> bool,
-        caption_batch: &'a mut dyn FnMut(&[String]) -> Result<Vec<MediaCaptionResult>, String>,
+        caption_batch: CaptionBatch<'a>,
+        embed_batch: EmbedBatch<'a>,
     ) -> Self {
         Self {
             paths,
             output_root,
             options,
             related_manifests,
+            index_sources,
             progress,
             cancelled,
             caption_batch,
+            embed_batch,
             effects: BuiltinPluginEffects {
                 logs: Vec::new(),
                 artifacts: None,
@@ -97,6 +122,7 @@ impl<'a> BuiltinPluginContext<'a> {
                 derived_paths: Vec::new(),
                 file_hashes: None,
                 media_tag_updates: None,
+                embeddings: None,
             },
         }
     }
@@ -161,6 +187,19 @@ impl<'a> BuiltinPluginContext<'a> {
         (self.caption_batch)(paths)
     }
 
+    /// Embeds texts with the shared local semantic model (one vector per text,
+    /// in order), loading or downloading the model on first use.
+    pub fn embed_texts(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        (self.embed_batch)(texts)
+    }
+
+    pub fn add_embedding(&mut self, embedding: BuiltinEmbedding) {
+        self.effects
+            .embeddings
+            .get_or_insert_with(Vec::new)
+            .push(embedding);
+    }
+
     pub(crate) fn into_effects(self) -> BuiltinPluginEffects {
         self.effects
     }
@@ -179,6 +218,12 @@ pub trait BuiltinPlugin: Send + Sync {
         None
     }
 
+    /// When true, the runner fills `context.index_sources` with this
+    /// datasource's messages and captions that aren't semantically indexed yet.
+    fn needs_index_sources(&self) -> bool {
+        false
+    }
+
     fn run(&self, context: &mut BuiltinPluginContext<'_>) -> Result<(), String>;
 }
 
@@ -186,6 +231,7 @@ struct ArchiveExtractorPlugin;
 struct ImageMetadataPlugin;
 struct HashCalculatorPlugin;
 struct MediaTaggingPlugin;
+struct SemanticIndexPlugin;
 
 impl BuiltinPlugin for ArchiveExtractorPlugin {
     fn manifest(&self) -> PythonPluginManifest {
@@ -400,6 +446,73 @@ impl BuiltinPlugin for MediaTaggingPlugin {
     }
 }
 
+impl BuiltinPlugin for SemanticIndexPlugin {
+    fn manifest(&self) -> PythonPluginManifest {
+        semantic_index::manifest()
+    }
+
+    /// After Media Tagging (150), so photo captions exist to be indexed.
+    fn execution_order(&self) -> i32 {
+        200
+    }
+
+    fn needs_index_sources(&self) -> bool {
+        true
+    }
+
+    fn run(&self, context: &mut BuiltinPluginContext<'_>) -> Result<(), String> {
+        let sources = std::mem::take(&mut context.index_sources);
+        let total = sources.len() as u64;
+
+        if total == 0 {
+            context.log(
+                "info",
+                "Nothing new to index: every message and photo caption is already indexed (or none exist yet — run a message parser and Media Tagging first).",
+            );
+            return Ok(());
+        }
+
+        context.progress(
+            0,
+            total,
+            "Loading AI model (the first run downloads about 2.3 GB)",
+        );
+        let mut indexed = 0u64;
+
+        for chunk in sources.chunks(semantic_index::BATCH_SIZE) {
+            if context.is_cancelled() {
+                break;
+            }
+
+            let texts = chunk
+                .iter()
+                .map(|source| source.text.clone())
+                .collect::<Vec<_>>();
+            let vectors = context.embed_texts(&texts)?;
+            for (source, vector) in chunk.iter().zip(vectors) {
+                context.add_embedding(BuiltinEmbedding {
+                    hash: source.hash.clone(),
+                    vector,
+                });
+            }
+
+            indexed += chunk.len() as u64;
+            context.progress(
+                indexed,
+                total,
+                format!("Indexed {indexed} of {total} items"),
+            );
+        }
+
+        context.log(
+            "info",
+            format!("Indexed {indexed} messages and photo captions for meaning search."),
+        );
+
+        Ok(())
+    }
+}
+
 static BUILTIN_PLUGINS: OnceLock<Mutex<Vec<&'static dyn BuiltinPlugin>>> = OnceLock::new();
 
 pub(crate) fn register(plugin: &'static dyn BuiltinPlugin) {
@@ -448,6 +561,12 @@ impl MediaTaggingPlugin {
     }
 }
 
+impl SemanticIndexPlugin {
+    const fn new() -> Self {
+        Self
+    }
+}
+
 register_builtin_plugin!(
     register_archive_extractor,
     ARCHIVE_EXTRACTOR,
@@ -460,6 +579,7 @@ register_builtin_plugin!(
     HashCalculatorPlugin
 );
 register_builtin_plugin!(register_media_tagging, MEDIA_TAGGING, MediaTaggingPlugin);
+register_builtin_plugin!(register_semantic_index, SEMANTIC_INDEX, SemanticIndexPlugin);
 
 pub fn plugins() -> Vec<&'static dyn BuiltinPlugin> {
     BUILTIN_PLUGINS
@@ -496,5 +616,6 @@ mod tests {
         assert!(ids.contains("image-metadata"));
         assert!(ids.contains("hash-calculator"));
         assert!(ids.contains("media-tagging"));
+        assert!(ids.contains("semantic-index"));
     }
 }

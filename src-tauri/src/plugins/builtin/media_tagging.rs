@@ -14,10 +14,10 @@ const IMAGE_EXTENSIONS: &[&str] = &[
 ];
 
 const STOPWORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "of", "in", "on", "at", "to", "with", "is", "are",
-    "was", "were", "this", "that", "these", "those", "it", "its", "as", "by", "for", "from",
-    "there", "their", "his", "her", "some", "several", "into", "over", "under", "near", "very",
-    "two", "three", "four", "five",
+    "a", "an", "the", "and", "or", "but", "of", "in", "on", "at", "to", "with", "is", "are", "was",
+    "were", "this", "that", "these", "those", "it", "its", "as", "by", "for", "from", "there",
+    "their", "his", "her", "some", "several", "into", "over", "under", "near", "very", "two",
+    "three", "four", "five",
 ];
 
 pub fn manifest() -> PythonPluginManifest {
@@ -106,10 +106,7 @@ mod tests {
     fn derives_deduplicated_content_tags_from_a_caption() {
         let tags = derive_tags("a man and a woman sitting on a bench in the park");
 
-        assert_eq!(
-            tags,
-            vec!["man", "woman", "sitting", "bench", "park"]
-        );
+        assert_eq!(tags, vec!["man", "woman", "sitting", "bench", "park"]);
     }
 
     #[test]
