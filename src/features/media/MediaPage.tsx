@@ -14,6 +14,7 @@ import {
   FolderSearch,
   Images,
   RefreshCw,
+  Search,
   Video,
 } from "lucide-react";
 import ReactPlayer from "react-player";
@@ -26,6 +27,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import {
   Sheet,
@@ -111,6 +113,7 @@ export function MediaPage() {
   const [loadingMoreType, setLoadingMoreType] = useState<
     "image" | "video" | null
   >(null);
+  const [searchQuery, setSearchQuery] = useState("");
   useEffect(() => {
     if (!activeCase) {
       setDataSources([]);
@@ -272,6 +275,15 @@ export function MediaPage() {
   }, [activeCase, dataSources, mediaSource, refreshKey, selectedDataSourceId]);
 
   const totalMedia = gallery.photos.length + gallery.videos.length;
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+  const filteredPhotos = useMemo(
+    () => filterMediaItems(gallery.photos, normalizedSearchQuery),
+    [gallery.photos, normalizedSearchQuery],
+  );
+  const filteredVideos = useMemo(
+    () => filterMediaItems(gallery.videos, normalizedSearchQuery),
+    [gallery.videos, normalizedSearchQuery],
+  );
   const handleSelectItem = (item: MediaItem) => {
     setSelectedItem(item);
 
@@ -418,10 +430,10 @@ export function MediaPage() {
         defaultValue="photos"
         className="flex min-h-0 flex-1 flex-col gap-0"
       >
-        <section className="flex h-8 shrink-0 items-center justify-between border-b px-2">
+        <section className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
           <TabsList
             variant="line"
-            className="h-7 rounded-none p-0"
+            className="h-7 shrink-0 rounded-none p-0"
             aria-label="Media gallery"
           >
             <TabsTrigger value="photos" className="h-7 rounded-none px-2 text-xs">
@@ -433,7 +445,19 @@ export function MediaPage() {
               Videos
             </TabsTrigger>
           </TabsList>
-          <div className="truncate text-[11px] text-muted-foreground">
+          <div className="relative w-56 max-w-[40%] shrink-0">
+            <Search
+              className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <Input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search name, caption, tags"
+              className="h-6 rounded-sm pl-6 text-[11px]"
+            />
+          </div>
+          <div className="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground">
             {activeCase
               ? isLoading
                 ? "Loading media gallery..."
@@ -449,12 +473,14 @@ export function MediaPage() {
             caseDatabasePath={activeCase?.databasePath ?? null}
             title="Photo Gallery"
             icon={FileImage}
-            tiles={gallery.photos}
+            tiles={filteredPhotos}
             detailTitle="Image Details"
             emptyText={
-              mediaSource === "plugin"
-                ? "No byte-detected images found. Run the Image Metadata plugin from Plugins."
-                : "No files with image extensions were found in this datasource."
+              normalizedSearchQuery
+                ? "No images match your search."
+                : mediaSource === "plugin"
+                  ? "No byte-detected images found. Run the Image Metadata plugin from Plugins."
+                  : "No files with image extensions were found in this datasource."
             }
             isLoading={isLoading}
             isLoadingMore={loadingMoreType === "image"}
@@ -470,12 +496,14 @@ export function MediaPage() {
             caseDatabasePath={activeCase?.databasePath ?? null}
             title="Video Gallery"
             icon={Video}
-            tiles={gallery.videos}
+            tiles={filteredVideos}
             detailTitle="Video Details"
             emptyText={
-              mediaSource === "plugin"
-                ? "No byte-detected videos found. Run the Image Metadata plugin from Plugins."
-                : "No files with video extensions were found in this datasource."
+              normalizedSearchQuery
+                ? "No videos match your search."
+                : mediaSource === "plugin"
+                  ? "No byte-detected videos found. Run the Image Metadata plugin from Plugins."
+                  : "No files with video extensions were found in this datasource."
             }
             isLoading={isLoading}
             isLoadingMore={loadingMoreType === "video"}
@@ -819,6 +847,25 @@ function MediaDetailsPanel({
             <DetailRow label="Size" value={formatBytes(item.size)} />
             <DetailRow label="Modified" value={formatModifiedTime(item.modifiedMs)} />
             <DetailRow label="Path" value={item.path} />
+            <DetailRow label="Caption" value={item.caption ?? "Not tagged yet"} />
+            {item.tags.length > 0 && (
+              <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-2 border-b pb-1">
+                <div className="min-w-0 break-words text-[11px] text-muted-foreground">
+                  Tags
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {item.tags.map((tag) => (
+                    <Badge
+                      key={tag}
+                      variant="secondary"
+                      className="h-4 rounded-sm px-1 text-[10px]"
+                    >
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
             {item.metadata.map((field, index) => (
               <DetailRow
                 key={`${index}:${field.label}`}
@@ -898,6 +945,20 @@ function formatModifiedTime(modifiedMs: number | null | undefined) {
     dateStyle: "short",
     timeStyle: "short",
   }).format(new Date(modifiedMs));
+}
+
+function filterMediaItems(items: MediaItem[], normalizedQuery: string) {
+  if (!normalizedQuery) {
+    return items;
+  }
+
+  return items.filter((item) => {
+    const haystack = [item.name, item.caption ?? "", ...item.tags]
+      .join(" ")
+      .toLowerCase();
+
+    return haystack.includes(normalizedQuery);
+  });
 }
 
 function normalizeMediaGallery(gallery: MediaGalleryResult): MediaGalleryResult {

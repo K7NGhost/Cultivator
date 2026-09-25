@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { EvidenceDirectoryEntry } from "@/features/evidence/evidence-provider";
+import type { FileHashRecord } from "@/features/files/fileHashRepository";
 import { cn } from "@/lib/utils";
 
 export type FileFormatPreview = {
@@ -28,7 +29,25 @@ type ApplicationPreviewViewerProps = {
   filePreview: FileFormatPreview | null;
   isLoading: boolean;
   selectedEntry: EvidenceDirectoryEntry | null;
+  hash?: FileHashRecord;
 };
+
+function hashDetailRows(hash?: FileHashRecord) {
+  if (!hash) {
+    return [
+      {
+        label: "Hashes",
+        value: "Not yet hashed — run the Hash Calculator plugin",
+      },
+    ];
+  }
+
+  return [
+    { label: "MD5", value: hash.md5 },
+    { label: "SHA-1", value: hash.sha1 },
+    { label: "SHA-256", value: hash.sha256 },
+  ];
+}
 
 type SqliteTableSummary = {
   name: string;
@@ -46,6 +65,7 @@ export function ApplicationPreviewViewer({
   filePreview,
   isLoading,
   selectedEntry,
+  hash,
 }: ApplicationPreviewViewerProps) {
   if (isLoading) {
     return <div className="p-2 text-xs text-muted-foreground">Loading file viewer...</div>;
@@ -65,15 +85,23 @@ export function ApplicationPreviewViewer({
     return <SqliteDatabaseViewer path={selectedEntry.path} metadata={filePreview} />;
   }
 
-  if (isVideoPreview(filePreview)) {
-    return <VideoFileViewer filePreview={filePreview} />;
+  const filePreviewWithHashes: FileFormatPreview =
+    selectedEntry?.kind === "file"
+      ? {
+          ...filePreview,
+          details: [...filePreview.details, ...hashDetailRows(hash)],
+        }
+      : filePreview;
+
+  if (isVideoPreview(filePreviewWithHashes)) {
+    return <VideoFileViewer filePreview={filePreviewWithHashes} />;
   }
 
-  if (filePreview.mediaPath) {
-    return <ImageFileViewer filePreview={filePreview} />;
+  if (filePreviewWithHashes.mediaPath) {
+    return <ImageFileViewer filePreview={filePreviewWithHashes} />;
   }
 
-  return <MetadataViewer filePreview={filePreview} />;
+  return <MetadataViewer filePreview={filePreviewWithHashes} />;
 }
 
 function isVideoPreview(filePreview: FileFormatPreview) {

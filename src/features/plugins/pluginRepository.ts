@@ -12,6 +12,17 @@ import type {
 import { waitForPluginProgressListener } from "@/features/plugins/pluginToasts";
 
 export const archiveExtractorPluginId = "archive-extractor";
+export const hashCalculatorPluginId = "hash-calculator";
+export const mediaTaggingPluginId = "media-tagging";
+
+export type MediaTaggingStatus = {
+  packagesInstalled: boolean;
+  modelCached: boolean;
+};
+
+export async function getMediaTaggingStatus(): Promise<MediaTaggingStatus> {
+  return invoke<MediaTaggingStatus>("get_media_tagging_status");
+}
 
 export function pluginRunUpdatedDatasourcePaths(summary: PluginRunSummary) {
   return (

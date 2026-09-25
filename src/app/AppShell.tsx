@@ -13,6 +13,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { ArtifactsPage } from "@/features/artifacts/ArtifactsPage";
+import { AssistantPage } from "@/features/assistant/AssistantPage";
 import { CasePage } from "@/features/cases/CasePage";
 import { CaseProvider, useCases } from "@/features/cases/case-provider";
 import { EvidenceProvider } from "@/features/evidence/evidence-provider";
@@ -38,6 +39,10 @@ const workspaceRoutes = [
   {
     path: "/media",
     element: <MediaPage />,
+  },
+  {
+    path: "/assistant",
+    element: <AssistantPage />,
   },
   {
     path: "/plugins",

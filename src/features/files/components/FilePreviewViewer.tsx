@@ -8,6 +8,7 @@ import {
 } from "@/features/files/components/ApplicationPreviewViewer";
 import { HexPreviewViewer } from "@/features/files/components/HexPreviewViewer";
 import { TextPreviewViewer } from "@/features/files/components/TextPreviewViewer";
+import type { FileHashRecord } from "@/features/files/fileHashRepository";
 
 type FilePreviewViewerProps = {
   activeTab: FilePreviewTab;
@@ -15,6 +16,7 @@ type FilePreviewViewerProps = {
   isLoading: boolean;
   onActiveTabChange: (tab: FilePreviewTab) => void;
   selectedEntry: EvidenceDirectoryEntry | null;
+  selectedEntryHash?: FileHashRecord;
 };
 
 export type FilePreviewTab = "file" | "text" | "hex";
@@ -26,6 +28,7 @@ export function FilePreviewViewer({
   isLoading,
   onActiveTabChange,
   selectedEntry,
+  selectedEntryHash,
 }: FilePreviewViewerProps) {
   return (
     <section
@@ -94,6 +97,7 @@ export function FilePreviewViewer({
             filePreview={filePreview}
             isLoading={isLoading}
             selectedEntry={selectedEntry}
+            hash={selectedEntryHash}
           />
         </TabsContent>
 
