@@ -30,6 +30,7 @@ mod evidence_sqlite;
 mod file_signature;
 mod hash_sets;
 mod plugins;
+mod reports;
 pub mod preview;
 #[path = "tauri/commands.rs"]
 mod tauri_commands;
@@ -770,6 +771,17 @@ async fn match_hash_sets(
     case_database_path: String,
 ) -> Result<Vec<hash_sets::HashSetHit>, String> {
     hash_sets::match_hash_sets(app_handle, case_database_path).await
+}
+
+#[tauri::command]
+async fn save_report(
+    path: String,
+    contents: String,
+    attachments: Vec<reports::ReportAttachment>,
+) -> Result<reports::SavedReport, String> {
+    tokio::task::spawn_blocking(move || reports::save_report(path, contents, attachments))
+        .await
+        .map_err(|error| format!("Saving the report failed: {error}"))?
 }
 
 #[tauri::command]
@@ -2336,6 +2348,7 @@ pub fn run() {
             list_hash_sets,
             delete_hash_set,
             match_hash_sets,
+            save_report,
             remove_datasource,
             run_datasource_plugins,
             cancel_plugin_run,

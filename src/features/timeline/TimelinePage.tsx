@@ -44,6 +44,7 @@ export function TimelinePage() {
   const [text, setText] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [hour, setHour] = useState<number | null>(null);
   const [listRef, listSize] = useElementSize<HTMLDivElement>();
 
   useEffect(() => {
@@ -72,7 +73,8 @@ export function TimelinePage() {
     };
   }, [activeCase, isActive, refreshKey]);
 
-  const filtered = useMemo(() => {
+  // Everything but the hour filter, so the hour chart keeps showing every hour.
+  const beforeHour = useMemo(() => {
     const needle = text.trim().toLowerCase();
     const start = from ? new Date(`${from}T00:00:00`) : null;
     const end = to ? new Date(`${to}T23:59:59.999`) : null;
@@ -84,8 +86,12 @@ export function TimelinePage() {
         (!needle || `${event.title} ${event.detail}`.toLowerCase().includes(needle)),
     );
   }, [events, types, text, from, to]);
+  const filtered = useMemo(
+    () => (hour === null ? beforeHour : beforeHour.filter((event) => event.at.getHours() === hour)),
+    [beforeHour, hour],
+  );
   const { unit, buckets } = useMemo(() => bucketEvents(filtered), [filtered]);
-  const hours = useMemo(() => eventsByHour(filtered), [filtered]);
+  const hours = useMemo(() => eventsByHour(beforeHour), [beforeHour]);
   const counts = useMemo(() => {
     const byType = { message: 0, call: 0, photo: 0, video: 0 };
     for (const event of events) byType[event.type] += 1;
@@ -93,7 +99,7 @@ export function TimelinePage() {
   }, [events]);
   const peak = Math.max(1, ...buckets.map((bucket) => bucket.total));
   const peakHour = Math.max(1, ...hours);
-  const hasFilter = Boolean(text || from || to) || types.size < EVENT_TYPES.length;
+  const hasFilter = Boolean(text || from || to) || hour !== null || types.size < EVENT_TYPES.length;
 
   function zoomTo(start: Date, end: Date) {
     const last = new Date(end.getTime() - 1);
@@ -166,6 +172,14 @@ export function TimelinePage() {
           To
           <input type="date" value={to} onChange={(event) => setTo(event.target.value)} className="h-7 rounded-sm border bg-background px-1 text-xs" />
         </label>
+        {hour !== null && (
+          <Badge variant="secondary" className="h-6 gap-1 rounded-sm px-1.5 text-[11px]">
+            Hour {hourLabel(hour)}
+            <button type="button" aria-label="Show every hour" onClick={() => setHour(null)}>
+              <X className="size-3" />
+            </button>
+          </Badge>
+        )}
         {hasFilter && (
           <Button
             type="button"
@@ -176,6 +190,7 @@ export function TimelinePage() {
               setText("");
               setFrom("");
               setTo("");
+              setHour(null);
               setTypes(new Set(EVENT_TYPES));
             }}
           >
@@ -216,12 +231,28 @@ export function TimelinePage() {
           )}
         </div>
         <div>
-          <div className="mb-1 text-[11px] text-muted-foreground">Activity by hour of day</div>
+          <div className="mb-1 text-[11px] text-muted-foreground">
+            Activity by hour of day &middot; click an hour to filter
+          </div>
           <svg viewBox="0 0 24 100" preserveAspectRatio="none" className="h-20 w-full" role="img" aria-label="Activity by hour of day">
-            {hours.map((count, hour) => (
-              <rect key={hour} x={hour + 0.1} y={100 - (count / peakHour) * 100} width={0.8} height={(count / peakHour) * 100} className="fill-slate-500">
-                <title>{`${String(hour).padStart(2, "0")}:00 – ${count.toLocaleString()} events`}</title>
-              </rect>
+            {hours.map((count, barHour) => (
+              <g
+                key={barHour}
+                className="cursor-pointer"
+                onClick={() => setHour((current) => (current === barHour ? null : barHour))}
+              >
+                <rect x={barHour} y={0} width={1} height={100} fill="transparent" />
+                <rect
+                  x={barHour + 0.1}
+                  y={100 - (count / peakHour) * 100}
+                  width={0.8}
+                  height={(count / peakHour) * 100}
+                  className={cn(
+                    hour === null ? "fill-slate-500" : hour === barHour ? "fill-sky-600" : "fill-slate-300 dark:fill-slate-700",
+                  )}
+                />
+                <title>{`${hourLabel(barHour)}: ${count.toLocaleString()} events`}</title>
+              </g>
             ))}
           </svg>
           <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -284,6 +315,11 @@ function EventRow({
       <span className="min-w-0 truncate text-muted-foreground">{event.detail}</span>
     </button>
   );
+}
+
+function hourLabel(hour: number) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(hour)}:00–${pad(hour)}:59`;
 }
 
 function dateInputValue(date: Date) {

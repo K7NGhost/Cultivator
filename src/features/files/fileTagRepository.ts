@@ -171,6 +171,21 @@ export async function listFileTagSummaries(
   }));
 }
 
+/** Every tag in the case, grouped by tag, for reports. */
+export async function listAllFileTags(caseDatabasePath: string): Promise<FileTagRecord[]> {
+  await ensureFileTagTable(caseDatabasePath);
+
+  const database = await getCaseDatabase(caseDatabasePath);
+  const rows = await database.select<FileTagRow[]>(`
+    SELECT id, file_path, file_name, file_kind, file_size, file_modified_ms,
+      tag_name, tag_group, comment, created_at, updated_at
+    FROM file_tags
+    ORDER BY tag_group ASC, tag_name ASC, file_path ASC
+  `);
+
+  return rows.map(mapTagRow);
+}
+
 export async function listTaggedFileEntries(
   caseDatabasePath: string,
   tagName: string,

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseGpsCoordinate, topologyPath, validPoint } from "../src/features/map/geo";
+import {
+  parseGpsCoordinate,
+  roundLength,
+  topologyFeatures,
+  validPoint,
+} from "../src/features/map/geo";
 
 describe("parseGpsCoordinate", () => {
   test("reads EXIF degrees, minutes and seconds with the hemisphere", () => {
@@ -21,7 +26,7 @@ describe("parseGpsCoordinate", () => {
   });
 });
 
-describe("topologyPath", () => {
+describe("topologyFeatures", () => {
   test("decodes delta-encoded arcs, including reversed ones", () => {
     const topology = {
       transform: { scale: [1, 1] as [number, number], translate: [0, 0] as [number, number] },
@@ -33,8 +38,16 @@ describe("topologyPath", () => {
       objects: { land: { geometries: [{ type: "Polygon", arcs: [[0, ~1]] }] } },
     };
 
-    expect(topologyPath(topology, "land")).toBe(
-      "M180.000,90.000L190.000,90.000L190.000,80.000L180.000,80.000L180.000,90.000Z",
-    );
+    const [feature] = topologyFeatures(topology, "land").features;
+    expect(feature.geometry).toEqual({
+      type: "Polygon",
+      coordinates: [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]],
+    });
   });
+});
+
+test("roundLength picks 1, 2 or 5 times a power of ten", () => {
+  expect(roundLength(730)).toBe(500);
+  expect(roundLength(180)).toBe(100);
+  expect(roundLength(2.4)).toBe(2);
 });

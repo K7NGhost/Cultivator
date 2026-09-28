@@ -55,7 +55,7 @@ Examiners can tag files and photos (Bookmark, Follow Up, Notable, Project VIC ca
 The Timeline page (Analysis → Timeline) puts every dated message, call, photo and video in the case on one list:
 
 - **Activity over time:** a chart by day, or by month for long cases. Clicking a bar zooms into that period.
-- **Activity by hour of day:** shows when the phone is used ("pattern of life").
+- **Activity by hour of day:** shows when the phone is used ("pattern of life"). Clicking an hour shows only events from that hour of the day.
 - **Filters:** by type, date range and text (a person or words).
 - **Click through:** clicking an event opens it: messages and calls in Artifacts, photos and videos in Media.
 
@@ -63,9 +63,32 @@ The Timeline page (Analysis → Timeline) puts every dated message, call, photo 
 
 The Map page (Analysis → Map) plots photos by their GPS coordinates, plus any location artifacts from plugins.
 
-- **Built-in world map:** the map is bundled into the app, so viewing it never sends evidence locations to an online map service.
-- **Navigation:** scroll to zoom, drag to move, and **Fit** frames every point.
+- **Built-in world map:** the map (Natural Earth coastlines and country borders) is bundled into the app, so viewing it never sends evidence locations to an online map service. d3-geo draws it, so shapes that cross the date line or surround a pole come out right.
+- **Numbered markers:** items close together share a marker with a count. Clicking it zooms in, or lists everything taken at that exact spot.
+- **Navigation:** scroll or use the + / − buttons to zoom, drag to move, and **Fit** frames every point. A distance scale and the cursor's coordinates are always shown.
 - **Point details:** clicking a point shows the photo, its exact coordinates (with a copy button) and a link to open it in Media.
+
+## Reports
+
+The Reports page (Reporting → Reports) exports the case as an HTML report that opens in any browser and prints to PDF.
+
+The report contains:
+
+- the case details and the examiner's notes
+- the data sources and a summary of what was found
+- every tagged item, with its note and its MD5, SHA-1 and SHA-256
+- copies of tagged photos, saved in a folder beside the report so it can be handed over as one package
+- hash set hits and extension mismatches
+- the processing log: which plugins ran, when, and which AI models and devices they used
+
+The examiner chooses which sections to include. A preview shows what the export will contain.
+
+When the report is saved, its SHA-256 is shown so it can be recorded. Tagged items can also be exported as a CSV spreadsheet.
+
+Evidence can contain hostile text, so:
+
+- everything taken from it is escaped in the HTML report, and nothing in it can run
+- CSV values that a spreadsheet would treat as formulas are defused
 
 ## Photo captions and tags
 
@@ -209,17 +232,20 @@ Everything also works on a processor alone, only more slowly; the demo phone tak
 - **Weak best matches.** The best item of a completely unrelated group was shown as a confident match, for example a house photo for "birthday".
 - **Working copies.** Two copies of the same database made at the same moment could collide.
 - **Download prompt.** The prompt showed a fixed size instead of what was actually missing.
+- **Hashes on Windows.** Hashes were saved under a different spelling of each file's path (Windows `\` separators) than the one the Files view looks up, so they didn't appear there or in reports. They are now saved in the same form, and cases hashed before the fix are corrected when opened.
 
 ## Tests and demo data
 
-- **Frontend: 58 automated tests.** They cover:
+- **Frontend: 63 automated tests.** They cover:
   - question parsing (including the date cases above)
   - plugin selection
   - the case-folder safety check
   - reading GPS coordinates
-  - the built-in world map
+  - the built-in world map and its distance scale
   - timeline activity charts
-- **Rust: 69 automated tests.** They cover:
+  - report escaping, CSV formula protection and report times
+- **Rust: 71 automated tests.** They cover:
+  - saving reports (only as report files, with photo copies kept inside their folder)
   - hashing and reading hash-set files
   - extension mismatch
   - evidence-safe database copies

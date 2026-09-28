@@ -21,9 +21,9 @@ import { FilesPage } from "@/features/files/FilesPage";
 import { MapPage } from "@/features/map/MapPage";
 import { MediaPage } from "@/features/media/MediaPage";
 import { PluginsPage } from "@/features/plugins/PluginsPage";
+import { ReportsPage } from "@/features/reports/ReportsPage";
 import { SearchPage } from "@/features/search/SearchPage";
 import { TimelinePage } from "@/features/timeline/TimelinePage";
-import { PlaceholderPage } from "@/features/workspace/PlaceholderPage";
 
 const workspaceRoutes = [
   {
@@ -64,12 +64,7 @@ const workspaceRoutes = [
   },
   {
     path: "/reports",
-    element: (
-      <PlaceholderPage
-        title="Reports"
-        description="Findings, exports, evidence summaries, and review packages."
-      />
-    ),
+    element: <ReportsPage />,
   },
 ] as const;
 

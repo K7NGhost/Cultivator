@@ -66,9 +66,20 @@ Files and photos can be tagged (Bookmark, Follow Up, Notable, Project VIC catego
 
 ### Timeline and map
 
-The **Timeline** (sidebar → Analysis) puts every dated message, call, photo and video on one list, with a chart of activity over time (click a bar to zoom in), an activity-by-hour chart for pattern of life, and filters by type, date and text. Click an event to open it.
+The **Timeline** (sidebar → Analysis) puts every dated message, call, photo and video on one list, with a chart of activity over time (click a bar to zoom in), an activity-by-hour chart for pattern of life (click an hour to see only that hour of the day), and filters by type, date and text. Click an event to open it.
 
-The **Map** plots photos by their GPS coordinates, plus any location artifacts from plugins. The world map is built into the app, so viewing it never sends evidence locations to an online map service. Click a point to see the photo and open it in Media.
+The **Map** plots photos by their GPS coordinates, plus any location artifacts from plugins, with country borders, a distance scale and cursor coordinates. Items close together share a numbered marker; click it to zoom in, or to list everything taken at that spot. The world map is built into the app, so viewing it never sends evidence locations to an online map service. Click a point to see the photo and open it in Media.
+
+### Reports
+
+The **Reports** page (sidebar → Reporting) exports the case as an HTML report that opens in any browser and prints to PDF:
+
+- case details and the examiner's notes
+- data sources and a summary of what was found
+- every tagged item, with its note and MD5 / SHA-1 / SHA-256, plus copies of tagged photos saved in a folder beside the report
+- hash set hits, extension mismatches, and the processing log (which plugins ran, when, and the AI models and devices used)
+
+The report file's SHA-256 is shown when it is saved, so the examiner can record it. Tagged items can also be exported as CSV; values that a spreadsheet would run as formulas are defused, and everything taken from evidence is escaped in the HTML report.
 
 ### 8. Local AI Assistant
 
@@ -141,7 +152,6 @@ Cultivator is still under active development. Planned features include:
 - **The Sleuth Kit integration** through a Rust-compatible wrapper or interface
 - Continued **UI and performance improvements**
 - Standardized **artifact types** for building specialized artifact visualizations
-- **Reports**: exporting tagged items with hashes and examiner notes
 - Additional forensic parsers and analysis modules
 - Expanded plugin capabilities
 

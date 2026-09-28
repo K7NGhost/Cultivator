@@ -219,7 +219,8 @@ fn hash_file(path: &Path) -> Result<BuiltinFileHash, String> {
     }
 
     Ok(BuiltinFileHash {
-        file_path: path.to_string_lossy().to_string(),
+        // Same form the app looks paths up by (normalizePath): Windows joins with '\\'.
+        file_path: path.to_string_lossy().replace('\\', "/"),
         file_size: Some(file_size),
         file_modified_ms,
         md5: to_hex(&md5.finalize()),
@@ -263,6 +264,7 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         assert_eq!(hash.file_size, Some(3));
+        assert!(!hash.file_path.contains(char::from(92)), "stored path uses forward slashes");
 
         fs::remove_file(path).expect("remove temp file");
     }

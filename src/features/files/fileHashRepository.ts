@@ -24,6 +24,8 @@ type FileHashRow = {
   hashed_at: string;
 };
 
+const normalizedDatabases = new Set<string>();
+
 async function ensureFileHashTable(databasePath: string) {
   await withCaseDatabaseWriteLock(databasePath, async () => {
     const database = await getCaseDatabase(databasePath);
@@ -46,6 +48,21 @@ async function ensureFileHashTable(databasePath: string) {
       CREATE INDEX IF NOT EXISTS idx_file_hashes_file_path
       ON file_hashes(file_path)
     `);
+
+    if (!normalizedDatabases.has(databasePath)) {
+      // Earlier builds stored Windows paths with backslashes, which lookups
+      // (by normalizePath) never matched. A newer forward-slash row wins.
+      await database.execute(`
+        DELETE FROM file_hashes
+        WHERE instr(file_path, '\\') > 0
+          AND REPLACE(file_path, '\\', '/') IN (SELECT file_path FROM file_hashes)
+      `);
+      await database.execute(`
+        UPDATE file_hashes SET file_path = REPLACE(file_path, '\\', '/')
+        WHERE instr(file_path, '\\') > 0
+      `);
+      normalizedDatabases.add(databasePath);
+    }
   });
 }
 
@@ -59,6 +76,18 @@ function mapHashRow(row: FileHashRow): FileHashRecord {
     sha256: row.sha256,
     hashedAt: row.hashed_at,
   };
+}
+
+/** How many files the Hash Calculator has hashed in this case. */
+export async function countFileHashes(caseDatabasePath: string): Promise<number> {
+  await ensureFileHashTable(caseDatabasePath);
+
+  const database = await getCaseDatabase(caseDatabasePath);
+  const rows = await database.select<Array<{ count: number }>>(
+    "SELECT COUNT(*) AS count FROM file_hashes",
+  );
+
+  return rows[0]?.count ?? 0;
 }
 
 export async function listFileHashesForPaths(

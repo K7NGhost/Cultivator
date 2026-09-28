@@ -1,3 +1,5 @@
+import type { Feature, FeatureCollection, MultiPolygon, Polygon, Position } from "geojson";
+
 import type { MediaItem } from "@/features/media/types";
 
 export type GeoPoint = { lat: number; lon: number };
@@ -38,7 +40,10 @@ export function validPoint(lat: number | null, lon: number | null): GeoPoint | n
   return lat === 0 && lon === 0 ? null : { lat, lon };
 }
 
-/** Map coordinates: x = longitude + 180, y = 90 - latitude (a plain equirectangular map). */
+/**
+ * Map coordinates: x = longitude + 180, y = 90 - latitude (equirectangular,
+ * the same numbers d3's projection in MapPage produces).
+ */
 export function project(point: GeoPoint) {
   return { x: point.lon + 180, y: 90 - point.lat };
 }
@@ -49,40 +54,50 @@ type Topology = {
   objects: Record<string, { geometries: Array<{ type: string; arcs?: unknown }> }>;
 };
 
-/** SVG path data for a TopoJSON object's polygons, in map coordinates. */
-export function topologyPath(topology: Topology, objectName: string): string {
+/** A TopoJSON object's polygons as GeoJSON (what topojson-client's `feature` does). */
+export function topologyFeatures(topology: Topology, objectName: string): FeatureCollection {
   const { scale, translate } = topology.transform;
   // Arcs are quantized and delta-encoded.
   const arcs = topology.arcs.map((arc) => {
     let x = 0;
     let y = 0;
-    return arc.map(([dx, dy]) => {
+    return arc.map(([dx, dy]): Position => {
       x += dx;
       y += dy;
-      return [x * scale[0] + translate[0], y * scale[1] + translate[1]] as [number, number];
+      return [x * scale[0] + translate[0], y * scale[1] + translate[1]];
     });
   });
-  const polygons = topology.objects[objectName].geometries.flatMap((geometry) =>
-    geometry.type === "Polygon"
-      ? [geometry.arcs as number[][]]
-      : geometry.type === "MultiPolygon"
-        ? (geometry.arcs as number[][][])
-        : [],
-  );
+  const ring = (indexes: number[]) => {
+    const points: Position[] = [];
+    for (const index of indexes) {
+      // A negative index is the arc ~index, walked backwards.
+      const arc = index >= 0 ? arcs[index] : [...arcs[~index]].reverse();
+      points.push(...(points.length > 0 ? arc.slice(1) : arc));
+    }
+    return points;
+  };
 
-  return polygons
-    .flatMap((rings) =>
-      rings.map((ring) => {
-        const points: Array<[number, number]> = [];
-        for (const index of ring) {
-          // A negative index is the arc ~index, walked backwards.
-          const arc = index >= 0 ? arcs[index] : [...arcs[~index]].reverse();
-          points.push(...(points.length > 0 ? arc.slice(1) : arc));
-        }
-        return `M${points
-          .map(([lon, lat]) => `${(lon + 180).toFixed(3)},${(90 - lat).toFixed(3)}`)
-          .join("L")}Z`;
-      }),
-    )
-    .join("");
+  const features = topology.objects[objectName].geometries.flatMap((geometry): Feature[] => {
+    if (geometry.type === "Polygon") {
+      const coordinates = (geometry.arcs as number[][]).map(ring);
+      return [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates } as Polygon }];
+    }
+    if (geometry.type === "MultiPolygon") {
+      const coordinates = (geometry.arcs as number[][][]).map((polygon) => polygon.map(ring));
+      return [{ type: "Feature", properties: {}, geometry: { type: "MultiPolygon", coordinates } as MultiPolygon }];
+    }
+    return [];
+  });
+  return { type: "FeatureCollection", features };
+}
+
+/** Kilometres per degree of longitude at a latitude. */
+export function kilometresPerDegree(lat: number) {
+  return 111.32 * Math.cos((lat * Math.PI) / 180);
+}
+
+/** A round length (1, 2 or 5 times a power of ten) no longer than `limit`. */
+export function roundLength(limit: number) {
+  const power = 10 ** Math.floor(Math.log10(limit));
+  return [5, 2, 1].map((step) => step * power).find((length) => length <= limit) ?? power;
 }
