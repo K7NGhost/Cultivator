@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { toast } from "react-toastify";
 import {
   Tree,
   type NodeRendererProps,
@@ -847,6 +848,11 @@ async function openTreeNodePath(node: AutopsyTreeNode) {
   try {
     await openPath(node.path);
   } catch (error) {
+    // The opener scope refuses executables and shortcuts, which evidence may
+    // use to run malware on this workstation.
+    toast.error(
+      `Cultivator won't open ${node.name} with Windows: it may run code from the evidence. Use Reveal in folder or the Text/Hex preview instead.`,
+    );
     console.error(`Failed to open ${node.path}`, error);
   }
 }

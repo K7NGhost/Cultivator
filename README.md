@@ -66,6 +66,8 @@ The **Assistant** page (sidebar → Analysis) answers plain-language questions a
 
 People, dates, and result types are read from the question by a rule-based parser, and the filter it built is shown with every answer so it can be checked and edited. Content words are matched by meaning with **BGE-M3**, so "money" also finds "Sent 9,500 to the warehouse account". Weaker matches are kept out of the answer, under a collapsed **Possible links** section.
 
+A second local model, **Qwen3-Reranker-0.6B**, then double-checks the best matches (a *precision check*): it reads the question and each match together and drops the ones it judges unrelated. Vector search alone can't tell that "The keys is on the counter." has nothing to do with money, and on a large phone such filler crowds the top of the list: on a 100,000-message test phone, 20 of the top 25 matches for "money" were filler and the precision check removed all 20 while keeping every real transfer. Results appear immediately and are refined when the check finishes (under a second on a GPU, a few seconds on a CPU); confirmed matches carry a check mark. The **Precision check** chip on an answer shows how many matches were removed; remove the chip to see every match the vector search found.
+
 Click a result to go to it:
 
 - a message opens its whole conversation, and from there the artifact or the source file
@@ -77,10 +79,25 @@ Click a result to go to it:
 | Plugin | What it does | One-time download |
 | --- | --- | --- |
 | Media Tagging (AI) | Captions and tags photos (BLIP) so they can be searched | ~1.5 GB |
-| Semantic Index (AI) | Indexes messages and captions for meaning search (BGE-M3) | ~2.3 GB |
+| Semantic Index (AI) | Indexes messages and captions for meaning search (BGE-M3), and brings the Assistant's precision check (Qwen3-Reranker-0.6B) | ~3.5 GB |
 | Hash Calculator | MD5 / SHA-1 / SHA-256 per file | none |
 
-Plugins can be chosen when a datasource is added. To add more later, use **Plugins → Datasource Jobs → Add**.
+Plugins are installed once and every installed plugin is ticked when a datasource is added (**Select all** / **Clear** change that in one click). A plugin that isn't wanted in a case can be switched off in the **On** column of **Plugins → Installed Plugins**; it stays installed, and the case remembers the choice. To add more to an existing datasource, use **Plugins → Datasource Jobs → Add**.
+
+On a computer with an NVIDIA GPU (GTX 10-series / Quadro P or newer, driver 528 or newer), the AI plugins and the Assistant run on the GPU, which captions and indexes many times faster than the CPU. Cultivator picks the PyTorch build that matches the card and driver: CUDA 13.0 or 12.8 for current drivers, CUDA 12.6 for the older certified drivers and Pascal/Maxwell cards common in lab workstations (these older cards run in float32, where they are faster). A first install on such a machine downloads the GPU build of PyTorch automatically; an existing CPU install can be switched with **Use GPU** on the Plugins page. Without a usable GPU (none, an old driver, or under 1.5 GB free), everything runs on the CPU. The models stay loaded between batches and start loading as soon as a run begins, so their load time overlaps the other plugins.
+
+Large sources are handled incrementally: re-runs keep the captions of unchanged photos and only index new text, the index is saved batch by batch (a cancelled run resumes where it stopped), and the Assistant keeps the case's index in memory between questions.
+
+## Security and Lab Use
+
+- **Evidence is never modified.** SQLite databases found in evidence are opened from a private copy (with their `-wal`/`-shm` files, so uncommitted WAL data is still visible) under `%TEMP%\cultivator-sqlite-copies`, which is deleted when Cultivator starts and exits. Opening a WAL database in place, even read-only, rewrites its `-shm` file.
+- **Evidence can't run code.** Executables, scripts, installers and shortcuts (`.exe`, `.lnk`, `.ps1`, `.msi`, …) found in evidence can't be launched from Cultivator; use the Text/Hex preview or Reveal in folder.
+- **Local only.** Nothing is uploaded. The only network use is the one-time, confirmed download of AI packages and models; once a model is on disk it runs with the network switched off (`HF_HUB_OFFLINE`), and telemetry is disabled. The app loads no remote scripts, and a strict Content Security Policy blocks any that evidence content might try to inject.
+- **Air-gapped labs.** Copy `%APPDATA%\com.k7nghost.cultivator\models` from a connected machine, and point `CULTIVATOR_WHEELHOUSE` at a folder of wheels made with `pip download torch==2.14.0 transformers==5.17.0 pyspellchecker==0.9.0 -d wheels` (add `--index-url https://download.pytorch.org/whl/cu130` for GPU machines). pip then never contacts an index.
+- **Reproducible.** Model revisions and package versions are pinned, and each AI plugin's log records the device and model revision it ran with (e.g. `on NVIDIA GeForce RTX 5070 Ti Laptop GPU with BAAI/bge-m3@5617a9f`). The precision check's model is pinned the same way and reads its weights from safetensors only (no pickle).
+- **Open licenses.** BLIP (BSD-3-Clause), BGE-M3 (MIT) and Qwen3-Reranker-0.6B (Apache-2.0).
+- **Plugins are code.** Python plugins run with the examiner's permissions; install only plugins from a trusted source.
+- **Signing.** Release builds are not code-signed yet. Labs that require signed software (and Windows Smart App Control) need a signed installer.
 
 ## Getting Started
 

@@ -151,6 +151,66 @@ describe("assistant query parsing", () => {
   });
 });
 
+describe("date ranges without a year", () => {
+  const window = (text: string) => ask(text).query.dateRange?.monthsOfYear;
+
+  test("reads 'between April and March' in calendar order, not around the year", () => {
+    expect(window("messages between april and march")).toEqual({ from: 2, to: 3 });
+    expect(ask("messages between april and march").results.messages.map((result) => result.id)).toEqual([
+      "m-mar",
+      "m-apr",
+      "m-mom",
+    ]);
+  });
+
+  test("corrects a misspelled month and says so", () => {
+    const { query } = ask("messages between apirl and march");
+
+    expect(query.dateRange?.monthsOfYear).toEqual({ from: 2, to: 3 });
+    expect(query.keywords).toEqual([]);
+    expect(query.notes).toContain('Read "apirl" as April.');
+    expect(window("messages from feburary to march")).toEqual({ from: 1, to: 2 });
+  });
+
+  test("never turns a name or place into a month", () => {
+    expect(ask("messages from marc").query.dateRange).toBeNull();
+    expect(ask("photos in augusta").query.dateRange).toBeNull();
+  });
+
+  test("keeps a real wrap over New Year but not one that covers the whole year", () => {
+    expect(window("messages from november to february")).toEqual({ from: 10, to: 1 });
+
+    const { query } = ask("messages from april to march");
+    expect(query.dateRange?.monthsOfYear).toEqual({ from: 2, to: 3 });
+    expect(query.notes).toHaveLength(1);
+  });
+
+  test("applies before, after, since and until to a month", () => {
+    expect(window("messages before april")).toEqual({ from: 0, to: 2 });
+    expect(window("messages until march")).toEqual({ from: 0, to: 2 });
+    expect(window("messages after june")).toEqual({ from: 6, to: 11 });
+    expect(window("messages since may")).toEqual({ from: 4, to: 11 });
+    expect(ask("messages before april").results.messages.map((result) => result.id)).toEqual(["m-jan", "m-mar"]);
+  });
+
+  test("keeps day bounds", () => {
+    const { query, results } = ask("messages between march 5 and april 10");
+
+    expect(query.dateRange?.monthsOfYear).toEqual({ from: 2, fromDay: 5, to: 3, toDay: 10 });
+    expect(query.dateRange?.label).toBe("Mar 5 – Apr 10 (any year)");
+    expect(results.messages.map((result) => result.id)).toEqual(["m-mar", "m-apr"]);
+    expect(window("messages on march 7")).toEqual({ from: 2, fromDay: 7, to: 2, toDay: 7 });
+    expect(window("messages before march 5")).toEqual({ from: 0, to: 2, toDay: 4 });
+  });
+
+  test("swaps a range typed with years in the wrong order", () => {
+    const range = ask("messages between june 2025 and march 2025").query.dateRange;
+
+    expect(range?.start).toEqual(new Date(2025, 2, 1));
+    expect(range?.end).toEqual(new Date(2025, 5, 30, 23, 59, 59, 999));
+  });
+});
+
 describe("assistant query execution", () => {
   test("returns only John/Jane messages inside March - June 2025", () => {
     const { results } = ask("show me the messages between john and jane march - jun 2025");

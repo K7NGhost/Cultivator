@@ -1,51 +1,48 @@
 //! The long-lived Python process that keeps BGE-M3 loaded between questions.
 
-use super::{SEMANTIC_IMPORT_CHECK, SEMANTIC_MODEL_ID, SEMANTIC_PACKAGES};
-use crate::plugins::{
-    configure_python_command, ensure_python_packages, model_cache_dir, resolve_python_runtime,
-};
+use super::{SEMANTIC_MODEL_ID, SEMANTIC_MODEL_REVISION, SEMANTIC_PACKAGES};
+use crate::ai::{reply_device, ModelWorker, WorkerSpec};
+use crate::plugins::builtin::EmbeddedTexts;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value as JsonValue};
-use std::{
-    collections::{HashMap, VecDeque},
-    io::{BufRead, BufReader, Write},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
-    time::{Duration, Instant},
+use std::{collections::HashMap, time::Duration};
+use tauri::AppHandle;
+
+static EMBEDDING_WORKER: WorkerSpec = WorkerSpec {
+    label: "semantic search model",
+    script: concat!(
+        include_str!("../ai/python/device.py"),
+        include_str!("worker.py")
+    ),
+    model_id: SEMANTIC_MODEL_ID,
+    revision: SEMANTIC_MODEL_REVISION,
+    packages: &SEMANTIC_PACKAGES,
+    // Frees the model's ~2.5 GB of RAM after half an hour without a question;
+    // reloading takes 10-15 s, so a short break shouldn't cost that.
+    idle_shutdown: Duration::from_secs(1800),
 };
-use tauri::{AppHandle, Manager};
 
-const WORKER_SCRIPT: &str = include_str!("worker.py");
-/// Frees the model's ~2.5 GB of RAM when nobody has asked anything for a while.
-const IDLE_SHUTDOWN: Duration = Duration::from_secs(600);
-const STDERR_TAIL_LINES: usize = 40;
+pub struct EmbeddingWorker(ModelWorker);
 
-struct WorkerProcess {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-    stderr_tail: Arc<Mutex<VecDeque<String>>>,
-    next_id: u64,
-}
-
-#[derive(Default)]
-pub struct EmbeddingWorker {
-    process: Mutex<Option<WorkerProcess>>,
-    last_used: Mutex<Option<Instant>>,
-    idle_watch_started: AtomicBool,
+impl Default for EmbeddingWorker {
+    fn default() -> Self {
+        Self(ModelWorker::new(&EMBEDDING_WORKER))
+    }
 }
 
 impl EmbeddingWorker {
-    pub fn embed(&self, app: &AppHandle, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    pub fn embed(&self, app: &AppHandle, texts: &[String]) -> Result<EmbeddedTexts, String> {
         if texts.is_empty() {
-            return Ok(Vec::new());
+            return Ok(EmbeddedTexts {
+                vectors: Vec::new(),
+                device: String::new(),
+            });
         }
 
-        let reply = self.request(app, json!({ "op": "embed", "texts": texts }))?;
-        let vectors: Vec<Vec<f32>> = serde_json::from_value(reply["vectors"].clone())
-            .map_err(|error| format!("AI model returned malformed vectors: {error}"))?;
+        let reply = self
+            .0
+            .request(app, json!({ "op": "embed", "texts": texts }))?;
+        let vectors = decode_vectors(&reply, texts.len())?;
 
         if vectors.len() != texts.len() {
             return Err(format!(
@@ -55,7 +52,10 @@ impl EmbeddingWorker {
             ));
         }
 
-        Ok(vectors)
+        Ok(EmbeddedTexts {
+            vectors,
+            device: reply_device(&reply),
+        })
     }
 
     pub fn correct(
@@ -67,191 +67,74 @@ impl EmbeddingWorker {
             return Ok(HashMap::new());
         }
 
-        let reply = self.request(app, json!({ "op": "correct", "words": words }))?;
+        let reply = self
+            .0
+            .request(app, json!({ "op": "correct", "words": words }))?;
         serde_json::from_value(reply["corrections"].clone())
             .map_err(|error| format!("AI model returned malformed corrections: {error}"))
     }
 
+    /// Loads the model now so the first question or index batch doesn't wait
+    /// for it. Returns the device it loaded on.
+    pub fn warm(&self, app: &AppHandle) -> Result<String, String> {
+        self.0
+            .request(app, json!({ "op": "load" }))
+            .map(|reply| reply_device(&reply))
+    }
+
     pub fn shutdown(&self) {
-        if let Ok(mut guard) = self.process.lock() {
-            if let Some(mut process) = guard.take() {
-                let _ = process.child.kill();
-                let _ = process.child.wait();
-            }
-        }
-    }
-
-    fn touch(&self) {
-        if let Ok(mut last_used) = self.last_used.lock() {
-            *last_used = Some(Instant::now());
-        }
-    }
-
-    fn request(&self, app: &AppHandle, mut message: JsonValue) -> Result<JsonValue, String> {
-        self.touch();
-        let mut guard = self
-            .process
-            .lock()
-            .map_err(|_| "AI model worker lock was poisoned.".to_string())?;
-
-        let running = guard
-            .as_mut()
-            .is_some_and(|process| matches!(process.child.try_wait(), Ok(None)));
-        if !running {
-            *guard = Some(spawn_worker(app)?);
-            self.start_idle_watch(app);
-        }
-
-        let result = {
-            let process = guard.as_mut().expect("worker process was just ensured");
-            process.next_id += 1;
-            let id = process.next_id;
-            message["id"] = json!(id);
-            exchange(process, id, &message)
-        };
-
-        // A reply-level error leaves the worker usable; a dead process is dropped.
-        let exited = guard
-            .as_mut()
-            .is_some_and(|process| !matches!(process.child.try_wait(), Ok(None)));
-        if exited {
-            guard.take();
-        }
-        drop(guard);
-        self.touch();
-        result
-    }
-
-    fn start_idle_watch(&self, app: &AppHandle) {
-        if self.idle_watch_started.swap(true, Ordering::SeqCst) {
-            return;
-        }
-
-        let app = app.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_secs(60));
-            let worker = app.state::<EmbeddingWorker>();
-            let idle = worker
-                .last_used
-                .lock()
-                .ok()
-                .and_then(|last_used| *last_used)
-                .is_some_and(|last_used| last_used.elapsed() >= IDLE_SHUTDOWN);
-            if idle {
-                worker.shutdown();
-            }
-        });
+        self.0.shutdown();
     }
 }
 
-fn spawn_worker(app: &AppHandle) -> Result<WorkerProcess, String> {
-    let runtime = resolve_python_runtime(app)?;
-    ensure_python_packages(&runtime, SEMANTIC_IMPORT_CHECK, SEMANTIC_PACKAGES)?;
-    let cache_dir = model_cache_dir(app)?;
-
-    let mut command = Command::new(&runtime.executable);
-    configure_python_command(&mut command, &runtime);
-    command
-        .arg("-I")
-        .arg("-B")
-        .arg("-c")
-        .arg(WORKER_SCRIPT)
-        .arg(&cache_dir)
-        .arg(SEMANTIC_MODEL_ID)
-        .env("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Failed to start the AI model worker: {error}"))?;
-    let stdin = child.stdin.take().ok_or("AI model worker has no stdin.")?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("AI model worker has no stdout.")?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or("AI model worker has no stderr.")?;
-
-    // stderr must be drained or a chatty library could fill the pipe and
-    // stall the worker; the tail is kept for error messages.
-    let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
-    let tail = Arc::clone(&stderr_tail);
-    std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if let Ok(mut tail) = tail.lock() {
-                if tail.len() == STDERR_TAIL_LINES {
-                    tail.pop_front();
-                }
-                tail.push_back(line);
-            }
-        }
-    });
-
-    Ok(WorkerProcess {
-        child,
-        stdin,
-        stdout: BufReader::new(stdout),
-        stderr_tail,
-        next_id: 0,
-    })
-}
-
-fn exchange(
-    process: &mut WorkerProcess,
-    id: u64,
-    message: &JsonValue,
-) -> Result<JsonValue, String> {
-    let line = serde_json::to_string(message)
-        .map_err(|error| format!("Failed to encode AI model request: {error}"))?;
-
-    process
-        .stdin
-        .write_all(line.as_bytes())
-        .and_then(|_| process.stdin.write_all(b"\n"))
-        .and_then(|_| process.stdin.flush())
-        .map_err(|error| {
-            worker_failure(process, format!("Failed to send AI model request: {error}"))
+/// Unpacks the worker's base64 block of little-endian float32 vectors.
+fn decode_vectors(reply: &JsonValue, count: usize) -> Result<Vec<Vec<f32>>, String> {
+    let bytes = reply["vectors"]
+        .as_str()
+        .ok_or("AI model returned no vectors.")
+        .and_then(|encoded| {
+            STANDARD
+                .decode(encoded)
+                .map_err(|_| "AI model returned malformed vectors.")
         })?;
-
-    loop {
-        let mut reply = String::new();
-        let read = process.stdout.read_line(&mut reply).map_err(|error| {
-            worker_failure(process, format!("Failed to read AI model reply: {error}"))
-        })?;
-        if read == 0 {
-            return Err(worker_failure(
-                process,
-                "The AI model worker stopped unexpectedly.".to_string(),
-            ));
-        }
-
-        let Ok(value) = serde_json::from_str::<JsonValue>(reply.trim()) else {
-            continue;
-        };
-        if value.get("id").and_then(JsonValue::as_u64) != Some(id) {
-            continue;
-        }
-        if let Some(error) = value.get("error").and_then(JsonValue::as_str) {
-            return Err(format!("AI model error: {error}"));
-        }
-        return Ok(value);
+    if count == 0 || bytes.len() % (count * 4) != 0 {
+        return Err(format!(
+            "AI model returned {} bytes of vectors for {count} texts.",
+            bytes.len()
+        ));
     }
+
+    let dims = bytes.len() / (count * 4);
+    Ok(bytes
+        .chunks_exact(dims * 4)
+        .map(|vector| {
+            vector
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|value| f32::from_le_bytes(*value))
+                .collect()
+        })
+        .collect())
 }
 
-fn worker_failure(process: &WorkerProcess, message: String) -> String {
-    let tail = process
-        .stderr_tail
-        .lock()
-        .map(|tail| tail.iter().cloned().collect::<Vec<_>>().join("\n"))
-        .unwrap_or_default();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    if tail.trim().is_empty() {
-        message
-    } else {
-        format!("{message}\n{tail}")
+    #[test]
+    fn decodes_packed_float32_vectors() {
+        let floats = [0.5_f32, -1.0, 0.25, 2.0, 0.0, 1.5];
+        let bytes = floats
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>();
+        let reply = json!({ "vectors": STANDARD.encode(bytes) });
+
+        assert_eq!(
+            decode_vectors(&reply, 2).unwrap(),
+            vec![vec![0.5, -1.0, 0.25], vec![2.0, 0.0, 1.5]]
+        );
+        assert!(decode_vectors(&reply, 4).is_err());
     }
 }

@@ -23,6 +23,7 @@ default = []
 python-plugins = ["dep:pyo3"]
 
 [dependencies]
+base64 = "0.22"
 ctor = "0.8.0"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"

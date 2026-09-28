@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { CheckCircle2, Files, FolderOpen, Play, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Files, FolderOpen, Play, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +32,7 @@ import {
   createDataSource,
   notifyDataSourcesChanged,
 } from "@/features/datasources/dataSourceRepository";
+import { sourcesContainingCaseFolder } from "@/features/datasources/pathContainment";
 import type {
   DataSourceRecord,
   DataSourcePlugin,
@@ -39,13 +40,18 @@ import type {
   DataSourceType,
 } from "@/features/datasources/types";
 import {
+  listDisabledCasePlugins,
+  rememberCasePluginSelection,
+} from "@/features/plugins/casePluginSettings";
+import { PluginSelectionActions } from "@/features/plugins/components/PluginSelectionActions";
+import {
   archiveExtractorPluginId,
   cancelDatasourcePluginRun,
-  hashCalculatorPluginId,
   listPythonPlugins,
   pluginRunUpdatedDatasourcePaths,
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
+import { defaultPluginSelection } from "@/features/plugins/pluginSelection";
 import { useModelDownloadConsent } from "@/features/plugins/useModelDownloadConsent";
 import {
   createPluginRunId,
@@ -75,8 +81,6 @@ const dataSourceTypes: Array<{
     description: "Add selected folders and files from an extracted source.",
   },
 ];
-
-const DEFAULT_SELECTED_PLUGIN_IDS: string[] = [hashCalculatorPluginId];
 
 const pluginTargetFilters: Array<{
   target: DataSourcePluginTarget | "all";
@@ -200,9 +204,9 @@ export function DataSourceWizardDialog({
     [],
   );
   const [isPluginsLoading, setIsPluginsLoading] = useState(false);
-  const [selectedPluginIds, setSelectedPluginIds] = useState<string[]>(
-    DEFAULT_SELECTED_PLUGIN_IDS,
-  );
+  const [selectedPluginIds, setSelectedPluginIds] = useState<string[]>([]);
+  // Every installed plugin except the ones switched off for this case.
+  const [defaultPluginIds, setDefaultPluginIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const { confirmModelDownloads, modelDownloadDialog } = useModelDownloadConsent();
@@ -243,10 +247,13 @@ export function DataSourceWizardDialog({
     () => new Map(availablePlugins.map((plugin) => [plugin.id, plugin])),
     [availablePlugins],
   );
+  const caseFolderSources = activeCase
+    ? sourcesContainingCaseFolder(paths, activeCase.folderPath)
+    : [];
   const canContinue =
     (step === 1 && name.trim().length > 0) ||
     step === 2 ||
-    (step === 3 && paths.length > 0) ||
+    (step === 3 && paths.length > 0 && caseFolderSources.length === 0) ||
     step === 4;
 
   function resetWizard() {
@@ -257,15 +264,17 @@ export function DataSourceWizardDialog({
     setPluginFilter("");
     setPluginTargetFilter("all");
     setActivePluginId("");
-    setSelectedPluginIds(DEFAULT_SELECTED_PLUGIN_IDS);
+    setSelectedPluginIds([]);
     setError(null);
     setIsSaving(false);
   }
 
   function updateType(nextType: DataSourceType) {
     setType(nextType);
-    setSelectedPluginIds(DEFAULT_SELECTED_PLUGIN_IDS);
+    setSelectedPluginIds(defaultPluginIds);
   }
+
+  const activeCaseDatabasePath = activeCase?.databasePath ?? null;
 
   useEffect(() => {
     if (!isOpen) {
@@ -275,19 +284,25 @@ export function DataSourceWizardDialog({
     let isCurrent = true;
 
     setIsPluginsLoading(true);
-    listPythonPlugins()
-      .then((plugins) => {
+    Promise.all([
+      listPythonPlugins(),
+      activeCaseDatabasePath
+        ? // A missing preference must never hide plugins: fall back to all on.
+          listDisabledCasePlugins(activeCaseDatabasePath).catch(() => new Set<string>())
+        : Promise.resolve(new Set<string>()),
+    ])
+      .then(([plugins, disabledPluginIds]) => {
         if (!isCurrent) {
           return;
         }
 
+        const defaults = defaultPluginSelection(
+          plugins.map((plugin) => plugin.id),
+          disabledPluginIds,
+        );
         setAvailablePlugins(plugins);
-        setSelectedPluginIds((currentPluginIds) => {
-          const installedPluginIds = new Set(plugins.map((plugin) => plugin.id));
-          return currentPluginIds.filter((pluginId) =>
-            installedPluginIds.has(pluginId),
-          );
-        });
+        setDefaultPluginIds(defaults);
+        setSelectedPluginIds(defaults);
 
         if (plugins[0]) {
           setActivePluginId((currentPluginId) =>
@@ -319,7 +334,7 @@ export function DataSourceWizardDialog({
     return () => {
       isCurrent = false;
     };
-  }, [isOpen]);
+  }, [isOpen, activeCaseDatabasePath]);
 
   function addSelectedPaths(nextPaths: string[]) {
     setPaths((currentPaths) =>
@@ -383,6 +398,12 @@ export function DataSourceWizardDialog({
       return;
     }
 
+    if (caseFolderSources.length > 0) {
+      setError("Remove the folder that contains this case before adding the datasource.");
+      setStep(3);
+      return;
+    }
+
     setIsSaving(true);
 
     try {
@@ -394,6 +415,13 @@ export function DataSourceWizardDialog({
         paths,
         plugins: selectedPlugins,
       });
+      // Only pre-selects the next datasource in this case; if it can't be
+      // saved, the next one simply starts with every plugin on again.
+      await rememberCasePluginSelection(
+        activeCase.databasePath,
+        availablePlugins.map((plugin) => plugin.id),
+        selectedPluginIds,
+      ).catch(() => undefined);
       const activeCaseSnapshot = activeCase;
       const importRunnablePluginIds = await confirmModelDownloads(
         getImportRunnablePluginIds(createdDatasource.pluginIds),
@@ -613,6 +641,19 @@ export function DataSourceWizardDialog({
                       </div>
                     )}
                   </div>
+                  {caseFolderSources.length > 0 && (
+                    <div className="flex items-start gap-2 rounded-sm border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                      <span>
+                        This case is saved inside{" "}
+                        <span className="font-medium">
+                          {getPathName(caseFolderSources[0])}
+                        </span>
+                        , so Cultivator would scan its own case database as evidence.
+                        Remove that folder, or create the case outside the evidence.
+                      </span>
+                    </div>
+                  )}
                 </div>
               </StepperContent>
 
@@ -623,13 +664,25 @@ export function DataSourceWizardDialog({
                       <div className="text-xs font-medium uppercase text-muted-foreground">
                         Plugins
                       </div>
-                      <Badge
-                        variant="secondary"
-                        className="h-5 rounded-sm text-[11px]"
-                      >
-                      {selectedPlugins.length} selected
-                    </Badge>
-                  </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <PluginSelectionActions
+                          disabled={isPluginsLoading}
+                          pluginIds={visiblePlugins.map((plugin) => plugin.id)}
+                          selectedIds={selectedPluginIds}
+                          onChange={setSelectedPluginIds}
+                        />
+                        <Badge
+                          variant="secondary"
+                          className="h-5 rounded-sm text-[11px]"
+                        >
+                          {selectedPlugins.length} selected
+                        </Badge>
+                      </div>
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      Plugins switched off for this case start unticked. Your choice here is
+                      remembered for the case.
+                    </div>
                     <Input
                       className="h-8 text-xs"
                       value={pluginFilter}

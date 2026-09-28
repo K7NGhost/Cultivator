@@ -2,7 +2,10 @@
 
 Usage (with the bundled runtime, which already has Pillow):
 
-    src-tauri/python-runtime/windows-x64/python.exe test-data/demo/generate_demo_evidence.py <output-dir>
+    src-tauri/python-runtime/windows-x64/python.exe test-data/demo/generate_demo_evidence.py <output-dir> [--scale N]
+
+--scale N buries the story in N everyday filler messages and N/100 extra photos,
+for testing speed and search quality on a large phone.
 
 Everything here is fictional. The layout is chosen so each feature has
 something to find:
@@ -14,6 +17,8 @@ something to find:
 """
 
 import json
+import random
+from datetime import datetime, timezone
 import shutil
 import sys
 import zipfile
@@ -85,6 +90,47 @@ PHOTOS = [
     ("IMG_0704.jpg", "beach_sunset", "2025:07:04 20:10:00", (25.7907, -80.1300)),
     ("IMG_0705.jpg", "beach_sunset", "2025:07:05 19:58:00", (25.7907, -80.1300)),
 ]
+
+
+FILLER_MESSAGES = [
+    "Running late, be there in {n} minutes.", "Did you feed the dog?", "Game tonight at {n}?",
+    "Can you pick up milk and {item}?", "Traffic on {road} is terrible.", "What's for dinner?",
+    "Movie at {n}pm?", "Call me when you can.", "Thanks for the {item}!", "See you at the gym.",
+    "Meeting moved to {n}:30.", "Grabbing coffee, want one?", "Don't forget the {item}.",
+    "Happy birthday {name}!", "The {item} is on the counter.", "Kids have practice at {n}.",
+    "Lol that's hilarious", "Can't talk, in a meeting", "On my way", "Weather looks nice this weekend",
+]
+FILLER_ITEMS = ["bread", "charger", "keys", "umbrella", "tickets", "cake", "groceries", "book", "jacket", "snacks"]
+FILLER_ROADS = ["I-95", "Main St", "5th Ave", "the bridge", "Route 9", "the highway"]
+FILLER_NAMES = [f"Friend {index:02d}" for index in range(1, 41)]
+
+
+def filler_messages(count):
+    """Everyday chatter with no bearing on the case, deterministic per count."""
+    rng = random.Random(count)
+    start = 1672531200  # 2023-01-01
+    span = 1756684800 - start  # to 2025-09-01
+    records = []
+    for index in range(count):
+        friend = rng.choice(FILLER_NAMES)
+        phone = f"+1-555-{2000 + FILLER_NAMES.index(friend):04d}"
+        # One to three sentences, so like real chat history nearly every text is unique.
+        body = " ".join(
+            template.format(
+                n=rng.randint(1, 12), item=rng.choice(FILLER_ITEMS), road=rng.choice(FILLER_ROADS), name=friend,
+            )
+            for template in rng.sample(FILLER_MESSAGES, rng.randint(1, 3))
+        )
+        outgoing = index % 2 == 0
+        seconds = start + rng.randrange(span)
+        records.append({
+            "from": OWNER["phone"] if outgoing else phone,
+            "to": phone if outgoing else OWNER["phone"],
+            "timestamp": datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "body": body,
+            "service": "SMS",
+        })
+    return records
 
 
 def load_font(size):
@@ -237,6 +283,16 @@ def to_dms(value):
     return (float(degrees), float(minutes), float(seconds))
 
 
+def write_bulk_photos(root, count):
+    """Extra photos (copies of the story scenes under new names) for scale tests."""
+    bulk = root / "DCIM" / "Bulk"
+    bulk.mkdir(parents=True, exist_ok=True)
+    camera = root / "DCIM" / "Camera"
+    sources = sorted(camera.glob("IMG_0*.jpg"))
+    for index in range(count):
+        shutil.copyfile(sources[index % len(sources)], bulk / f"IMG_{5000 + index}.jpg")
+
+
 def write_photos(root):
     camera = root / "DCIM" / "Camera"
     camera.mkdir(parents=True, exist_ok=True)
@@ -250,7 +306,7 @@ def write_photos(root):
     draw_scene("document").save(screenshots / "Screenshot_2025-05-07.png")
 
 
-def write_messages(root):
+def write_messages(root, scale):
     messages_dir = root / "messages"
     messages_dir.mkdir(parents=True, exist_ok=True)
     records = []
@@ -262,6 +318,7 @@ def write_messages(root):
             "body": body,
             "service": "SMS",
         })
+    records.extend(filler_messages(scale))
     (messages_dir / "sms_export.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
 
     contacts_dir = root / "contacts"
@@ -275,6 +332,11 @@ def write_messages(root):
         }
         for contact in CONTACTS
     ]
+    if scale:
+        contacts.extend(
+            {"name": name, "phones": [f"+1-555-{2000 + index:04d}"], "emails": []}
+            for index, name in enumerate(FILLER_NAMES)
+        )
     (contacts_dir / "contacts.json").write_text(json.dumps(contacts, indent=2), encoding="utf-8")
 
     calls_dir = root / "calls"
@@ -307,16 +369,22 @@ def write_documents(root):
 
 
 def main():
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    scale = 0
+    if len(args) == 3 and args[1] == "--scale" and args[2].isdigit():
+        scale = int(args[2])
+        args = args[:1]
+    if len(args) != 1:
         print(__doc__)
         sys.exit(2)
-    root = Path(sys.argv[1]).resolve()
+    root = Path(args[0]).resolve()
     if root.exists() and any(root.iterdir()):
         print(f"Refusing to write into non-empty directory: {root}")
         sys.exit(1)
     root.mkdir(parents=True, exist_ok=True)
     write_photos(root)
-    write_messages(root)
+    write_bulk_photos(root, scale // 100)
+    write_messages(root, scale)
     write_documents(root)
     print(f"Demo evidence written to {root}")
 

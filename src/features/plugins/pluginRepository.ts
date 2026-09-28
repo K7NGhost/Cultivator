@@ -19,6 +19,8 @@ export const semanticIndexPluginId = "semantic-index";
 export type ModelStatus = {
   packagesInstalled: boolean;
   modelCached: boolean;
+  /** Semantic Index only: the precision check's model is downloaded too. */
+  precisionModelCached?: boolean;
 };
 
 export async function getMediaTaggingStatus(): Promise<ModelStatus> {
@@ -29,12 +31,44 @@ export async function getSemanticModelStatus(): Promise<ModelStatus> {
   return invoke<ModelStatus>("get_semantic_model_status");
 }
 
+export type AiAccelerationStatus = {
+  /** The NVIDIA GPU in this machine, if any. */
+  gpuName: string | null;
+  driverVersion: string | null;
+  /** A GPU build of PyTorch exists for this GPU and driver. */
+  gpuSupported: boolean;
+  torchInstalled: boolean;
+  /** The installed PyTorch runs the AI models on the GPU. */
+  torchUsesGpu: boolean;
+  lastGpuError: string | null;
+};
+
+export async function getAiAccelerationStatus(): Promise<AiAccelerationStatus> {
+  return invoke<AiAccelerationStatus>("get_ai_acceleration_status");
+}
+
+/** Installs the GPU build of PyTorch (a one-time ~3 GB download). */
+export async function enableGpuAcceleration(): Promise<AiAccelerationStatus> {
+  return invoke<AiAccelerationStatus>("enable_gpu_acceleration");
+}
+
+/**
+ * Starts loading the semantic search model (and the case's search index) in
+ * the background when the model is already installed, so the first Assistant
+ * question doesn't wait for them. Never downloads anything.
+ */
+export async function warmSemanticModel(caseDatabasePath?: string): Promise<boolean> {
+  return invoke<boolean>("warm_semantic_model", { caseDatabasePath });
+}
+
 export type SemanticScore = {
   refKind: "artifact" | "media";
   refId: string;
   score: number;
   z: number;
   tier: "strong" | "related";
+  /** Confirmed by the precision check. */
+  checked: boolean;
 };
 
 export type SemanticSearchResult = {
@@ -42,13 +76,21 @@ export type SemanticSearchResult = {
   scores: SemanticScore[];
   indexedCount: number;
   unindexedCount: number;
+  /** The precision check ran; only matches it confirmed are included. */
+  checked: boolean;
 };
 
+/**
+ * Meaning search. With `check`, the local precision model also double-checks
+ * the best matches and drops the ones it rejects (under a second on a GPU, a
+ * few seconds on a CPU).
+ */
 export async function semanticSearch(
   caseDatabasePath: string,
   text: string,
+  check = false,
 ): Promise<SemanticSearchResult> {
-  return invoke<SemanticSearchResult>("semantic_search", { caseDatabasePath, text });
+  return invoke<SemanticSearchResult>("semantic_search", { caseDatabasePath, text, check });
 }
 
 export function pluginRunUpdatedDatasourcePaths(summary: PluginRunSummary) {

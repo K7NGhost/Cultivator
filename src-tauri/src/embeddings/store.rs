@@ -4,7 +4,7 @@
 //! parser plugins (which recreates artifact rows with new ids) never
 //! re-embeds unchanged content.
 
-use super::SEMANTIC_MODEL_ID;
+use super::{scoring::QuantizedVector, SEMANTIC_MODEL_ID};
 use crate::plugins::{
     builtin::{BuiltinEmbedding, BuiltinIndexSource, MediaItem},
     ensure_plugin_tables,
@@ -220,7 +220,7 @@ async fn stored_hashes(pool: &SqlitePool) -> Result<HashSet<String>, String> {
 pub(super) async fn load_vectors(
     pool: &SqlitePool,
     hashes: &[String],
-) -> Result<HashMap<String, Vec<f32>>, String> {
+) -> Result<HashMap<String, QuantizedVector>, String> {
     let mut vectors = HashMap::new();
     let unique = hashes
         .iter()
@@ -247,7 +247,7 @@ pub(super) async fn load_vectors(
         for row in rows {
             let bytes: Vec<u8> = row.get("vector");
             if let Some(vector) = decode_vector(&bytes) {
-                vectors.insert(row.get("text_hash"), vector);
+                vectors.insert(row.get("text_hash"), QuantizedVector::new(&vector));
             }
         }
     }

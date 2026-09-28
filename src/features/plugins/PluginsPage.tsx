@@ -77,7 +77,9 @@ import {
   runDatasourcePlugins,
 } from "@/features/plugins/pluginRepository";
 import { AddPluginsDialog } from "@/features/plugins/components/AddPluginsDialog";
+import { AiAccelerationControl } from "@/features/plugins/components/AiAccelerationControl";
 import { createPluginRunId } from "@/features/plugins/pluginToasts";
+import { useCasePluginSwitches } from "@/features/plugins/useCasePluginSwitches";
 import { useModelDownloadConsent } from "@/features/plugins/useModelDownloadConsent";
 import type {
   PluginJobRecord,
@@ -216,6 +218,7 @@ function mergePluginJobs(
 
 export function PluginsPage() {
   const { activeCase } = useCases();
+  const casePluginSwitches = useCasePluginSwitches(activeCase?.databasePath ?? null);
   const [datasources, setDatasources] = useState<DataSourceRecord[]>([]);
   const [plugins, setPlugins] = useState<PythonPlugin[]>([]);
   const [pluginFolders, setPluginFolders] = useState<string[]>([]);
@@ -356,6 +359,7 @@ export function PluginsPage() {
       setJobs(nextJobs);
       setLogs(nextLogs);
       setLoadState({ error: null, isLoading: false });
+      await casePluginSwitches.reload();
     } catch (caughtError) {
       setLoadState({
         error: getErrorMessage(caughtError),
@@ -942,16 +946,18 @@ export function PluginsPage() {
           Refresh
         </Button>
         <div className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground">
+          <AiAccelerationControl />
+          <Separator orientation="vertical" className="h-4" />
           <span>{plugins.length} installed plugins</span>
           <Separator orientation="vertical" className="h-4" />
           <span>{datasources.length} datasources</span>
         </div>
       </section>
 
-      {loadState.error && (
+      {(loadState.error ?? casePluginSwitches.error) && (
         <section className="flex h-8 shrink-0 items-center gap-2 border-b px-2 text-xs text-destructive">
           <AlertCircle className="size-3.5" aria-hidden="true" />
-          <span className="truncate">{loadState.error}</span>
+          <span className="truncate">{loadState.error ?? casePluginSwitches.error}</span>
         </section>
       )}
 
@@ -985,10 +991,16 @@ export function PluginsPage() {
 
                 <Table
                   containerClassName="min-h-0 flex-1 overflow-auto"
-                  className="min-w-[960px] table-fixed text-xs"
+                  className="min-w-[1010px] table-fixed text-xs"
                 >
                   <TableHeader className="sticky top-0 z-10 bg-muted">
                     <TableRow className="hover:bg-muted">
+                      <TableHead
+                        className="h-7 w-[50px] px-2"
+                        title="On plugins are pre-selected when you add a datasource to this case. Switching one off keeps it installed."
+                      >
+                        On
+                      </TableHead>
                       <TableHead className="h-7 w-[190px] px-2">Plugin</TableHead>
                       <TableHead className="h-7 w-[120px] px-2">Folder</TableHead>
                       <TableHead className="h-7 w-[130px] px-2">Author</TableHead>
@@ -1007,6 +1019,19 @@ export function PluginsPage() {
 
                       return (
                         <TableRow key={plugin.id} className="h-8">
+                          <TableCell className="h-8 px-2 py-0">
+                            <Checkbox
+                              aria-label={`Use ${plugin.name} in this case`}
+                              checked={!casePluginSwitches.disabledPluginIds.has(plugin.id)}
+                              disabled={!activeCase}
+                              onCheckedChange={(checked) => {
+                                void casePluginSwitches.setPluginEnabled(
+                                  plugin.id,
+                                  checked === true,
+                                );
+                              }}
+                            />
+                          </TableCell>
                           <TableCell className="h-8 px-2 py-0">
                             <div className="min-w-0">
                               <div className="truncate font-medium">{plugin.name}</div>
@@ -1094,7 +1119,7 @@ export function PluginsPage() {
                     {plugins.length === 0 && (
                       <TableRow>
                         <TableCell
-                          colSpan={9}
+                          colSpan={10}
                           className="h-16 text-center text-xs text-muted-foreground"
                         >
                           No Python plugins are installed.

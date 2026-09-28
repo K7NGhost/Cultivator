@@ -23,7 +23,12 @@ import { EntryView } from "@/features/assistant/components/EntryView";
 import type { AssistantEntry, SemanticState } from "@/features/assistant/types";
 import { useCases } from "@/features/cases/case-provider";
 import { listMediaGallery } from "@/features/media/mediaRepository";
-import { getSemanticModelStatus, semanticSearch } from "@/features/plugins/pluginRepository";
+import {
+  getSemanticModelStatus,
+  semanticSearch,
+  warmSemanticModel,
+  type SemanticSearchResult,
+} from "@/features/plugins/pluginRepository";
 import { cn } from "@/lib/utils";
 
 let nextEntryId = 0;
@@ -34,6 +39,7 @@ export function AssistantPage() {
   const isActive = location.pathname === "/assistant";
   const [index, setIndex] = useState<AssistantIndex | null>(null);
   const [meaningAvailable, setMeaningAvailable] = useState(false);
+  const [precisionAvailable, setPrecisionAvailable] = useState(false);
   const [hasAskedModel, setHasAskedModel] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,13 +82,20 @@ export function AssistantPage() {
           return;
         }
         const nextIndex = indexAssistantData(artifacts, [...gallery.photos, ...gallery.videos]);
+        const modelReady = Boolean(modelStatus?.packagesInstalled && modelStatus.modelCached);
         indexRef.current = nextIndex;
         setIndex(nextIndex);
-        setMeaningAvailable(Boolean(modelStatus?.packagesInstalled && modelStatus.modelCached));
+        setMeaningAvailable(modelReady);
+        setPrecisionAvailable(modelReady && Boolean(modelStatus?.precisionModelCached));
+        if (modelReady) {
+          // Load the model while the examiner types; a failure here only
+          // means the first question loads it instead.
+          void warmSemanticModel(activeCase.databasePath).catch(() => undefined);
+        }
         setEntries((current) =>
           current.map((entry) => ({
             ...entry,
-            results: runAssistantQuery(entry.query, nextIndex, entry.useMeaning ? entry.semantic?.scores : null),
+            results: runAssistantQuery(entry.query, nextIndex, meaningScores(entry)),
           })),
         );
       })
@@ -114,48 +127,74 @@ export function AssistantPage() {
     setEntries((current) => current.map((entry) => (entry.id === entryId ? patch(entry) : entry)));
   }
 
-  /** Asks the local model which items match the question's content words. */
+  /**
+   * Asks the local model which items match the question's content words and
+   * shows them, then has the precision model double-check them and shows
+   * only the confirmed ones.
+   */
   function fetchMeaning(entryId: string, query: AssistantQuery) {
     if (!activeCase || !meaningAvailable || query.keywords.length === 0) {
       return;
     }
+    const databasePath = activeCase.databasePath;
+    const text = query.keywords.join(" ");
+    const checking = precisionAvailable;
 
-    patchEntry(entryId, (entry) => ({ ...entry, isThinking: true, semanticError: null }));
+    function show(patch: Partial<AssistantEntry>) {
+      patchEntry(entryId, (entry) => {
+        const latestIndex = indexRef.current;
+        // Ignore replies for a filter the examiner has since changed.
+        if (entry.query !== query || !latestIndex) {
+          return entry;
+        }
+        const next = { ...entry, ...patch };
+        return { ...next, results: runAssistantQuery(query, latestIndex, meaningScores(next)) };
+      });
+    }
 
-    semanticSearch(activeCase.databasePath, query.keywords.join(" "))
-      .then((result) => {
-        const semantic: SemanticState = {
-          scores: new Map(
-            result.scores.map((score) => [
-              semanticKey(score.refKind, score.refId),
-              { score: score.score, tier: score.tier },
-            ]),
-          ),
-          corrections: result.corrections,
-          unindexedCount: result.unindexedCount,
-        };
-        patchEntry(entryId, (entry) => {
-          const latestIndex = indexRef.current;
-          // Ignore replies for a filter the examiner has since changed.
-          if (entry.query !== query || !latestIndex) {
-            return entry;
-          }
-          return {
-            ...entry,
-            semantic,
+    patchEntry(entryId, (entry) => ({
+      ...entry,
+      isThinking: true,
+      semanticError: null,
+      isChecking: false,
+      checkError: null,
+    }));
+
+    semanticSearch(databasePath, text)
+      .then(
+        (result) => {
+          show({
+            semantic: toSemanticState(result),
+            checkedSemantic: null,
             isThinking: false,
-            results: runAssistantQuery(query, latestIndex, entry.useMeaning ? semantic.scores : null),
-          };
-        });
-      })
-      .catch((caughtError) => {
-        patchEntry(entryId, (entry) => ({
-          ...entry,
-          isThinking: false,
-          semanticError: caughtError instanceof Error ? caughtError.message : String(caughtError),
-        }));
-      })
-      .finally(() => setHasAskedModel(true));
+            isChecking: checking,
+          });
+          return checking;
+        },
+        (caughtError) => {
+          patchEntry(entryId, (entry) => ({
+            ...entry,
+            isThinking: false,
+            semanticError: errorMessage(caughtError),
+          }));
+          return false;
+        },
+      )
+      .then((shouldCheck) => {
+        setHasAskedModel(true);
+        if (!shouldCheck) {
+          return;
+        }
+        return semanticSearch(databasePath, text, true).then(
+          (result) => show({ checkedSemantic: toSemanticState(result), isChecking: false }),
+          (caughtError) =>
+            patchEntry(entryId, (entry) => ({
+              ...entry,
+              isChecking: false,
+              checkError: errorMessage(caughtError),
+            })),
+        );
+      });
   }
 
   function ask(text: string) {
@@ -172,8 +211,12 @@ export function AssistantPage() {
         results: runAssistantQuery(query, index),
         useMeaning: true,
         semantic: null,
+        checkedSemantic: null,
+        usePrecision: true,
         isThinking: false,
         semanticError: null,
+        isChecking: false,
+        checkError: null,
       },
     ]);
     setInput("");
@@ -190,28 +233,29 @@ export function AssistantPage() {
     }
     const query = { ...update(entry.query), notes: [] };
     const keywordsChanged = query.keywords.join("\u0000") !== entry.query.keywords.join("\u0000");
-    const semantic = keywordsChanged ? null : entry.semantic;
 
-    patchEntry(entryId, (current) => ({
-      ...current,
-      query,
-      semantic,
-      results: runAssistantQuery(query, index, current.useMeaning ? semantic?.scores : null),
-    }));
+    patchEntry(entryId, (current) => {
+      const next = {
+        ...current,
+        query,
+        semantic: keywordsChanged ? null : current.semantic,
+        checkedSemantic: keywordsChanged ? null : current.checkedSemantic,
+      };
+      return { ...next, results: runAssistantQuery(query, index, meaningScores(next)) };
+    });
     if (keywordsChanged && entry.useMeaning) {
       fetchMeaning(entryId, query);
     }
   }
 
-  function setUseMeaning(entryId: string, useMeaning: boolean) {
+  function setSwitch(entryId: string, change: Partial<Pick<AssistantEntry, "useMeaning" | "usePrecision">>) {
     if (!index) {
       return;
     }
-    patchEntry(entryId, (entry) => ({
-      ...entry,
-      useMeaning,
-      results: runAssistantQuery(entry.query, index, useMeaning ? entry.semantic?.scores : null),
-    }));
+    patchEntry(entryId, (entry) => {
+      const next = { ...entry, ...change };
+      return { ...next, results: runAssistantQuery(next.query, index, meaningScores(next)) };
+    });
   }
 
   function handleSubmit(event: FormEvent) {
@@ -228,12 +272,18 @@ export function AssistantPage() {
           variant="outline"
           className="h-5 rounded-sm text-[11px]"
           title={
-            meaningAvailable
-              ? "Content words are matched by meaning with the on-device BGE-M3 model."
-              : "Content words are matched exactly. Run Semantic Index (AI) to search by meaning."
+            !meaningAvailable
+              ? "Content words are matched exactly. Run Semantic Index (AI) to search by meaning."
+              : precisionAvailable
+                ? "Content words are matched by meaning with the on-device BGE-M3 model, and the best matches are double-checked by the on-device Qwen3-Reranker model."
+                : "Content words are matched by meaning with the on-device BGE-M3 model. Run Semantic Index (AI) again to add the precision check."
           }
         >
-          {meaningAvailable ? "Offline · BGE-M3 meaning search" : "Offline · exact keywords"}
+          {!meaningAvailable
+            ? "Offline · exact keywords"
+            : precisionAvailable
+              ? "Offline · meaning search + precision check"
+              : "Offline · BGE-M3 meaning search"}
         </Badge>
         <Separator orientation="vertical" className="h-5" />
         <div className="flex min-w-0 items-center gap-2 truncate text-[11px] text-muted-foreground">
@@ -292,7 +342,8 @@ export function AssistantPage() {
                 entry={entry}
                 firstModelLoad={!hasAskedModel}
                 meaningAvailable={meaningAvailable}
-                onSetUseMeaning={(useMeaning) => setUseMeaning(entry.id, useMeaning)}
+                onSetUseMeaning={(useMeaning) => setSwitch(entry.id, { useMeaning })}
+                onSetUsePrecision={(usePrecision) => setSwitch(entry.id, { usePrecision })}
                 onUpdate={(update) => updateQuery(entry.id, update)}
               />
             ))
@@ -338,4 +389,30 @@ export function AssistantPage() {
       />
     </div>
   );
+}
+
+/** The meaning scores an entry's results use: the checked ones unless the examiner turned the check off. */
+function meaningScores(entry: AssistantEntry) {
+  if (!entry.useMeaning) {
+    return null;
+  }
+  return ((entry.usePrecision && entry.checkedSemantic) || entry.semantic)?.scores ?? null;
+}
+
+function toSemanticState(result: SemanticSearchResult): SemanticState {
+  return {
+    scores: new Map(
+      result.scores.map((score) => [
+        semanticKey(score.refKind, score.refId),
+        { score: score.score, tier: score.tier, checked: score.checked },
+      ]),
+    ),
+    corrections: result.corrections,
+    unindexedCount: result.unindexedCount,
+    checked: result.checked,
+  };
+}
+
+function errorMessage(caughtError: unknown) {
+  return caughtError instanceof Error ? caughtError.message : String(caughtError);
 }

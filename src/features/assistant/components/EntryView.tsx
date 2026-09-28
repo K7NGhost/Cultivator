@@ -20,6 +20,7 @@ export function EntryView({
   firstModelLoad,
   meaningAvailable,
   onSetUseMeaning,
+  onSetUsePrecision,
   onUpdate,
 }: {
   actions: ResultActions;
@@ -28,6 +29,7 @@ export function EntryView({
   firstModelLoad: boolean;
   meaningAvailable: boolean;
   onSetUseMeaning: (useMeaning: boolean) => void;
+  onSetUsePrecision: (usePrecision: boolean) => void;
   onUpdate: (update: (query: AssistantQuery) => AssistantQuery) => void;
 }) {
   const { query, results } = entry;
@@ -41,7 +43,12 @@ export function EntryView({
         <p className="font-medium">{query.text}</p>
       </div>
 
-      <FilterChips entry={entry} onSetUseMeaning={onSetUseMeaning} onUpdate={onUpdate} />
+      <FilterChips
+        entry={entry}
+        onSetUseMeaning={onSetUseMeaning}
+        onSetUsePrecision={onSetUsePrecision}
+        onUpdate={onUpdate}
+      />
 
       {entry.isThinking && (
         <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -57,7 +64,18 @@ export function EntryView({
           results by meaning (e.g. &ldquo;money&rdquo; finding transfers) and to handle typos.
         </Note>
       )}
+      {entry.isChecking && (
+        <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <LoaderCircle className="size-3 animate-spin" aria-hidden="true" />
+          Double-checking meaning matches with the local precision model...
+        </p>
+      )}
       {entry.semanticError && <Note tone="error">Meaning search failed: {entry.semanticError}</Note>}
+      {entry.checkError && (
+        <Note tone="error">
+          Precision check failed, so these meaning matches are unchecked: {entry.checkError}
+        </Note>
+      )}
       {entry.semantic && entry.semantic.unindexedCount > 0 && entry.useMeaning && (
         <Note>
           {entry.semantic.unindexedCount.toLocaleString()} messages or captions aren&apos;t in the

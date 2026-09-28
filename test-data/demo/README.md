@@ -10,6 +10,8 @@ Use the bundled Python runtime, which already includes Pillow. Write the output 
 src-tauri/python-runtime/windows-x64/python.exe test-data/demo/generate_demo_evidence.py C:\path\to\demo-phone
 ```
 
+Add `--scale 100000` to bury the story in 100,000 everyday messages and 1,000 extra photos, for testing speed and search quality on a large phone.
+
 What it creates:
 
 | Path | Exercises |
@@ -27,7 +29,7 @@ What it creates:
 
 1. Create a case.
 2. Add the generated folder as a datasource.
-3. Tick **Hash Calculator**, **Image Metadata**, **Media Tagging (AI)**, **JSON Chat Export**, and **Semantic Index (AI)**.
+3. Every installed plugin is already ticked. Keep at least **Hash Calculator**, **Image Metadata**, **Media Tagging (AI)**, **JSON Chat Export**, and **Semantic Index (AI)**.
 4. When the runs finish, open **Assistant** and try:
    - `messages between john and jane march - jun 2025`
    - `messages about money`

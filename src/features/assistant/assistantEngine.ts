@@ -1,6 +1,7 @@
 import type { StoredArtifactRecord } from "@/features/artifacts/types";
 import type { MediaItem } from "@/features/media/types";
 
+import { inYearlessWindow } from "./assistantDateRange";
 import {
   buildPersonDirectory,
   digitsOf,
@@ -59,6 +60,8 @@ export type AssistantMatch = {
   reason: "exact" | "meaning";
   tier: "strong" | "related";
   score?: number;
+  /** A meaning match confirmed by the precision check. */
+  checked?: boolean;
 };
 
 export type Matched<T> = T & { match?: AssistantMatch };
@@ -67,7 +70,10 @@ export type Matched<T> = T & { match?: AssistantMatch };
  * Meaning-search scores from the local model, keyed by `semanticKey(...)`.
  * Only items that cleared the related cutoff are present.
  */
-export type SemanticScores = Map<string, { score: number; tier: "strong" | "related" }>;
+export type SemanticScores = Map<
+  string,
+  { score: number; tier: "strong" | "related"; checked: boolean }
+>;
 
 export type AssistantResults = {
   searched: AssistantTarget[];
@@ -347,12 +353,7 @@ export function inDateRange(date: Date | null, range: AssistantDateRange | null)
   if (range.end && date > range.end) {
     return false;
   }
-  if (range.monthsOfYear) {
-    const month = date.getMonth();
-    const { from, to } = range.monthsOfYear;
-    return from <= to ? month >= from && month <= to : month >= from || month <= to;
-  }
-  return true;
+  return range.monthsOfYear ? inYearlessWindow(date, range.monthsOfYear) : true;
 }
 
 /** Parses ISO timestamps and EXIF-style "2025:07:04 20:10:00" local times. */
@@ -446,7 +447,9 @@ function contentMatch(
   if (matchesKeywords(haystack, keywords)) {
     return { reason: "exact", tier: "strong", score: scored?.score };
   }
-  return scored ? { reason: "meaning", tier: scored.tier, score: scored.score } : null;
+  return scored
+    ? { reason: "meaning", tier: scored.tier, score: scored.score, checked: scored.checked }
+    : null;
 }
 
 function byDate<T extends { at: Date | null }>(left: T, right: T) {

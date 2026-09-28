@@ -35,7 +35,7 @@ pub struct MediaScanProgress {
     pub current_path: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaItem {
     pub id: String,

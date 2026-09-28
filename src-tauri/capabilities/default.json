@@ -2,14 +2,133 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "dialog:default",
     "opener:default",
     {
       "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "**" }]
+      "allow": [
+        {
+          "path": "**"
+        }
+      ],
+      "deny": [
+        {
+          "path": "**/*.[eE][xX][eE]"
+        },
+        {
+          "path": "**/*.[cC][oO][mM]"
+        },
+        {
+          "path": "**/*.[sS][cC][rR]"
+        },
+        {
+          "path": "**/*.[pP][iI][fF]"
+        },
+        {
+          "path": "**/*.[bB][aA][tT]"
+        },
+        {
+          "path": "**/*.[cC][mM][dD]"
+        },
+        {
+          "path": "**/*.[pP][sS]1"
+        },
+        {
+          "path": "**/*.[pP][sS][mM]1"
+        },
+        {
+          "path": "**/*.[vV][bB][sS]"
+        },
+        {
+          "path": "**/*.[vV][bB][eE]"
+        },
+        {
+          "path": "**/*.[jJ][sS]"
+        },
+        {
+          "path": "**/*.[jJ][sS][eE]"
+        },
+        {
+          "path": "**/*.[wW][sS][fF]"
+        },
+        {
+          "path": "**/*.[wW][sS][hH]"
+        },
+        {
+          "path": "**/*.[hH][tT][aA]"
+        },
+        {
+          "path": "**/*.[mM][sS][iI]"
+        },
+        {
+          "path": "**/*.[mM][sS][pP]"
+        },
+        {
+          "path": "**/*.[mM][sS][iI][xX]"
+        },
+        {
+          "path": "**/*.[aA][pP][pP][xX]"
+        },
+        {
+          "path": "**/*.[lL][nN][kK]"
+        },
+        {
+          "path": "**/*.[uU][rR][lL]"
+        },
+        {
+          "path": "**/*.[cC][pP][lL]"
+        },
+        {
+          "path": "**/*.[jJ][aA][rR]"
+        },
+        {
+          "path": "**/*.[rR][eE][gG]"
+        },
+        {
+          "path": "**/*.[iI][nN][fF]"
+        },
+        {
+          "path": "**/*.[aA][pP][pP][lL][iI][cC][aA][tT][iI][oO][nN]"
+        },
+        {
+          "path": "**/*.[aA][pP][pP][rR][eE][fF]-[mM][sS]"
+        },
+        {
+          "path": "**/*.[sS][cC][fF]"
+        },
+        {
+          "path": "**/*.[mM][sS][cC]"
+        },
+        {
+          "path": "**/*.[cC][hH][mM]"
+        },
+        {
+          "path": "**/*.[gG][aA][dD][gG][eE][tT]"
+        },
+        {
+          "path": "**/*.[sS][eE][tT][tT][iI][nN][gG][cC][oO][nN][tT][eE][nN][tT]-[mM][sS]"
+        },
+        {
+          "path": "**/*.[lL][iI][bB][rR][aA][rR][yY]-[mM][sS]"
+        },
+        {
+          "path": "**/*.[dD][iI][aA][gG][cC][aA][bB]"
+        },
+        {
+          "path": "**/*.[xX][lL][lL]"
+        },
+        {
+          "path": "**/*.[sS][yY][sS]"
+        },
+        {
+          "path": "**/*.[dD][lL][lL]"
+        }
+      ]
     },
     "sql:default",
     "sql:allow-execute",

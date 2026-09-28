@@ -22,9 +22,11 @@ use std::{
     },
     time::{Duration, Instant, UNIX_EPOCH},
 };
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
+mod ai;
 mod embeddings;
+mod evidence_sqlite;
 mod plugins;
 pub mod preview;
 #[path = "tauri/commands.rs"]
@@ -718,12 +720,35 @@ async fn get_semantic_model_status(
 }
 
 #[tauri::command]
+async fn get_ai_acceleration_status(
+    app_handle: tauri::AppHandle,
+) -> Result<ai::AiAccelerationStatus, String> {
+    ai::get_ai_acceleration_status(app_handle).await
+}
+
+#[tauri::command]
+async fn enable_gpu_acceleration(
+    app_handle: tauri::AppHandle,
+) -> Result<ai::AiAccelerationStatus, String> {
+    ai::enable_gpu_acceleration(app_handle).await
+}
+
+#[tauri::command]
+async fn warm_semantic_model(
+    app_handle: tauri::AppHandle,
+    case_database_path: Option<String>,
+) -> Result<bool, String> {
+    ai::warm_semantic_model(app_handle, case_database_path).await
+}
+
+#[tauri::command]
 async fn semantic_search(
     app_handle: tauri::AppHandle,
     case_database_path: String,
     text: String,
+    check: Option<bool>,
 ) -> Result<embeddings::SemanticSearchResult, String> {
-    embeddings::semantic_search(app_handle, case_database_path, text).await
+    embeddings::semantic_search(app_handle, case_database_path, text, check.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -1615,9 +1640,12 @@ async fn open_readonly_sqlite_database(path: &str) -> Result<SqlitePool, String>
         return Err("SQLite path is not a file.".to_string());
     }
 
+    // Evidence is never opened in place; see evidence_sqlite.
+    let copy = tauri::async_runtime::spawn_blocking(move || evidence_sqlite::working_copy(&path))
+        .await
+        .map_err(|error| format!("SQLite working copy failed: {error}"))??;
     let options = SqliteConnectOptions::new()
-        .filename(path)
-        .read_only(true)
+        .filename(copy)
         .create_if_missing(false)
         .busy_timeout(Duration::from_secs(5));
 
@@ -2231,8 +2259,15 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
+        .setup(|_| {
+            // Remove working copies of evidence left behind by a crash.
+            evidence_sqlite::clear_working_copies();
+            Ok(())
+        })
         .manage(SearchRegistry::default())
         .manage(embeddings::EmbeddingWorker::default())
+        .manage(embeddings::RerankWorker::default())
+        .manage(ai::CaptionWorker::default())
         .invoke_handler(tauri::generate_handler![
             list_directory,
             list_directory_entries,
@@ -2261,6 +2296,9 @@ pub fn run() {
             render_media_thumbnail,
             get_media_tagging_status,
             get_semantic_model_status,
+            get_ai_acceleration_status,
+            enable_gpu_acceleration,
+            warm_semantic_model,
             semantic_search,
             remove_datasource,
             run_datasource_plugins,
@@ -2284,8 +2322,9 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
-                // Don't leave a ~2.5 GB model process behind.
-                app_handle.state::<embeddings::EmbeddingWorker>().shutdown();
+                // Don't leave a multi-gigabyte model process behind.
+                ai::shutdown_workers(app_handle);
+                evidence_sqlite::clear_working_copies();
             }
         });
 }

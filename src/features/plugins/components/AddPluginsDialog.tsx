@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { DataSourceRecord } from "@/features/datasources/types";
+import { PluginSelectionActions } from "@/features/plugins/components/PluginSelectionActions";
 import type { PythonPlugin } from "@/features/plugins/types";
 
 /**
@@ -56,6 +57,19 @@ export function AddPluginsDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-[min(28rem,calc(100vh-14rem))] overflow-auto px-3 py-2 text-xs">
+          {available.length > 0 && (
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-[11px] text-muted-foreground">
+                {chosenIds.length} of {available.length} chosen
+              </span>
+              <PluginSelectionActions
+                disabled={isAdding}
+                pluginIds={available.map((plugin) => plugin.id)}
+                selectedIds={chosenIds}
+                onChange={setChosenIds}
+              />
+            </div>
+          )}
           {available.length > 0 ? (
             <div className="divide-y rounded-sm border">
               {available.map((plugin) => (

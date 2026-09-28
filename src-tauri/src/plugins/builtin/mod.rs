@@ -7,6 +7,7 @@ mod semantic_index;
 use crate::plugins::PythonPluginManifest;
 use serde_json::Value as JsonValue;
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::{Mutex, OnceLock},
 };
@@ -46,6 +47,20 @@ pub struct MediaCaptionResult {
     pub error: Option<String>,
 }
 
+/// Captions for a batch of images, and the device that produced them.
+pub struct CaptionedImages {
+    pub results: Vec<MediaCaptionResult>,
+    /// E.g. "NVIDIA GeForce RTX 5070 Ti Laptop GPU" or "CPU (12 threads)".
+    pub device: String,
+}
+
+/// Embedding vectors for a batch of texts (one per text, in order), and the
+/// device that produced them.
+pub struct EmbeddedTexts {
+    pub vectors: Vec<Vec<f32>>,
+    pub device: String,
+}
+
 /// Text the runner found that isn't in the semantic index yet.
 pub struct BuiltinIndexSource {
     pub hash: String,
@@ -64,12 +79,11 @@ pub(crate) struct BuiltinPluginEffects {
     pub derived_paths: Vec<String>,
     pub file_hashes: Option<Vec<BuiltinFileHash>>,
     pub media_tag_updates: Option<Vec<BuiltinMediaTagUpdate>>,
-    pub embeddings: Option<Vec<BuiltinEmbedding>>,
 }
 
-pub(crate) type CaptionBatch<'a> =
-    &'a mut dyn FnMut(&[String]) -> Result<Vec<MediaCaptionResult>, String>;
-pub(crate) type EmbedBatch<'a> = &'a mut dyn FnMut(&[String]) -> Result<Vec<Vec<f32>>, String>;
+pub(crate) type CaptionBatch<'a> = &'a mut dyn FnMut(&[String]) -> Result<CaptionedImages, String>;
+pub(crate) type EmbedBatch<'a> = &'a mut dyn FnMut(&[String]) -> Result<EmbeddedTexts, String>;
+pub(crate) type StoreEmbeddings<'a> = &'a mut dyn FnMut(&[BuiltinEmbedding]) -> Result<(), String>;
 
 pub struct BuiltinPluginContext<'a> {
     pub paths: Vec<String>,
@@ -78,11 +92,15 @@ pub struct BuiltinPluginContext<'a> {
     pub related_manifests: Vec<PythonPluginManifest>,
     /// Filled by the runner only for plugins whose `needs_index_sources()` is true.
     pub index_sources: Vec<BuiltinIndexSource>,
+    /// Photos whose unchanged file already has a caption. Filled by the runner
+    /// only for plugins whose `needs_captioned_paths()` is true.
+    pub captioned_paths: HashSet<String>,
     progress: &'a mut dyn FnMut(BuiltinPluginProgress),
     #[allow(dead_code)]
     cancelled: &'a dyn Fn() -> bool,
     caption_batch: CaptionBatch<'a>,
     embed_batch: EmbedBatch<'a>,
+    store_embeddings: StoreEmbeddings<'a>,
     effects: BuiltinPluginEffects,
 }
 
@@ -100,10 +118,12 @@ impl<'a> BuiltinPluginContext<'a> {
         options: JsonValue,
         related_manifests: Vec<PythonPluginManifest>,
         index_sources: Vec<BuiltinIndexSource>,
+        captioned_paths: HashSet<String>,
         progress: &'a mut dyn FnMut(BuiltinPluginProgress),
         cancelled: &'a dyn Fn() -> bool,
         caption_batch: CaptionBatch<'a>,
         embed_batch: EmbedBatch<'a>,
+        store_embeddings: StoreEmbeddings<'a>,
     ) -> Self {
         Self {
             paths,
@@ -111,10 +131,12 @@ impl<'a> BuiltinPluginContext<'a> {
             options,
             related_manifests,
             index_sources,
+            captioned_paths,
             progress,
             cancelled,
             caption_batch,
             embed_batch,
+            store_embeddings,
             effects: BuiltinPluginEffects {
                 logs: Vec::new(),
                 artifacts: None,
@@ -122,7 +144,6 @@ impl<'a> BuiltinPluginContext<'a> {
                 derived_paths: Vec::new(),
                 file_hashes: None,
                 media_tag_updates: None,
-                embeddings: None,
             },
         }
     }
@@ -183,21 +204,20 @@ impl<'a> BuiltinPluginContext<'a> {
     /// installing/loading it on first use. Returns one result per input path,
     /// in the same order; a per-file failure is reported in that entry's
     /// `error` rather than failing the whole batch.
-    pub fn caption_images(&mut self, paths: &[String]) -> Result<Vec<MediaCaptionResult>, String> {
+    pub fn caption_images(&mut self, paths: &[String]) -> Result<CaptionedImages, String> {
         (self.caption_batch)(paths)
     }
 
     /// Embeds texts with the shared local semantic model (one vector per text,
     /// in order), loading or downloading the model on first use.
-    pub fn embed_texts(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    pub fn embed_texts(&mut self, texts: &[String]) -> Result<EmbeddedTexts, String> {
         (self.embed_batch)(texts)
     }
 
-    pub fn add_embedding(&mut self, embedding: BuiltinEmbedding) {
-        self.effects
-            .embeddings
-            .get_or_insert_with(Vec::new)
-            .push(embedding);
+    /// Saves vectors to the case right away, so a large index keeps memory
+    /// flat and a cancelled run keeps what it finished.
+    pub fn store_embeddings(&mut self, embeddings: &[BuiltinEmbedding]) -> Result<(), String> {
+        (self.store_embeddings)(embeddings)
     }
 
     pub(crate) fn into_effects(self) -> BuiltinPluginEffects {
@@ -221,6 +241,11 @@ pub trait BuiltinPlugin: Send + Sync {
     /// When true, the runner fills `context.index_sources` with this
     /// datasource's messages and captions that aren't semantically indexed yet.
     fn needs_index_sources(&self) -> bool {
+        false
+    }
+
+    /// When true, the runner fills `context.captioned_paths`.
+    fn needs_captioned_paths(&self) -> bool {
         false
     }
 
@@ -387,11 +412,30 @@ impl BuiltinPlugin for MediaTaggingPlugin {
         150
     }
 
+    fn needs_captioned_paths(&self) -> bool {
+        true
+    }
+
     fn run(&self, context: &mut BuiltinPluginContext<'_>) -> Result<(), String> {
-        let image_paths = media_tagging::collect_image_paths(context.paths.clone());
+        let mut image_paths = media_tagging::collect_image_paths(context.paths.clone());
+        let found = image_paths.len();
+        // Re-runs only caption new or changed photos.
+        image_paths.retain(|path| {
+            !context
+                .captioned_paths
+                .contains(path.to_string_lossy().as_ref())
+        });
+        let already_captioned = found - image_paths.len();
+        if already_captioned > 0 {
+            context.log(
+                "info",
+                format!("Kept existing captions for {already_captioned} unchanged images."),
+            );
+        }
         let total = image_paths.len() as u64;
         let mut completed = 0u64;
         let mut tagged = 0u64;
+        let mut device = None;
 
         context.progress(0, total, "Preparing media tagging");
 
@@ -404,9 +448,10 @@ impl BuiltinPlugin for MediaTaggingPlugin {
                 .iter()
                 .map(|path| path.to_string_lossy().to_string())
                 .collect::<Vec<_>>();
-            let results = context.caption_images(&chunk_paths)?;
+            let captioned = context.caption_images(&chunk_paths)?;
+            device.get_or_insert(captioned.device);
 
-            for result in results {
+            for result in captioned.results {
                 completed += 1;
 
                 match result.caption {
@@ -437,8 +482,11 @@ impl BuiltinPlugin for MediaTaggingPlugin {
         context.log(
             "info",
             format!(
-                "Generated captions and tags for {tagged} of {total} image{}.",
-                if total == 1 { "" } else { "s" }
+                "Generated captions and tags for {tagged} of {total} image{}{}.",
+                if total == 1 { "" } else { "s" },
+                device
+                    .map(|device| format!(" on {device}"))
+                    .unwrap_or_default()
             ),
         );
 
@@ -478,23 +526,41 @@ impl BuiltinPlugin for SemanticIndexPlugin {
             "Loading AI model (the first run downloads about 2.3 GB)",
         );
         let mut indexed = 0u64;
+        let mut device: Option<String> = None;
+        let mut remaining = sources.as_slice();
 
-        for chunk in sources.chunks(semantic_index::BATCH_SIZE) {
+        while !remaining.is_empty() {
             if context.is_cancelled() {
                 break;
             }
+
+            // The first reply says where the model runs; a GPU gets bigger batches.
+            let on_gpu = device
+                .as_deref()
+                .is_some_and(|device| !device.starts_with("CPU"));
+            let size = if on_gpu {
+                semantic_index::GPU_BATCH_SIZE
+            } else {
+                semantic_index::BATCH_SIZE
+            };
+            let (chunk, rest) = remaining.split_at(size.min(remaining.len()));
+            remaining = rest;
 
             let texts = chunk
                 .iter()
                 .map(|source| source.text.clone())
                 .collect::<Vec<_>>();
-            let vectors = context.embed_texts(&texts)?;
-            for (source, vector) in chunk.iter().zip(vectors) {
-                context.add_embedding(BuiltinEmbedding {
+            let embedded = context.embed_texts(&texts)?;
+            device.get_or_insert(embedded.device);
+            let batch = chunk
+                .iter()
+                .zip(embedded.vectors)
+                .map(|(source, vector)| BuiltinEmbedding {
                     hash: source.hash.clone(),
                     vector,
-                });
-            }
+                })
+                .collect::<Vec<_>>();
+            context.store_embeddings(&batch)?;
 
             indexed += chunk.len() as u64;
             context.progress(
@@ -506,7 +572,12 @@ impl BuiltinPlugin for SemanticIndexPlugin {
 
         context.log(
             "info",
-            format!("Indexed {indexed} messages and photo captions for meaning search."),
+            format!(
+                "Indexed {indexed} messages and photo captions for meaning search{}.",
+                device
+                    .map(|device| format!(" on {device}"))
+                    .unwrap_or_default()
+            ),
         );
 
         Ok(())

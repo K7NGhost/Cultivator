@@ -1,4 +1,4 @@
-use crate::embeddings;
+use crate::{ai, embeddings};
 #[cfg(feature = "python-plugins")]
 use globset::{GlobBuilder, GlobMatcher};
 #[cfg(feature = "python-plugins")]
@@ -29,7 +29,6 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     Row, SqlitePool,
 };
-use std::io::Write;
 #[cfg(feature = "python-plugins")]
 use std::io::{self, BufRead, BufReader};
 #[cfg(feature = "python-plugins")]
@@ -67,10 +66,6 @@ const LEGACY_DEMO_PLUGIN_IDS: &[&str] = &[
 ];
 const LEGACY_DEMO_ARTIFACT_KINDS: &[&str] = &["file_metadata", "text_sample"];
 const MEDIA_PREVIEW_MAX_DIMENSION: u32 = 1_600;
-const MEDIA_TAGGING_MODEL_ID: &str = "Salesforce/blip-image-captioning-base";
-const MEDIA_TAGGING_PACKAGES: &[&str] = &["torch", "transformers"];
-const MEDIA_TAGGING_IMPORT_CHECK: &str = "import torch, transformers";
-const MEDIA_TAGGING_PYTHON: &str = include_str!("plugins/builtin/media_tagging_inference.py");
 const MEDIA_PREVIEW_PYTHON: &str = r#"
 import struct
 import sys
@@ -1582,9 +1577,13 @@ pub struct MediaTaggingStatus {
 pub async fn get_media_tagging_status(app_handle: AppHandle) -> Result<MediaTaggingStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let runtime = resolve_python_runtime(&app_handle)?;
-        let packages_installed = python_packages_installed(&runtime, MEDIA_TAGGING_IMPORT_CHECK);
+        let packages_installed = ai::modules_present(&runtime, ai::MEDIA_TAGGING_PACKAGES.modules);
         let cache_dir = model_cache_dir(&app_handle)?;
-        let model_cached = hf_model_cached(&cache_dir, MEDIA_TAGGING_MODEL_ID);
+        let model_cached = hf_model_cached(
+            &cache_dir,
+            ai::MEDIA_TAGGING_MODEL_ID,
+            ai::MEDIA_TAGGING_MODEL_REVISION,
+        );
 
         Ok(MediaTaggingStatus {
             packages_installed,
@@ -1722,82 +1721,18 @@ pub(crate) fn configure_python_command(command: &mut ProcessCommand, runtime: &P
     apply_python_library_path(command, &runtime.library_paths);
 }
 
-/// Checks whether optional AI dependencies are importable in the bundled
-/// runtime. These are deliberately separate from the Pillow/pillow-heif
-/// install that runs eagerly for every user: they are only pulled in the
-/// first time someone actually runs an AI plugin.
-pub(crate) fn python_packages_installed(runtime: &PythonRuntime, import_check: &str) -> bool {
-    let mut check_command = ProcessCommand::new(&runtime.executable);
-    configure_python_command(&mut check_command, runtime);
-    check_command
-        .arg("-I")
-        .arg("-B")
-        .arg("-c")
-        .arg(import_check);
-
-    check_command
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
-/// Whether `huggingface_hub` has a snapshot of `model_id` under our cache
-/// (`<cache_dir>/hub/models--Org--Name`, since `HF_HOME` points there). Used
-/// only to decide whether to ask the user before a download — never as the
-/// source of truth for whether the model can actually be loaded.
-pub(crate) fn hf_model_cached(cache_dir: &Path, model_id: &str) -> bool {
-    let marker = cache_dir
+/// Whether `huggingface_hub` has the pinned `revision` of `model_id` under our
+/// cache (`<cache_dir>/hub/models--Org--Name/snapshots/<revision>`, since
+/// `HF_HOME` points there). Decides whether to ask before a download, and
+/// whether a model worker may run with the network switched off.
+pub(crate) fn hf_model_cached(cache_dir: &Path, model_id: &str, revision: &str) -> bool {
+    cache_dir
         .join("hub")
-        .join(format!("models--{}", model_id.replace('/', "--")));
-    fs::read_dir(&marker)
-        .map(|mut entries| entries.next().is_some())
-        .unwrap_or(false)
-}
-
-pub(crate) fn ensure_python_packages(
-    runtime: &PythonRuntime,
-    import_check: &str,
-    packages: &[&str],
-) -> Result<(), String> {
-    if python_packages_installed(runtime, import_check) {
-        return Ok(());
-    }
-
-    let mut install_command = ProcessCommand::new(&runtime.executable);
-    configure_python_command(&mut install_command, runtime);
-    install_command
-        .arg("-I")
-        .arg("-B")
-        .arg("-m")
-        .arg("pip")
-        .arg("install")
-        .arg("--disable-pip-version-check")
-        .arg("--no-warn-script-location");
-    for package in packages {
-        install_command.arg(package);
-    }
-
-    let output = install_command.output().map_err(|error| {
-        format!(
-            "Failed to install AI dependencies '{}': {error}",
-            runtime.executable.display()
-        )
-    })?;
-
-    if !output.status.success() {
-        let diagnostics = String::from_utf8_lossy(&output.stderr);
-        let diagnostics = diagnostics.trim();
-        return Err(if diagnostics.is_empty() {
-            format!(
-                "Failed to install AI dependencies ({}).",
-                packages.join(", ")
-            )
-        } else {
-            format!("Failed to install AI dependencies: {diagnostics}")
-        });
-    }
-
-    Ok(())
+        .join(format!("models--{}", model_id.replace('/', "--")))
+        .join("snapshots")
+        .join(revision)
+        .join("config.json")
+        .is_file()
 }
 
 /// Shared on-disk cache for every local AI model (`HF_HOME`).
@@ -1816,101 +1751,6 @@ pub(crate) fn model_cache_dir(app_handle: &AppHandle) -> Result<PathBuf, String>
     })?;
 
     Ok(dir)
-}
-
-#[derive(Deserialize)]
-struct MediaCaptionResultRaw {
-    path: String,
-    #[serde(default)]
-    caption: Option<String>,
-    #[serde(default)]
-    error: Option<String>,
-}
-
-/// Runs one batch of images through the local captioning model. Errors
-/// returned from here (missing runtime, failed dependency install, failed
-/// model load) are fatal for the whole plugin job, matching the guide's
-/// contract that a systemic failure commits nothing. A single image that
-/// fails to caption is instead reported per-entry via `error` so the rest
-/// of the batch still succeeds.
-fn run_media_captioning_batch(
-    app_handle: &AppHandle,
-    paths: &[String],
-) -> Result<Vec<builtin::MediaCaptionResult>, String> {
-    if paths.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let runtime = resolve_python_runtime(app_handle)?;
-    ensure_python_packages(&runtime, MEDIA_TAGGING_IMPORT_CHECK, MEDIA_TAGGING_PACKAGES)?;
-    let cache_dir = model_cache_dir(app_handle)?;
-    let request = serde_json::json!({
-        "modelId": MEDIA_TAGGING_MODEL_ID,
-        "cacheDir": cache_dir.to_string_lossy(),
-        "paths": paths,
-    });
-    let request_text = serde_json::to_string(&request)
-        .map_err(|error| format!("Failed to encode media tagging request: {error}"))?;
-
-    let mut command = ProcessCommand::new(&runtime.executable);
-    configure_python_command(&mut command, &runtime);
-    command
-        .arg("-I")
-        .arg("-B")
-        .arg("-c")
-        .arg(MEDIA_TAGGING_PYTHON)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let mut child = command.spawn().map_err(|error| {
-        format!(
-            "Failed to start media tagging model '{}': {error}",
-            runtime.executable.display()
-        )
-    })?;
-
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| "Failed to open media tagging stdin.".to_string())?;
-        stdin
-            .write_all(request_text.as_bytes())
-            .map_err(|error| format!("Failed to send media tagging request: {error}"))?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("Media tagging process failed: {error}"))?;
-
-    if !output.status.success() {
-        let diagnostics = String::from_utf8_lossy(&output.stderr);
-        let diagnostics = diagnostics.trim();
-        return Err(if diagnostics.is_empty() {
-            "Media tagging failed to run.".to_string()
-        } else {
-            format!("Media tagging failed: {diagnostics}")
-        });
-    }
-
-    let stdout_text = String::from_utf8_lossy(&output.stdout);
-    let last_line = stdout_text
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or_default();
-    let raw_results: Vec<MediaCaptionResultRaw> = serde_json::from_str(last_line)
-        .map_err(|error| format!("Failed to parse media tagging output: {error}"))?;
-
-    Ok(raw_results
-        .into_iter()
-        .map(|raw| builtin::MediaCaptionResult {
-            path: raw.path,
-            caption: raw.caption,
-            error: raw.error,
-        })
-        .collect())
 }
 
 pub async fn remove_datasource(
@@ -2220,6 +2060,7 @@ pub async fn run_datasource_plugins(
         .filter_map(|plugin_id| builtin::plugin(plugin_id))
         .collect::<Vec<_>>();
     requested_builtins.sort_by_key(|plugin| plugin.execution_order());
+    ai::warm_up_for_plugins(&app_handle, &requested_plugin_ids);
 
     let mut datasource_paths_updated = false;
 
@@ -2409,6 +2250,18 @@ pub async fn run_datasource_plugins(
             break;
         }
 
+        if plugin.needs_index_sources() {
+            // The index reads what every other plugin produced, including
+            // Python parsers (messages) that are still running in the background.
+            for handle in job_handles.drain(..) {
+                jobs.push(
+                    handle
+                        .await
+                        .map_err(|error| format!("Plugin job task failed: {error}"))??,
+                );
+            }
+        }
+
         let (job, paths_updated) = run_builtin_plugin_stage(
             &app_handle,
             &pool,
@@ -2504,6 +2357,12 @@ async fn run_builtin_plugin_stage(
     } else {
         Vec::new()
     };
+    let captioned_paths = if plugin.needs_captioned_paths() {
+        load_captioned_paths(pool, &datasource.id).await?
+    } else {
+        HashSet::new()
+    };
+    let store_pool = pool.clone();
     let progress_app_handle = app_handle.clone();
     let progress_run_id = run_id.unwrap_or_default().to_string();
     let progress_plugin_id = plugin_id.clone();
@@ -2527,12 +2386,18 @@ async fn run_builtin_plugin_stage(
             );
         };
         let cancellation = || is_plugin_run_cancelled(Some(&progress_run_id)).unwrap_or(false);
-        let mut caption_batch =
-            |paths: &[String]| run_media_captioning_batch(&caption_app_handle, paths);
+        let mut caption_batch = |paths: &[String]| {
+            caption_app_handle
+                .state::<ai::CaptionWorker>()
+                .caption(&caption_app_handle, paths)
+        };
         let mut embed_batch = |texts: &[String]| {
             embed_app_handle
                 .state::<embeddings::EmbeddingWorker>()
                 .embed(&embed_app_handle, texts)
+        };
+        let mut store_embeddings = |vectors: &[builtin::BuiltinEmbedding]| {
+            tauri::async_runtime::block_on(embeddings::upsert_embeddings(&store_pool, vectors))
         };
         let mut context = builtin::BuiltinPluginContext::new(
             execution_paths,
@@ -2540,10 +2405,12 @@ async fn run_builtin_plugin_stage(
             options,
             related_manifests,
             index_sources,
+            captioned_paths,
             &mut reporter,
             &cancellation,
             &mut caption_batch,
             &mut embed_batch,
+            &mut store_embeddings,
         );
 
         plugin.run(&mut context)?;
@@ -2590,10 +2457,6 @@ async fn run_builtin_plugin_stage(
             if let Some(updates) = effects.media_tag_updates {
                 apply_media_tag_updates(pool, &job.id, &plugin_id, &datasource.id, &updates)
                     .await?;
-            }
-
-            if let Some(vectors) = effects.embeddings {
-                embeddings::upsert_embeddings(pool, &vectors).await?;
             }
 
             for path in effects.derived_paths {
@@ -2663,6 +2526,8 @@ fn execute_python_plugin_process(
     app_handle: &AppHandle,
     plugin_options: &JsonValue,
 ) -> Result<PluginExecutionOutput, String> {
+    use std::io::Write;
+
     if is_plugin_run_cancelled(run_id)? {
         return Err("Plugin run cancelled.".to_string());
     }
@@ -5904,12 +5769,52 @@ async fn replace_plugin_results(
         .map_err(|error| format!("Failed to finish plugin result replacement: {error}"))
 }
 
+/// Paths of this datasource's photos that already have a caption.
+async fn load_captioned_paths(
+    pool: &SqlitePool,
+    datasource_id: &str,
+) -> Result<HashSet<String>, String> {
+    let rows =
+        sqlx::query("SELECT path, payload FROM media_gallery_items WHERE datasource_id = $1")
+            .bind(datasource_id)
+            .fetch_all(pool)
+            .await
+            .map_err(|error| format!("Failed to read existing captions: {error}"))?;
+
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            serde_json::from_str::<builtin::MediaItem>(&row.get::<String, _>("payload"))
+                .is_ok_and(|item| item.caption.is_some())
+        })
+        .map(|row| row.get("path"))
+        .collect())
+}
+
 async fn replace_media_gallery_items(
     pool: &SqlitePool,
     job_id: &str,
     datasource_id: &str,
     gallery: &builtin::MediaGallery,
 ) -> Result<(), String> {
+    // Captions are expensive to make: keep them for files that haven't
+    // changed (same size and modification time) instead of wiping them.
+    let mut kept_captions = HashMap::new();
+    for row in sqlx::query("SELECT payload FROM media_gallery_items WHERE datasource_id = $1")
+        .bind(datasource_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| format!("Failed to read existing media gallery items: {error}"))?
+    {
+        if let Ok(item) =
+            serde_json::from_str::<builtin::MediaItem>(&row.get::<String, _>("payload"))
+        {
+            if item.caption.is_some() {
+                kept_captions.insert(item.path.clone(), item);
+            }
+        }
+    }
+
     let mut transaction = pool
         .begin()
         .await
@@ -5933,7 +5838,14 @@ async fn replace_media_gallery_items(
             builtin::MediaType::Image => "image",
             builtin::MediaType::Video => "video",
         };
-        let payload = serde_json::to_string(item)
+        let mut item = item.clone();
+        if let Some(previous) = kept_captions.get(&item.path) {
+            if previous.size == item.size && previous.modified_ms == item.modified_ms {
+                item.caption = previous.caption.clone();
+                item.tags = previous.tags.clone();
+            }
+        }
+        let payload = serde_json::to_string(&item)
             .map_err(|error| format!("Failed to serialize media gallery item: {error}"))?;
 
         sqlx::query(
@@ -6632,6 +6544,77 @@ mod tests {
             std::process::id(),
             NEXT_ID_SUFFIX.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    #[tokio::test]
+    async fn rescans_keep_captions_only_for_unchanged_photos() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        ensure_plugin_tables(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO plugin_jobs (id, case_id, datasource_id, plugin_id, status, started_at)
+             VALUES ('job', 'case', 'ds', 'image-metadata', 'complete', 'now')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let photo = |name: &str, size: u64| builtin::MediaItem {
+            id: name.to_string(),
+            media_type: builtin::MediaType::Image,
+            name: name.to_string(),
+            path: format!("C:/evidence/{name}"),
+            format: "JPEG".to_string(),
+            size,
+            modified_ms: Some(1_000),
+            width: None,
+            height: None,
+            duration_ms: None,
+            media_path: String::new(),
+            thumbnail_path: String::new(),
+            metadata: Vec::new(),
+            caption: None,
+            tags: Vec::new(),
+        };
+        let scan = |photos| builtin::MediaGallery {
+            photos,
+            videos: Vec::new(),
+            scanned_files: 2,
+        };
+
+        replace_media_gallery_items(
+            &pool,
+            "job",
+            "ds",
+            &scan(vec![photo("a.jpg", 10), photo("b.jpg", 20)]),
+        )
+        .await
+        .unwrap();
+        let captions = ["a.jpg", "b.jpg"].map(|name| builtin::BuiltinMediaTagUpdate {
+            path: format!("C:/evidence/{name}"),
+            caption: Some("a red car".to_string()),
+            tags: vec!["car".to_string()],
+        });
+        apply_media_tag_updates(&pool, "job", "media-tagging", "ds", &captions)
+            .await
+            .unwrap();
+
+        // b.jpg changed size on the rescan, so only a.jpg keeps its caption.
+        replace_media_gallery_items(
+            &pool,
+            "job",
+            "ds",
+            &scan(vec![photo("a.jpg", 10), photo("b.jpg", 99)]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            load_captioned_paths(&pool, "ds").await.unwrap(),
+            HashSet::from(["C:/evidence/a.jpg".to_string()])
+        );
     }
 
     #[tokio::test]

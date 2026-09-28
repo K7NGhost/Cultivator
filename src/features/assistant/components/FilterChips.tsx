@@ -1,4 +1,4 @@
-import { Brain, Calendar, Sparkles, Tag, User, X } from "lucide-react";
+import { Brain, Calendar, ShieldCheck, Sparkles, Tag, User, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import type { AssistantQuery } from "@/features/assistant/assistantQuery";
@@ -12,10 +12,12 @@ const ROLE_LABELS: Record<PersonRole, string> = { with: "With", from: "From", to
 export function FilterChips({
   entry,
   onSetUseMeaning,
+  onSetUsePrecision,
   onUpdate,
 }: {
   entry: AssistantEntry;
   onSetUseMeaning: (useMeaning: boolean) => void;
+  onSetUsePrecision: (usePrecision: boolean) => void;
   onUpdate: (update: (query: AssistantQuery) => AssistantQuery) => void;
 }) {
   const { query } = entry;
@@ -23,6 +25,11 @@ export function FilterChips({
     query.people[role].map((person, index) => ({ role, person, index })),
   );
   const corrections = entry.semantic?.corrections ?? [];
+  // Meaning matches the precision check removed from this answer.
+  const removed =
+    entry.semantic && entry.checkedSemantic
+      ? entry.semantic.scores.size - entry.checkedSemantic.scores.size
+      : 0;
 
   return (
     <div className="flex flex-wrap items-center gap-1 text-[11px]">
@@ -99,6 +106,23 @@ export function FilterChips({
           onClick={() => onSetUseMeaning(true)}
         >
           Turn meaning search back on
+        </button>
+      )}
+      {entry.useMeaning && entry.checkedSemantic && entry.usePrecision && (
+        <Chip
+          icon={ShieldCheck}
+          label={`Precision check (removed ${removed.toLocaleString()})`}
+          title="The local Qwen3-Reranker model double-checked the meaning matches and removed the ones it judged unrelated. Remove to see every match the vector search found."
+          onRemove={() => onSetUsePrecision(false)}
+        />
+      )}
+      {entry.useMeaning && entry.checkedSemantic && !entry.usePrecision && (
+        <button
+          type="button"
+          className="rounded-sm px-1 text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+          onClick={() => onSetUsePrecision(true)}
+        >
+          Turn the precision check back on ({removed.toLocaleString()} unchecked matches shown)
         </button>
       )}
     </div>

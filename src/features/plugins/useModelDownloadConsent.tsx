@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  getAiAccelerationStatus,
   getMediaTaggingStatus,
   getSemanticModelStatus,
   mediaTaggingPluginId,
@@ -20,22 +21,31 @@ import {
 type ModelPlugin = {
   pluginId: string;
   name: string;
-  downloadSize: string;
   getStatus: () => Promise<ModelStatus>;
+  /** What is left to download, or null when everything is on disk. */
+  downloadSize: (status: ModelStatus | null) => string | null;
 };
+
+type PendingDownload = ModelPlugin & { size: string };
 
 const MODEL_PLUGINS: ModelPlugin[] = [
   {
     pluginId: mediaTaggingPluginId,
     name: "Media Tagging (AI)",
-    downloadSize: "~1.5 GB",
     getStatus: getMediaTaggingStatus,
+    downloadSize: (status) => (status?.packagesInstalled && status.modelCached ? null : "~1.5 GB"),
   },
   {
     pluginId: semanticIndexPluginId,
-    name: "Semantic Index (AI)",
-    downloadSize: "~2.3 GB",
+    name: "Semantic Index (AI) + precision check",
     getStatus: getSemanticModelStatus,
+    downloadSize: (status) => {
+      if (status?.packagesInstalled && status.modelCached && status.precisionModelCached) {
+        return null;
+      }
+      // The search model is ~2.3 GB, the precision check's ~1.2 GB.
+      return status?.modelCached ? "~1.2 GB" : "~3.5 GB";
+    },
   },
 ];
 
@@ -47,28 +57,32 @@ const MODEL_PLUGINS: ModelPlugin[] = [
  */
 export function useModelDownloadConsent() {
   const resolverRef = useRef<((confirmed: boolean) => void) | null>(null);
-  const [pendingPlugins, setPendingPlugins] = useState<ModelPlugin[] | null>(null);
+  const [pendingPlugins, setPendingPlugins] = useState<PendingDownload[] | null>(null);
+  const [gpuName, setGpuName] = useState<string | null>(null);
 
   async function confirmModelDownloads(pluginIds: string[]): Promise<string[]> {
-    const needed: ModelPlugin[] = [];
+    const needed: PendingDownload[] = [];
 
     for (const plugin of MODEL_PLUGINS) {
       if (!pluginIds.includes(plugin.pluginId)) {
         continue;
       }
-      try {
-        const status = await plugin.getStatus();
-        if (!(status.packagesInstalled && status.modelCached)) {
-          needed.push(plugin);
-        }
-      } catch {
-        needed.push(plugin);
+      const status = await plugin.getStatus().catch(() => null);
+      const size = plugin.downloadSize(status);
+      if (size) {
+        needed.push({ ...plugin, size });
       }
     }
 
     if (needed.length === 0) {
       return pluginIds;
     }
+
+    // A first install on an NVIDIA machine also fetches the GPU build of PyTorch.
+    const acceleration = await getAiAccelerationStatus().catch(() => null);
+    setGpuName(
+      acceleration?.gpuSupported && !acceleration.torchInstalled ? acceleration.gpuName : null,
+    );
 
     const confirmed = await new Promise<boolean>((resolve) => {
       resolverRef.current = resolve;
@@ -108,10 +122,16 @@ export function useModelDownloadConsent() {
           {pendingPlugins?.map((plugin) => (
             <li key={plugin.pluginId} className="flex items-center justify-between gap-2">
               <span className="font-medium">{plugin.name}</span>
-              <span className="text-muted-foreground">{plugin.downloadSize}</span>
+              <span className="text-muted-foreground">{plugin.size}</span>
             </li>
           ))}
         </ul>
+        {gpuName && (
+          <p className="border-t px-3 py-2 text-[11px] text-muted-foreground">
+            Includes the GPU build of PyTorch for {gpuName} (about 3 GB more), so the
+            models run on the GPU.
+          </p>
+        )}
         <DialogFooter className="border-t p-2">
           <Button
             type="button"
