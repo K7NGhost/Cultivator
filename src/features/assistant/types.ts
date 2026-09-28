@@ -9,6 +9,7 @@ export type SemanticState = {
   unindexedCount: number;
   /** The precision check confirmed these scores. */
   checked: boolean;
+  themes: string[];
 };
 
 export type AssistantEntry = {

@@ -10,6 +10,7 @@ mod corpus;
 mod rerank;
 mod scoring;
 mod store;
+mod themes;
 mod worker;
 
 pub(crate) use rerank::rerank_model_cached;
@@ -81,6 +82,8 @@ pub struct SemanticSearchResult {
     pub unindexed_count: usize,
     /// The precision check ran: every score was confirmed by it.
     pub checked: bool,
+    /// Investigative themes the question called up (see `themes`).
+    pub themes: Vec<&'static str>,
 }
 
 /// Finds the case's messages and captions that match `text` by meaning. With
@@ -111,6 +114,7 @@ pub async fn semantic_search(
             indexed_count,
             unindexed_count,
             checked: check,
+            themes: Vec::new(),
         });
     }
 
@@ -134,7 +138,7 @@ pub async fn semantic_search(
 
     let worker_app = app.clone();
     let query_text = text.clone();
-    let (corrections, variants, query_vectors) = tauri::async_runtime::spawn_blocking(move || {
+    let (corrections, variants, themes, query_vectors) = tauri::async_runtime::spawn_blocking(move || {
         let worker = worker_app.state::<EmbeddingWorker>();
         let corrections = worker.correct(&worker_app, &unknown)?;
         let corrected = apply_corrections(&query_text, &corrections);
@@ -144,8 +148,25 @@ pub async fn semantic_search(
         if corrected != query_text {
             variants.push(corrected);
         }
-        let vectors = worker.embed(&worker_app, &variants)?.vectors;
-        Ok::<_, String>((corrections, variants, vectors))
+        let words = variants.iter().flat_map(|variant| query_words(variant)).collect::<Vec<_>>();
+        let themes = themes::matching(words.iter().map(String::as_str));
+        let mut searched = variants.clone();
+        if !themes.is_empty() {
+            // "hiding money": the theme's examples find the hiding, and
+            // "money" on its own keeps the topic from being drowned out.
+            let last = variants.last().map(String::as_str).unwrap_or_default();
+            let topic = themes::other_words(&themes, &query_words(last));
+            if !topic.is_empty() {
+                searched.push(topic);
+            }
+            searched.extend(
+                themes
+                    .iter()
+                    .flat_map(|theme| theme.examples.iter().map(|example| example.to_string())),
+            );
+        }
+        let vectors = worker.embed(&worker_app, &searched)?.vectors;
+        Ok::<_, String>((corrections, variants, themes, vectors))
     })
     .await
     .map_err(|error| format!("Semantic search worker failed: {error}"))??;
@@ -160,12 +181,23 @@ pub async fn semantic_search(
     if check {
         let candidates = check_candidates(&scores);
         let worker_app = app.clone();
+        let described = themes
+            .iter()
+            .map(|theme| theme.description)
+            .collect::<Vec<_>>()
+            .join("; ");
         let logits = tauri::async_runtime::spawn_blocking(move || {
             let reranker = worker_app.state::<RerankWorker>();
             // Best of the question's spellings, as in the vector search.
             let mut best = HashMap::<String, f32>::new();
             for variant in &variants {
-                let logits = reranker.check(&worker_app, variant, &candidates)?;
+                // A theme's description tells the check what the word means here.
+                let query = if described.is_empty() {
+                    variant.clone()
+                } else {
+                    format!("{variant} ({described})")
+                };
+                let logits = reranker.check(&worker_app, &query, &candidates)?;
                 for (text, logit) in candidates.iter().zip(logits) {
                     let entry = best.entry(text.clone()).or_insert(logit);
                     *entry = entry.max(logit);
@@ -175,7 +207,7 @@ pub async fn semantic_search(
         })
         .await
         .map_err(|error| format!("Precision check failed: {error}"))??;
-        scores = apply_check(scores, &logits);
+        scores = apply_check(scores, &logits, !themes.is_empty());
     }
 
     Ok(SemanticSearchResult {
@@ -184,6 +216,7 @@ pub async fn semantic_search(
         indexed_count,
         unindexed_count,
         checked: check,
+        themes: themes.iter().map(|theme| theme.name).collect(),
     })
 }
 

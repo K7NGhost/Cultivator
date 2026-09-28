@@ -29,6 +29,44 @@ The Hash Calculator plugin records the MD5, SHA-1 and SHA-256 fingerprint of eve
 - The hashes appear in the Files view and the file preview.
 - **Copy Hashes** in a file's right-click menu copies them.
 
+### Hash sets
+
+Hash sets are lists of known file hashes that every case is checked against (**Analysis → Hash sets…**).
+
+- **Known-bad lists** flag files, for example Project VIC / CAID exports or a lab's own lists.
+- **Known-good lists**, such as NSRL, mark operating-system and program files that are usually safe to set aside.
+- **Any common format imports:** plain lists, CSV (including NSRL's), hashdeep output and JSON exports. MD5, SHA-1 and SHA-256 are all recognised.
+- **Stored once, for all cases.** Lists live on the examiner's computer, not inside a case.
+- **Matches** appear under **Files → Hash Set Hits**, one entry per list.
+
+### Extension mismatch
+
+**Files → File Views → Extension Mismatch** lists files whose content contradicts their name, such as a `.jpg` that is really a zip, a classic way to hide data in plain sight. Cultivator reads each file's signature, accepts related extensions (a `.docx` is a zip inside), and ignores generic ones like `.dat`. The demo phone includes a "photo" that is really a zip of the ledger.
+
+## Tags and notes
+
+Examiners can tag files and photos (Bookmark, Follow Up, Notable, Project VIC categories, or any custom tag) and add a note.
+
+- Tagging works from the Files page and from a photo's details in the Media page.
+- The tags are stored with the case and listed under **Files → Tags**.
+
+## Timeline
+
+The Timeline page (Analysis → Timeline) puts every dated message, call, photo and video in the case on one list:
+
+- **Activity over time:** a chart by day, or by month for long cases. Clicking a bar zooms into that period.
+- **Activity by hour of day:** shows when the phone is used ("pattern of life").
+- **Filters:** by type, date range and text (a person or words).
+- **Click through:** clicking an event opens it: messages and calls in Artifacts, photos and videos in Media.
+
+## Map
+
+The Map page (Analysis → Map) plots photos by their GPS coordinates, plus any location artifacts from plugins.
+
+- **Built-in world map:** the map is bundled into the app, so viewing it never sends evidence locations to an online map service.
+- **Navigation:** scroll to zoom, drag to move, and **Fit** frames every point.
+- **Point details:** clicking a point shows the photo, its exact coordinates (with a copy button) and a link to open it in Media.
+
 ## Photo captions and tags
 
 The Media Tagging plugin looks at each photo with a local AI model (BLIP) and writes a short caption, such as "a red car driving down a road", plus keyword tags. That makes photos searchable by what they show. The Media page displays the captions and tags and has a search box.
@@ -70,6 +108,24 @@ Words in the question are matched both exactly and by meaning.
 - Spelling mistakes are corrected ("tranactiosn" finds transactions), and both spellings are searched in case the correction is wrong.
 - Confident matches form the answer. Weaker ones are collected in a folded **Possible links** section, so they are available without crowding the answer.
 - On very large cases, only the best matches are kept, and a message repeated many times counts once. The answer stays readable instead of listing thousands of loose hits.
+- Filler words in the question ("show me ppl trying to…", "someone", "being") are ignored, so they don't dilute the search.
+
+### Investigator themes
+
+Questions about behaviour name an idea that the messages themselves never state. On the 100,000-message test phone, "New burner number soon." ranked around 31,000th for "discreet".
+
+For these questions, Cultivator uses built-in themes: secrecy, destroying evidence, threats, fraud and drugs. When the question calls one up:
+
+- The typical wording of that behaviour ("Delete these texts", "Use the burner phone", "Keep your mouth shut or else") is searched alongside the question.
+- The precision check judges matches against a description of the behaviour, not just the one word.
+- A mixed question such as "hiding money" also searches its topic ("money") on its own.
+- The answer shows which theme was used ("Meaning search (theme: secrecy)").
+
+Measured on the test phone:
+
+- **"discreet":** 6 of the real secrecy messages now appear, up from 0.
+- **"threats":** found the threat.
+- **"fraud":** found 4 of 5 fraud messages with no filler.
 
 ### The precision check
 
@@ -156,16 +212,25 @@ Everything also works on a processor alone, only more slowly; the demo phone tak
 
 ## Tests and demo data
 
-- **Frontend: 51 automated tests.** They cover question parsing (including the date cases above), plugin selection, and the case-folder safety check.
-- **Rust: 64 automated tests.** They cover:
-  - hashing
+- **Frontend: 58 automated tests.** They cover:
+  - question parsing (including the date cases above)
+  - plugin selection
+  - the case-folder safety check
+  - reading GPS coordinates
+  - the built-in world map
+  - timeline activity charts
+- **Rust: 69 automated tests.** They cover:
+  - hashing and reading hash-set files
+  - extension mismatch
   - evidence-safe database copies
-  - search scoring and the precision check
+  - search scoring, the precision check and investigator themes
   - compact vectors
   - choosing the right AI engine for a driver and card
   - keeping captions for unchanged photos
 - **Demo phone generator** (`test-data/demo`):
   - It builds a fictional phone with a money-laundering storyline between John, Jane and Tony, with photos, calls and contacts.
+  - The story covers secrecy, destroying evidence, a threat, police, travel and fraud.
+  - It includes a "photo" that is really a zip of the ledger.
   - `--scale 100000` adds 100,000 messages for large-case testing.
   - A JSON chat-export test plugin reads the demo messages.
 - **End-to-end runs.** The finished app was driven through its real screens on the demo, 10,000-message and 100,000-message phones, on a graphics card and on the processor alone. Each run creates a case, adds the datasource, runs every plugin, visits every page, asks the Assistant's questions, checks the answers, and flips the precision-check switch.

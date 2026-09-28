@@ -32,6 +32,11 @@ pub(super) const CHECK_LIMIT: usize = STRONG_LIMIT;
 // warehouse account." for "money" lowest), while the filler BGE-M3 ranked in
 // the top 25 for "money" ("The keys is on the counter.") scored -7.9 or lower.
 const CHECK_MIN_LOGIT: f32 = -7.0;
+// A theme's examples also pull in lines that only resemble the behaviour
+// ("Call me when you can." for "Call me, don't text."), so a match found for
+// a theme stays in the answer only when the check is fairly sure of it;
+// weaker ones become possible links. THEME_CALIBRATION
+const THEME_STRONG_MIN_LOGIT: f32 = -6.0;
 
 /// A search vector held in memory as 8-bit integers and one scale: a quarter
 /// of the float32 size (about 1 KB per item for BGE-M3). Rounding moves a
@@ -176,21 +181,30 @@ pub(super) fn check_candidates(scores: &[SemanticScore]) -> Vec<String> {
 }
 
 /// Keeps the matches the precision check confirmed (`logits` by text) and
-/// drops the rest, including any it didn't read.
+/// drops the rest, including any it didn't read. `themed`: the search used an
+/// investigative theme, so confident answers need a surer verdict.
 pub(super) fn apply_check(
     scores: Vec<SemanticScore>,
     logits: &HashMap<String, f32>,
+    themed: bool,
 ) -> Vec<SemanticScore> {
     scores
         .into_iter()
-        .filter(|score| {
-            logits
-                .get(&score.text)
-                .is_some_and(|logit| *logit >= CHECK_MIN_LOGIT)
-        })
-        .map(|score| SemanticScore {
-            checked: true,
-            ..score
+        .filter_map(|score| {
+            let logit = *logits.get(&score.text)?;
+            if logit < CHECK_MIN_LOGIT {
+                return None;
+            }
+            let tier = if themed && logit < THEME_STRONG_MIN_LOGIT {
+                "related"
+            } else {
+                score.tier
+            };
+            Some(SemanticScore {
+                checked: true,
+                tier,
+                ..score
+            })
         })
         .collect()
 }
@@ -352,9 +366,17 @@ mod tests {
         // The check confirms everything it read except "t1".
         let logits = candidates
             .iter()
-            .map(|text| (text.clone(), if text == "t1" { -9.0 } else { -3.0 }))
+            .map(|text| {
+                let logit = match text.as_str() {
+                    "t1" => -9.0,
+                    "t2" => -6.5,
+                    _ => -3.0,
+                };
+                (text.clone(), logit)
+            })
             .collect();
-        let checked = apply_check(scores, &logits);
+        let themed = apply_check(scores.clone(), &logits, true);
+        let checked = apply_check(scores, &logits, false);
         let ids = checked
             .iter()
             .map(|score| score.ref_id.as_str())
@@ -364,6 +386,13 @@ mod tests {
         assert!(!ids.contains("m29"), "matches the check didn't read are dropped");
         assert_eq!(checked.len(), CHECK_LIMIT - 1);
         assert!(checked.iter().all(|score| score.checked));
+        // For a theme, a -6.5 verdict keeps a match only as a possible link.
+        let tier_of = |scores: &[SemanticScore], id: &str| {
+            scores.iter().find(|score| score.ref_id == id).map(|score| score.tier)
+        };
+        assert_eq!(tier_of(&checked, "m2"), Some("strong"));
+        assert_eq!(tier_of(&themed, "m2"), Some("related"));
+        assert_eq!(tier_of(&themed, "m0"), Some("strong"));
     }
 
     #[test]

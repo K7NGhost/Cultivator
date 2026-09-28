@@ -18,9 +18,11 @@ import { CasePage } from "@/features/cases/CasePage";
 import { CaseProvider, useCases } from "@/features/cases/case-provider";
 import { EvidenceProvider } from "@/features/evidence/evidence-provider";
 import { FilesPage } from "@/features/files/FilesPage";
+import { MapPage } from "@/features/map/MapPage";
 import { MediaPage } from "@/features/media/MediaPage";
 import { PluginsPage } from "@/features/plugins/PluginsPage";
 import { SearchPage } from "@/features/search/SearchPage";
+import { TimelinePage } from "@/features/timeline/TimelinePage";
 import { PlaceholderPage } from "@/features/workspace/PlaceholderPage";
 
 const workspaceRoutes = [
@@ -54,12 +56,11 @@ const workspaceRoutes = [
   },
   {
     path: "/timeline",
-    element: (
-      <PlaceholderPage
-        title="Timeline"
-        description="Timestamps correlated from file metadata and plugin outputs."
-      />
-    ),
+    element: <TimelinePage />,
+  },
+  {
+    path: "/map",
+    element: <MapPage />,
   },
   {
     path: "/reports",

@@ -7,6 +7,7 @@ import {
   FileSearch,
   FolderTree,
   Images,
+  MapPin,
   PanelLeftClose,
   PanelLeftOpen,
   Plug,
@@ -49,6 +50,7 @@ const navGroups = [
       { label: "Plugins", path: "/plugins", icon: Plug },
       { label: "Artifacts", path: "/artifacts", icon: FileSearch },
       { label: "Timeline", path: "/timeline", icon: Clock3 },
+      { label: "Map", path: "/map", icon: MapPin },
     ],
   },
   {

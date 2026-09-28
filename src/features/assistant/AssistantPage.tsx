@@ -410,6 +410,7 @@ function toSemanticState(result: SemanticSearchResult): SemanticState {
     corrections: result.corrections,
     unindexedCount: result.unindexedCount,
     checked: result.checked,
+    themes: result.themes,
   };
 }
 

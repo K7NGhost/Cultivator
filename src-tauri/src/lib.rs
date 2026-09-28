@@ -27,6 +27,8 @@ use tauri::Emitter;
 mod ai;
 mod embeddings;
 mod evidence_sqlite;
+mod file_signature;
+mod hash_sets;
 mod plugins;
 pub mod preview;
 #[path = "tauri/commands.rs"]
@@ -104,6 +106,7 @@ const ALL_FILE_VIEW_IDS: &[&str] = &[
     "file-types:mime:application:zip",
     "deleted:file-system",
     "deleted:all",
+    "extension-mismatch",
     "file-size:50-200mb",
     "file-size:200mb-1gb",
     "file-size:1gb-plus",
@@ -739,6 +742,34 @@ async fn warm_semantic_model(
     case_database_path: Option<String>,
 ) -> Result<bool, String> {
     ai::warm_semantic_model(app_handle, case_database_path).await
+}
+
+#[tauri::command]
+async fn import_hash_set(
+    app_handle: tauri::AppHandle,
+    source_path: String,
+    name: String,
+    kind: String,
+) -> Result<hash_sets::HashSetInfo, String> {
+    hash_sets::import_hash_set(app_handle, source_path, name, kind).await
+}
+
+#[tauri::command]
+async fn list_hash_sets(app_handle: tauri::AppHandle) -> Result<Vec<hash_sets::HashSetInfo>, String> {
+    hash_sets::list_hash_sets(app_handle).await
+}
+
+#[tauri::command]
+async fn delete_hash_set(app_handle: tauri::AppHandle, id: String) -> Result<(), String> {
+    hash_sets::delete_hash_set(app_handle, id).await
+}
+
+#[tauri::command]
+async fn match_hash_sets(
+    app_handle: tauri::AppHandle,
+    case_database_path: String,
+) -> Result<Vec<hash_sets::HashSetHit>, String> {
+    hash_sets::match_hash_sets(app_handle, case_database_path).await
 }
 
 #[tauri::command]
@@ -2022,6 +2053,7 @@ fn file_matches_view(path: &Path, size: u64, view_id: &str) -> bool {
         "file-types:mime:application:pdf" => inferred_mime_type(path) == Some("application/pdf"),
         "file-types:mime:application:zip" => inferred_mime_type(path) == Some("application/zip"),
         "deleted:all" | "deleted:file-system" => looks_like_deleted_file(path),
+        "extension-mismatch" => file_signature::contradicted_extension(path).is_some(),
         "file-size:50-200mb" => (50_000_000..200_000_000).contains(&size),
         "file-size:200mb-1gb" => (200_000_000..1_000_000_000).contains(&size),
         "file-size:1gb-plus" => size >= 1_000_000_000,
@@ -2300,6 +2332,10 @@ pub fn run() {
             enable_gpu_acceleration,
             warm_semantic_model,
             semantic_search,
+            import_hash_set,
+            list_hash_sets,
+            delete_hash_set,
+            match_hash_sets,
             remove_datasource,
             run_datasource_plugins,
             cancel_plugin_run,

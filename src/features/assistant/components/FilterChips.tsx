@@ -25,6 +25,11 @@ export function FilterChips({
     query.people[role].map((person, index) => ({ role, person, index })),
   );
   const corrections = entry.semantic?.corrections ?? [];
+  const themes = entry.semantic?.themes ?? [];
+  const meaningDetails = [
+    corrections.length > 0 && `spelling: ${corrections.map((c) => `${c.from} → ${c.to}`).join(", ")}`,
+    themes.length > 0 && `theme: ${themes.join(", ")}`,
+  ].filter(Boolean);
   // Meaning matches the precision check removed from this answer.
   const removed =
     entry.semantic && entry.checkedSemantic
@@ -90,12 +95,12 @@ export function FilterChips({
       {entry.useMeaning && entry.semantic && query.keywords.length > 0 && (
         <Chip
           icon={Brain}
-          label={
-            corrections.length > 0
-              ? `Meaning search (spelling: ${corrections.map((c) => `${c.from} → ${c.to}`).join(", ")})`
-              : "Meaning search"
+          label={meaningDetails.length > 0 ? `Meaning search (${meaningDetails.join("; ")})` : "Meaning search"}
+          title={
+            themes.length > 0
+              ? "Also matching by meaning with the local BGE-M3 model. The theme adds typical wording for this kind of behaviour, such as deleted texts or burner phones for secrecy. Remove to match exact words only."
+              : "Also matching by meaning with the local BGE-M3 model. Remove to match exact words only."
           }
-          title="Also matching by meaning with the local BGE-M3 model. Remove to match exact words only."
           onRemove={() => onSetUseMeaning(false)}
         />
       )}

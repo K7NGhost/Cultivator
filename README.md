@@ -56,6 +56,20 @@ The plugin architecture is designed to minimize the amount of boilerplate requir
 
 The built-in **Hash Calculator** plugin (on by default) records MD5, SHA-1, and SHA-256 for every file for chain-of-custody verification. Hashes show in the Files view, and **Copy Hashes** copies them from a file's context menu.
 
+**Hash sets** (**Analysis → Hash sets…**) are lists of known hashes that every case is checked against: known-bad lists (Project VIC / CAID exports, a lab's own lists) flag files, and known-good lists such as NSRL mark files that are usually safe to set aside. Plain lists, CSV (including NSRL's format), hashdeep output and JSON exports can be imported; they are stored on this computer once, for all cases. Matches appear under **Files → Hash Set Hits**.
+
+**Extension Mismatch** (**Files → File Views**) lists files whose content contradicts their name, such as a `.jpg` that is really a zip, by reading each file's signature.
+
+### Tags and notes
+
+Files and photos can be tagged (Bookmark, Follow Up, Notable, Project VIC categories, or any custom tag) with a note, from the Files page or a photo's details in Media. Tags are stored with the case and listed under **Files → Tags**.
+
+### Timeline and map
+
+The **Timeline** (sidebar → Analysis) puts every dated message, call, photo and video on one list, with a chart of activity over time (click a bar to zoom in), an activity-by-hour chart for pattern of life, and filters by type, date and text. Click an event to open it.
+
+The **Map** plots photos by their GPS coordinates, plus any location artifacts from plugins. The world map is built into the app, so viewing it never sends evidence locations to an online map service. Click a point to see the photo and open it in Media.
+
 ### 8. Local AI Assistant
 
 The **Assistant** page (sidebar → Analysis) answers plain-language questions about a case, for example:
@@ -65,6 +79,8 @@ The **Assistant** page (sidebar → Analysis) answers plain-language questions a
 - `photos of vehicles`, `photos from july 2025`, `calls with jane`
 
 People, dates, and result types are read from the question by a rule-based parser, and the filter it built is shown with every answer so it can be checked and edited. Content words are matched by meaning with **BGE-M3**, so "money" also finds "Sent 9,500 to the warehouse account". Weaker matches are kept out of the answer, under a collapsed **Possible links** section.
+
+Questions about behaviour, such as `people trying to be discreet`, `threats` or `fraud`, name an idea the messages never state. For these, Cultivator uses built-in **investigator themes** (secrecy, destroying evidence, threats, fraud, drugs): typical wording of each behaviour ("Delete these texts", "Use the burner phone") is searched alongside the question, and the theme used is shown on the answer.
 
 A second local model, **Qwen3-Reranker-0.6B**, then double-checks the best matches (a *precision check*): it reads the question and each match together and drops the ones it judges unrelated. Vector search alone can't tell that "The keys is on the counter." has nothing to do with money, and on a large phone such filler crowds the top of the list: on a 100,000-message test phone, 20 of the top 25 matches for "money" were filler and the precision check removed all 20 while keeping every real transfer. Results appear immediately and are refined when the check finishes (under a second on a GPU, a few seconds on a CPU); confirmed matches carry a check mark. The **Precision check** chip on an answer shows how many matches were removed; remove the chip to see every match the vector search found.
 
@@ -125,8 +141,7 @@ Cultivator is still under active development. Planned features include:
 - **The Sleuth Kit integration** through a Rust-compatible wrapper or interface
 - Continued **UI and performance improvements**
 - Standardized **artifact types** for building specialized artifact visualizations
-- **Timeline analysis**
-- **Geographical and location-based views**
+- **Reports**: exporting tagged items with hashes and examiner notes
 - Additional forensic parsers and analysis modules
 - Expanded plugin capabilities
 

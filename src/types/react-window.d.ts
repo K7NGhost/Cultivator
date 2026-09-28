@@ -24,6 +24,28 @@ declare module "react-window" {
     width: number;
   };
 
+  export type ListChildComponentProps<T = unknown> = {
+    index: number;
+    style: CSSProperties;
+    data: T;
+    isScrolling?: boolean;
+  };
+
+  export type FixedSizeListProps<T = unknown> = {
+    children: ComponentType<ListChildComponentProps<T>>;
+    className?: string;
+    height: number;
+    itemCount: number;
+    itemData?: T;
+    itemSize: number;
+    overscanCount?: number;
+    width: number | string;
+  };
+
+  export class FixedSizeList<T = unknown> extends React.Component<FixedSizeListProps<T>> {
+    scrollToItem(index: number, align?: "auto" | "smart" | "center" | "end" | "start"): void;
+  }
+
   export class FixedSizeGrid<T = unknown> extends React.Component<
     FixedSizeGridProps<T>
   > {

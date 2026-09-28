@@ -62,6 +62,15 @@ import {
   type FileTagSummary,
 } from "@/features/files/fileTagRepository";
 import {
+  HASH_SETS_CHANGED,
+  hashSetEntries,
+  listHashSets,
+  matchHashSets,
+  summarizeHashSetHits,
+  type HashSetSummary,
+} from "@/features/hashsets/hashSetRepository";
+import { toast } from "react-toastify";
+import {
   cancelDatasourcePluginRun,
   listPythonPlugins,
   pluginRunUpdatedDatasourcePaths,
@@ -170,6 +179,8 @@ export function FilesPage() {
     Record<string, FileHashRecord>
   >({});
   const [fileHashRefreshKey, setFileHashRefreshKey] = useState(0);
+  const [hashSetSummaries, setHashSetSummaries] = useState<HashSetSummary[]>([]);
+  const [hashSetsVersion, setHashSetsVersion] = useState(0);
   const [directoryHistory, setDirectoryHistory] = useState<EvidenceTreeNode[]>(
     [],
   );
@@ -471,6 +482,40 @@ export function FilesPage() {
       isCurrent = false;
     };
   }, [activeCase, fileTagRefreshKey]);
+
+  useEffect(() => {
+    const refresh = () => setHashSetsVersion((version) => version + 1);
+    window.addEventListener(HASH_SETS_CHANGED, refresh);
+    return () => window.removeEventListener(HASH_SETS_CHANGED, refresh);
+  }, []);
+
+  // Re-checked when hash sets change and when new file hashes arrive.
+  useEffect(() => {
+    if (!activeCase) {
+      setHashSetSummaries([]);
+      return;
+    }
+
+    let isCurrent = true;
+
+    Promise.all([listHashSets(), matchHashSets(activeCase.databasePath)])
+      .then(([sets, hits]) => {
+        if (isCurrent) {
+          setHashSetSummaries(summarizeHashSetHits(sets, hits));
+        }
+      })
+      .catch((caughtError) => {
+        if (isCurrent) {
+          toast.error(
+            `Hash set check failed: ${caughtError instanceof Error ? caughtError.message : String(caughtError)}`,
+          );
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeCase, fileHashRefreshKey, hashSetsVersion]);
 
   useEffect(() => {
     selectedFileViewRef.current = selectedFileView;
@@ -858,9 +903,13 @@ export function FilesPage() {
     }
   }
 
-  async function loadTaggedFileView(view: FileViewSelection) {
-    if (!activeCase || !view.tagName) {
-      setEntriesError("Open a case before using tag views.");
+  /** Shows a view whose files come from the case database (tags, hash set hits). */
+  async function loadListedFileView(
+    view: FileViewSelection,
+    listEntries: (caseDatabasePath: string) => Promise<EvidenceDirectoryEntry[]>,
+  ) {
+    if (!activeCase) {
+      setEntriesError("Open a case before using this view.");
       return;
     }
 
@@ -879,10 +928,7 @@ export function FilesPage() {
     setIsFileViewPageLoading(false);
 
     try {
-      const entries = await listTaggedFileEntries(
-        activeCase.databasePath,
-        view.tagName,
-      );
+      const entries = await listEntries(activeCase.databasePath);
 
       if (selectedFileViewRef.current?.id !== view.id) {
         return;
@@ -906,8 +952,20 @@ export function FilesPage() {
   }
 
   function selectFileView(view: FileViewSelection) {
-    if (view.tagName) {
-      void loadTaggedFileView(view);
+    const { tagName, hashSetId } = view;
+    if (tagName) {
+      void loadListedFileView(view, (databasePath) =>
+        listTaggedFileEntries(databasePath, tagName),
+      );
+      return;
+    }
+    if (hashSetId) {
+      // Checked again on open, so files hashed since the page loaded count.
+      void loadListedFileView(view, async (databasePath) => {
+        const hits = await matchHashSets(databasePath);
+        setHashSetsVersion((version) => version + 1);
+        return hashSetEntries(hits, hashSetId);
+      });
       return;
     }
 
@@ -1400,6 +1458,7 @@ export function FilesPage() {
             }))}
             selectedFileViewDataSourceId={fileViewDataSourceId}
             tagSummaries={fileTagSummaries}
+            hashSetSummaries={hashSetSummaries}
             onSelectFileViewDataSource={setFileViewDataSourceId}
             onSelectNode={selectTreeNode}
             onExpandNode={(node) => {

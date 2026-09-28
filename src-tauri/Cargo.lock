@@ -997,6 +997,7 @@ dependencies = [
  "grep",
  "ignore",
  "imagesize",
+ "infer",
  "kamadak-exif",
  "md-5",
  "memmap2",

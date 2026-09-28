@@ -33,6 +33,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCases } from "@/features/cases/case-provider";
 import { DataSourceWizardDialog } from "@/features/datasources/DataSourceWizardDialog";
 import { useEvidence } from "@/features/evidence/evidence-provider";
+import { HashSetsDialog } from "@/features/hashsets/HashSetsDialog";
 import {
   getStoredCreatePluginMode,
   storeCreatePluginMode,
@@ -89,6 +90,7 @@ export function AppMenubar() {
     useState(false);
   const [isOpeningPythonApiGuide, setIsOpeningPythonApiGuide] = useState(false);
   const [isCreatePluginOpen, setIsCreatePluginOpen] = useState(false);
+  const [isHashSetsOpen, setIsHashSetsOpen] = useState(false);
   const [createPluginMode, setCreatePluginMode] = useState<CreatePluginMode>(
     getStoredCreatePluginMode,
   );
@@ -401,6 +403,12 @@ export function AppMenubar() {
             <MenubarItem className={itemClassName} onSelect={() => navigate("/timeline")}>
               Timeline
             </MenubarItem>
+            <MenubarItem className={itemClassName} onSelect={() => navigate("/map")}>
+              Map
+            </MenubarItem>
+            <MenubarItem className={itemClassName} onSelect={() => setIsHashSetsOpen(true)}>
+              Hash sets&hellip;
+            </MenubarItem>
             <MenubarItem className={itemClassName} onSelect={() => navigate("/reports")}>
               <FileArchive className="size-3.5" aria-hidden="true" />
               Export report
@@ -438,6 +446,7 @@ export function AppMenubar() {
           </MenubarContent>
         </MenubarMenu>
       </Menubar>
+      <HashSetsDialog open={isHashSetsOpen} onOpenChange={setIsHashSetsOpen} />
       <DataSourceWizardDialog
         activeCase={activeCase}
         open={isDataSourceWizardOpen}

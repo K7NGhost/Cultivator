@@ -31,6 +31,7 @@
         "tailwind-merge": "^3.6.0",
         "tailwindcss": "^4.3.1",
         "tw-animate-css": "^1.4.0",
+        "world-atlas": "2",
       },
       "devDependencies": {
         "@tauri-apps/cli": "^2",
@@ -547,6 +548,8 @@
     "weakmap-polyfill": ["weakmap-polyfill@2.0.4", "", {}, "sha512-ZzxBf288iALJseijWelmECm/1x7ZwQn3sMYIkDr2VvZp7r6SEKuT8D0O9Wiq6L9Nl5mazrOMcmiZE/2NCenaxw=="],
 
     "wistia-video-element": ["wistia-video-element@1.4.0", "", { "dependencies": { "super-media-element": "~1.4.2" } }, "sha512-udI8/yiMZ+KIGwYK1qNOFiXl+s/wffiY+XkwTXlBFICZylFalOS0QYEQqYOmuBsm3jNfGUS4O50tLuN7Ejqm3A=="],
+
+    "world-atlas": ["world-atlas@2.0.2", "", {}, "sha512-IXfV0qwlKXpckz1FhwXVwKRjiIhOnWttOskm5CtxMsjgE/MXAYRHWJqgXOpM8IkcPBoXnyTU5lFHcYa5ChG0LQ=="],
 
     "youtube-video-element": ["youtube-video-element@1.9.0", "", { "dependencies": { "media-played-ranges-mixin": "^0.1.0" } }, "sha512-Hh0dbQM+FVlUaYUbpYkZNUvdKxTNcSNvTGzkQKYShltnX+LRHEp2eYvC2Zm43eU8Np+CBZuoNR2i+seCYzzAyg=="],
 

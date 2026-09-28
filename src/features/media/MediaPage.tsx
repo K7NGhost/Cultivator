@@ -44,6 +44,7 @@ import {
   type RevealTarget,
 } from "@/app/reveal";
 import { useCases } from "@/features/cases/case-provider";
+import { FileTagEditor } from "@/features/files/components/FileTagEditor";
 import {
   listDataSources,
   subscribeToDataSourcesChanged,
@@ -644,7 +645,11 @@ function MediaGallery({
         </div>
       </section>
 
-      <MediaDetailsPanel title={detailTitle} item={selectedItem} />
+      <MediaDetailsPanel
+        caseDatabasePath={caseDatabasePath}
+        title={detailTitle}
+        item={selectedItem}
+      />
     </div>
   );
 }
@@ -898,9 +903,11 @@ function useElementSize<T extends HTMLElement>() {
 }
 
 function MediaDetailsPanel({
+  caseDatabasePath,
   item,
   title,
 }: {
+  caseDatabasePath: string | null;
   item: MediaItem | null;
   title: string;
 }) {
@@ -916,6 +923,17 @@ function MediaDetailsPanel({
       <div className="min-h-0 flex-1 overflow-auto p-2">
         {item ? (
           <div className="grid gap-2 text-xs">
+            <FileTagEditor
+              caseDatabasePath={caseDatabasePath}
+              entry={{
+                id: item.id,
+                name: item.name,
+                path: item.path,
+                kind: "file",
+                size: item.size,
+                modifiedMs: item.modifiedMs ?? undefined,
+              }}
+            />
             <DetailRow label="Name" value={item.name} />
             <DetailRow label="Format" value={item.format} />
             <DetailRow

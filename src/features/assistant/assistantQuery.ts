@@ -71,6 +71,9 @@ const STOPWORDS = new Set([
   "they", "this", "those", "through", "thru", "till", "to", "until", "up", "via", "want",
   "was", "were", "what", "when", "where", "which", "who", "whole", "whom", "will", "with",
   "within", "word", "words", "would", "wrote", "you", "your",
+  // How examiners phrase questions, not what they ask about.
+  "anybody", "attempt", "attempted", "attempting", "being", "everybody", "getting", "instances",
+  "ppl", "somebody", "someone", "stuff", "thing", "things", "tried", "tries", "try", "trying",
 ]);
 
 /**

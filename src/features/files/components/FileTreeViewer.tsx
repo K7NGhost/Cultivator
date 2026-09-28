@@ -22,6 +22,7 @@ import {
   FolderSearch,
   Play,
   Settings2,
+  ShieldAlert,
   Tags,
   Trash2,
 } from "lucide-react";
@@ -44,6 +45,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import type { EvidenceTreeNode } from "@/features/evidence/evidence-provider";
 import type { FileTagSummary } from "@/features/files/fileTagRepository";
+import type { HashSetSummary } from "@/features/hashsets/hashSetRepository";
 import { cn } from "@/lib/utils";
 
 type FileTreeViewerProps = {
@@ -55,6 +57,7 @@ type FileTreeViewerProps = {
   fileViewDataSources?: Array<{ id: string; name: string }>;
   selectedFileViewDataSourceId?: string;
   tagSummaries?: FileTagSummary[];
+  hashSetSummaries?: HashSetSummary[];
   onSelectNode: (node: EvidenceTreeNode) => void;
   onExpandNode?: (node: EvidenceTreeNode) => void;
   onSelectFileView?: (view: FileViewSelection) => void;
@@ -69,6 +72,7 @@ export type FileViewSelection = {
   description: string;
   count: number;
   tagName?: string;
+  hashSetId?: string;
   childViews?: FileViewSelection[];
 };
 
@@ -239,16 +243,40 @@ function createTagViewNode(summary: FileTagSummary): AutopsyTreeNode {
   };
 }
 
+function createHashSetViewNode(summary: HashSetSummary): AutopsyTreeNode {
+  const description =
+    summary.kind === "known-bad"
+      ? `Files whose hash is in the known-bad hash set ${summary.name}.`
+      : `Files whose hash is in the known-good hash set ${summary.name}; usually safe to set aside.`;
+
+  return {
+    id: `autopsy:hashset:${summary.id}`,
+    name: `${summary.name} (${summary.kind === "known-bad" ? "known bad" : "known good"})`,
+    path: "",
+    kind: "view",
+    files: summary.count,
+    fileView: {
+      id: `hashset:${summary.id}`,
+      name: summary.name,
+      description,
+      count: summary.count,
+      hashSetId: summary.id,
+    },
+  };
+}
+
 function buildAutopsyTree(
   sourceNodes: EvidenceTreeNode[],
   options: {
     fileViewCounts: Record<string, number>;
     showFileLeaves: boolean;
     tagSummaries: FileTagSummary[];
+    hashSetSummaries: HashSetSummary[];
   },
 ): AutopsyTreeNode[] {
   const dataSourceChildren = buildRealTreeNodes(sourceNodes, options);
   const tagNodes = options.tagSummaries.map(createTagViewNode);
+  const hashSetNodes = options.hashSetSummaries.map(createHashSetViewNode);
   const documentExtensionNodes = [
     createFileViewNode(
       "file-types:extension:documents:html",
@@ -500,7 +528,7 @@ function buildAutopsyTree(
       name: "File Views",
       path: "",
       kind: "group",
-      files: 3,
+      files: 4,
       children: [
         createFileViewNode(
           "file-types",
@@ -545,6 +573,12 @@ function buildAutopsyTree(
           ],
         ),
         createFileViewNode(
+          "extension-mismatch",
+          "Extension Mismatch",
+          "Files whose content doesn't match their extension, such as a .jpg that is really a zip.",
+          options.fileViewCounts,
+        ),
+        createFileViewNode(
           "file-size",
           "File Size",
           "Files grouped by Autopsy file-size ranges.",
@@ -579,6 +613,14 @@ function buildAutopsyTree(
       kind: "group",
       files: tagNodes.reduce((total, tagNode) => total + tagNode.files, 0),
       children: tagNodes.length > 0 ? tagNodes : undefined,
+    },
+    {
+      id: "autopsy:hash-sets",
+      name: "Hash Set Hits",
+      path: "",
+      kind: "group",
+      files: hashSetNodes.reduce((total, hashSetNode) => total + hashSetNode.files, 0),
+      children: hashSetNodes.length > 0 ? hashSetNodes : undefined,
     },
   ];
 }
@@ -617,7 +659,11 @@ function getNodeIcon(node: AutopsyTreeNode) {
 
   switch (node.kind) {
     case "group":
-      return node.id === "autopsy:tags" ? Tags : FolderOpen;
+      return node.id === "autopsy:tags"
+        ? Tags
+        : node.id === "autopsy:hash-sets"
+          ? ShieldAlert
+          : FolderOpen;
     case "view":
       if (node.name === "Deleted Files") {
         return Trash2;
@@ -874,6 +920,7 @@ export function FileTreeViewer({
   fileViewDataSources = [],
   selectedFileViewDataSourceId = "all",
   tagSummaries = [],
+  hashSetSummaries = [],
   onSelectNode,
   onExpandNode,
   onSelectFileView,
@@ -905,8 +952,9 @@ export function FileTreeViewer({
         fileViewCounts,
         showFileLeaves,
         tagSummaries,
+        hashSetSummaries,
       }),
-    [fileViewCounts, showFileLeaves, sourceTreeData, tagSummaries],
+    [fileViewCounts, hashSetSummaries, showFileLeaves, sourceTreeData, tagSummaries],
   );
 
   useEffect(() => {

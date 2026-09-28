@@ -14,6 +14,7 @@ something to find:
   - messages/sms_export.json, contacts/contacts.json, calls/call_log.json
                           -> json-chat-export plugin -> message/contact/call artifacts
   - Documents/*.txt, Backups/old_photos.zip -> hashing, search, Archive Extractor
+  - Pictures/beach_2025.jpg, really a zip of a ledger -> Extension Mismatch
 """
 
 import json
@@ -45,25 +46,35 @@ MESSAGES = [
     ("2025-01-21T20:05:00Z", "Jane Miller", "John Carter", "Sure, send me a time."),
     ("2025-02-14T12:11:00Z", "Mike Ross", "John Carter", "Quarterly numbers look off again. Can you check the vendor ledger?"),
     ("2025-02-27T22:48:00Z", "Jane Miller", "John Carter", "I have a way to fix the vendor problem. Call me, not text."),
+    ("2025-03-02T19:40:00Z", "Tony (Warehouse)", "John Carter", "Keep each deposit under 10k so the bank doesn't flag it."),
     ("2025-03-03T09:15:00Z", "John Carter", "Jane Miller", "Talked to Tony. The warehouse account is ready."),
     ("2025-03-03T09:17:00Z", "Jane Miller", "John Carter", "Good. First transfer goes Friday. Keep it under 10k."),
     ("2025-03-07T16:30:00Z", "John Carter", "Jane Miller", "Sent 9,500 to the warehouse account."),
     ("2025-03-07T16:34:00Z", "Jane Miller", "John Carter", "Perfect. Invoice it as pallet repairs."),
+    ("2025-03-20T21:05:00Z", "John Carter", "Tony (Warehouse)", "Leave the envelope in the usual spot. No names."),
     ("2025-03-21T11:02:00Z", "Tony (Warehouse)", "John Carter", "Got it. Cash will be at the dock Tuesday."),
     ("2025-04-02T18:20:00Z", "Jane Miller", "John Carter", "Mike is asking questions about the pallet invoices."),
     ("2025-04-02T18:26:00Z", "John Carter", "Jane Miller", "I'll handle Mike. Delete these texts."),
+    ("2025-04-02T18:40:00Z", "Tony (Warehouse)", "John Carter", "Mike better keep his mouth shut, or he'll regret it."),
+    ("2025-04-03T07:15:00Z", "Jane Miller", "John Carter", "Use Signal from now on. Texts can be pulled."),
     ("2025-04-15T08:55:00Z", "John Carter", "Jane Miller", "Second transfer done. 9,800 this time."),
     ("2025-04-15T09:01:00Z", "Jane Miller", "John Carter", "Meet at the usual place, Pier 39, 7pm."),
     ("2025-04-28T20:13:00Z", "Mom", "John Carter", "Happy birthday sweetheart! Call me."),
     ("2025-05-06T13:44:00Z", "Mike Ross", "John Carter", "Audit starts June 2. They want all vendor records."),
     ("2025-05-06T14:10:00Z", "John Carter", "Jane Miller", "Audit on June 2. We need the invoices cleaned up before then."),
     ("2025-05-06T14:12:00Z", "Jane Miller", "John Carter", "I'll redo the invoices this weekend. Don't use email for any of this."),
+    ("2025-05-07T22:30:00Z", "Jane Miller", "John Carter", "Change the numbers on the March invoices before they look."),
     ("2025-05-19T21:37:00Z", "Jane Miller", "John Carter", "New burner number soon. Stop using this one after the audit."),
+    ("2025-05-20T23:02:00Z", "John Carter", "Jane Miller", "Shredded the old ledgers last night."),
+    ("2025-05-30T09:44:00Z", "Jane Miller", "John Carter", "Wipe your phone before Friday."),
     ("2025-06-01T10:03:00Z", "John Carter", "Jane Miller", "Moved the rest to the offshore account. 48,000 total."),
     ("2025-06-01T10:09:00Z", "Jane Miller", "John Carter", "Good. After tomorrow we don't talk for a while."),
+    ("2025-06-01T10:15:00Z", "Jane Miller", "John Carter", "If anyone asks, we never met."),
     ("2025-06-24T17:25:00Z", "Jane Miller", "John Carter", "Auditors didn't find anything. We're fine."),
     ("2025-07-04T14:00:00Z", "John Carter", "Mom", "Happy 4th! Photos from the beach coming."),
     ("2025-07-18T23:51:00Z", "John Carter", "Jane Miller", "Did you see the news about the warehouse?"),
+    ("2025-07-19T08:20:00Z", "Tony (Warehouse)", "John Carter", "Cops were at the dock this morning asking around."),
+    ("2025-07-20T11:05:00Z", "John Carter", "Jane Miller", "Booked a flight to Miami. Paying cash."),
     ("2025-08-02T09:30:00Z", "Jane Miller", "John Carter", "Wrong number, who is this?"),
     ("2025-09-11T12:00:00Z", "+1-555-0000", "John Carter", "Your package is on hold. Confirm your address at http://track-parcel.example"),
 ]
@@ -357,6 +368,7 @@ def write_documents(root):
         encoding="utf-8",
     )
     (documents / "grocery_list.txt").write_text("eggs\nmilk\ncoffee\nbread\n", encoding="utf-8")
+    write_disguised_ledger(root / "Pictures")
 
     backups = root / "Backups"
     backups.mkdir(parents=True, exist_ok=True)
@@ -366,6 +378,16 @@ def write_documents(root):
         archive.write(buffer_path, "2024/IMG_1102.jpg")
         buffer_path.unlink()
         archive.writestr("2024/readme.txt", "old phone backup")
+
+
+def write_disguised_ledger(pictures):
+    """A "photo" that is really a zip of the real books: Extension Mismatch finds it."""
+    pictures.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(pictures / "beach_2025.jpg", "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "ledger.csv",
+            "date,amount,to\n2025-03-07,9500,warehouse\n2025-04-15,9800,warehouse\n2025-06-01,48000,offshore\n",
+        )
 
 
 def main():

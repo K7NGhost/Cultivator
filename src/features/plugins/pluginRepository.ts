@@ -78,6 +78,8 @@ export type SemanticSearchResult = {
   unindexedCount: number;
   /** The precision check ran; only matches it confirmed are included. */
   checked: boolean;
+  /** Investigative themes the question called up, e.g. "secrecy". */
+  themes: string[];
 };
 
 /**
