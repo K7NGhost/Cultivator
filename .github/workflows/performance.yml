@@ -34,6 +34,10 @@ jobs:
       CARGO_TERM_COLOR: always
       CULTIVATOR_BENCH_LARGE: ${{ (github.event_name == 'schedule' || inputs.large == true || contains(github.event.pull_request.labels.*.name, 'performance')) && '1' || '0' }}
     steps:
+      # The CodSpeed build and the Criterion text-preview build use separate
+      # compiler flags, so both full release builds must fit on the runner.
+      - name: Free runner disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
