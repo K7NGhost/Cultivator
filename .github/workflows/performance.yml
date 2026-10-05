@@ -1,0 +1,69 @@
+name: Performance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+    inputs:
+      large:
+        description: Run the 100 MiB text-preview workload too.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: performance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmarks:
+    name: CodSpeed Benchmarks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CARGO_TERM_COLOR: always
+      CULTIVATOR_BENCH_LARGE: ${{ (github.event_name == 'schedule' || inputs.large == true || contains(github.event.pull_request.labels.*.name, 'performance')) && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-project
+        with:
+          native: 'true'
+      - name: Install cargo-codspeed
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-codspeed@5.0.1
+      - name: Build assets embedded by the Rust release library
+        run: bun run build
+      - name: Build CPU benchmarks
+        working-directory: src-tauri
+        run: cargo codspeed build --bench file_format --no-default-features --locked
+      - name: Measure CPU work
+        uses: CodSpeedHQ/action@v5
+        with:
+          mode: simulation
+          working-directory: src-tauri
+          run: cargo codspeed run
+      - name: Measure text preview locally
+        working-directory: src-tauri
+        run: cargo bench --locked --no-default-features --bench text_preview -- --noplot
+      - name: Upload text-preview timing reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: text-preview-timings
+          path: src-tauri/target/criterion
+          if-no-files-found: ignore
+          retention-days: 14

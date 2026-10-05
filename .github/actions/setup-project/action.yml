@@ -1,0 +1,62 @@
+name: Setup Cultivator
+description: Install frontend, native build dependencies, and the bundled Python runtime.
+inputs:
+  native:
+    description: Install Rust and native dependencies.
+    default: 'false'
+  python:
+    description: Install and export the bundled CPython environment.
+    default: 'false'
+  rust-components:
+    description: Additional Rust toolchain components.
+    default: ''
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: '1.3.8'
+    - name: Cache Bun downloads
+      uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
+        restore-keys: bun-${{ runner.os }}-${{ runner.arch }}-
+    - name: Install frontend dependencies
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: bun install --frozen-lockfile
+    - name: Install Linux native dependencies
+      if: inputs.native == 'true' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+          patchelf xdg-utils libssl-dev build-essential
+    - name: Install Rust
+      if: inputs.native == 'true'
+      uses: dtolnay/rust-toolchain@1.93.0
+      with:
+        components: ${{ inputs.rust-components }}
+    - name: Cache Rust dependencies
+      if: inputs.native == 'true'
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: src-tauri -> target
+        shared-key: ${{ inputs.python == 'true' && 'python' || 'core' }}
+        cache-on-failure: 'false'
+    - name: Cache bundled Python runtime
+      if: inputs.python == 'true'
+      uses: actions/cache@v4
+      with:
+        path: src-tauri/python-runtime
+        key: python-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/python-runtime.mjs') }}
+    - name: Set up bundled Python runtime
+      if: inputs.python == 'true'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: node scripts/ci/setup-python.mjs

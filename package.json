@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test tests",
     "preview": "vite preview",
     "tauri": "node scripts/tauri-runtime.mjs",
     "python:embed": "powershell -ExecutionPolicy Bypass -File scripts/setup-pyoxidizer.ps1",

@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      skip-native-builds:
+        description: Release packaging already performs native builds.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  workflows:
+    name: Workflow Checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: actionlint@1.7.12
+      - run: actionlint
+
+  frontend:
+    name: React Checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-project
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Tests
+        run: bun run test
+      - name: Production build
+        run: bun run build
+
+  rust-format:
+    name: Rust Format
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          components: rustfmt
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+  rust:
+    name: Rust Checks (${{ matrix.features }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - features: core
+            args: --no-default-features
+            python: 'false'
+          - features: python
+            args: --all-features
+            python: 'true'
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-project
+        with:
+          native: 'true'
+          python: ${{ matrix.python }}
+          rust-components: clippy
+      - name: Clippy
+        run: cargo clippy --locked --all-targets ${{ matrix.args }} -- -D warnings
+      - name: Tests
+        run: cargo test --locked ${{ matrix.args }}
+      - name: Validate benchmark harnesses
+        if: matrix.features == 'core'
+        run: cargo test --locked --benches --no-default-features
+
+  build:
+    if: inputs.skip-native-builds != true
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    needs: [workflows, frontend, rust-format, rust]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-2022
+          - name: Linux
+            os: ubuntu-22.04
+          - name: macOS Intel
+            os: macos-15-intel
+          - name: macOS ARM
+            os: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-project
+        with:
+          native: 'true'
+          python: 'true'
+      - name: Verify native build with Python plugins
+        run: bun run tauri build --no-bundle -- --locked

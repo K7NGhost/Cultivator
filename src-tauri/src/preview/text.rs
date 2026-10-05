@@ -213,11 +213,7 @@ fn extract_ascii_strings(bytes: &[u8], byte_offset: u64) -> String {
     // file-browser Text tab useful for forensic binary data and guarantees that
     // the UI only receives displayable ASCII text.
     for &byte in bytes {
-        if byte == 0 && !saw_single_zero {
-            saw_single_zero = true;
-        } else {
-            saw_single_zero = false;
-        }
+        saw_single_zero = byte == 0 && !saw_single_zero;
 
         if is_printable_ascii(byte) {
             current.push(byte as char);

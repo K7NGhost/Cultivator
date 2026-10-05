@@ -47,7 +47,14 @@ function ensurePythonFeature(values) {
   );
 
   if (existingFeatureIndex === -1) {
-    return [...values, "--features", "python-plugins"];
+    const cargoArgsIndex = values.indexOf("--");
+    const insertionIndex = cargoArgsIndex === -1 ? values.length : cargoArgsIndex;
+    return [
+      ...values.slice(0, insertionIndex),
+      "--features",
+      "python-plugins",
+      ...values.slice(insertionIndex),
+    ];
   }
 
   const value = values[existingFeatureIndex];

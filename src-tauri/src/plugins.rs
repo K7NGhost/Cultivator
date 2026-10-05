@@ -1421,7 +1421,7 @@ pub async fn list_plugin_artifacts(
     for row in rows {
         let payload_text: String = row.get("payload");
         let payload = serde_json::from_str::<JsonValue>(&payload_text)
-            .unwrap_or_else(|_| JsonValue::String(payload_text));
+            .unwrap_or(JsonValue::String(payload_text));
 
         artifacts.push(PluginArtifactRecord {
             id: row.get("id"),
@@ -1986,11 +1986,13 @@ pub async fn run_datasource_plugins(
         }
 
         let (job, paths_updated) = run_builtin_plugin_stage(
-            &app_handle,
-            &pool,
+            BuiltinPluginStageContext {
+                app_handle: &app_handle,
+                pool: &pool,
+                case_folder_path: &case_folder_path,
+                run_id: run_id.as_deref(),
+            },
             &mut datasource,
-            &case_folder_path,
-            run_id.as_deref(),
             plugin,
             plugin_options.as_ref(),
             related_manifests.clone(),
@@ -2085,13 +2087,15 @@ pub async fn run_datasource_plugins(
                     execute_python_plugin_process(
                         &plugin,
                         &execution_datasource,
-                        &execution_case_database_path,
-                        &execution_case_folder_path,
                         plan,
-                        &execution_python_runtime,
-                        execution_run_id.as_deref(),
-                        &execution_app_handle,
-                        &execution_plugin_options,
+                        PythonPluginExecutionContext {
+                            case_database_path: &execution_case_database_path,
+                            case_folder_path: &execution_case_folder_path,
+                            python_runtime: &execution_python_runtime,
+                            run_id: execution_run_id.as_deref(),
+                            app_handle: &execution_app_handle,
+                            plugin_options: &execution_plugin_options,
+                        },
                     )
                 })
                 .await
@@ -2163,11 +2167,13 @@ pub async fn run_datasource_plugins(
         }
 
         let (job, paths_updated) = run_builtin_plugin_stage(
-            &app_handle,
-            &pool,
+            BuiltinPluginStageContext {
+                app_handle: &app_handle,
+                pool: &pool,
+                case_folder_path: &case_folder_path,
+                run_id: run_id.as_deref(),
+            },
             &mut datasource,
-            &case_folder_path,
-            run_id.as_deref(),
             plugin,
             plugin_options.as_ref(),
             related_manifests.clone(),
@@ -2225,16 +2231,26 @@ async fn finish_python_plugin_job(
     load_plugin_job(pool, job_id).await
 }
 
+struct BuiltinPluginStageContext<'a> {
+    app_handle: &'a AppHandle,
+    pool: &'a SqlitePool,
+    case_folder_path: &'a str,
+    run_id: Option<&'a str>,
+}
+
 async fn run_builtin_plugin_stage(
-    app_handle: &AppHandle,
-    pool: &SqlitePool,
+    context: BuiltinPluginStageContext<'_>,
     datasource: &mut DatasourceForPlugins,
-    case_folder_path: &str,
-    run_id: Option<&str>,
     plugin: &'static dyn builtin::BuiltinPlugin,
     plugin_options: Option<&HashMap<String, JsonValue>>,
     related_manifests: Vec<PythonPluginManifest>,
 ) -> Result<(PluginJobRecord, bool), String> {
+    let BuiltinPluginStageContext {
+        app_handle,
+        pool,
+        case_folder_path,
+        run_id,
+    } = context;
     let manifest = plugin.manifest();
     let plugin_id = manifest.id.clone();
     let job = create_plugin_job(pool, datasource, &plugin_id).await?;
@@ -2375,17 +2391,30 @@ fn resolved_plugin_options(
 }
 
 #[cfg(feature = "python-plugins")]
+struct PythonPluginExecutionContext<'a> {
+    case_database_path: &'a str,
+    case_folder_path: &'a str,
+    python_runtime: &'a PythonRuntime,
+    run_id: Option<&'a str>,
+    app_handle: &'a AppHandle,
+    plugin_options: &'a JsonValue,
+}
+
+#[cfg(feature = "python-plugins")]
 fn execute_python_plugin_process(
     plugin: &LoadedPythonPlugin,
     datasource: &DatasourceForPlugins,
-    case_database_path: &str,
-    case_folder_path: &str,
     plan: PluginExecutionPlan,
-    python_runtime: &PythonRuntime,
-    run_id: Option<&str>,
-    app_handle: &AppHandle,
-    plugin_options: &JsonValue,
+    context: PythonPluginExecutionContext<'_>,
 ) -> Result<PluginExecutionOutput, String> {
+    let PythonPluginExecutionContext {
+        case_database_path,
+        case_folder_path,
+        python_runtime,
+        run_id,
+        app_handle,
+        plugin_options,
+    } = context;
     if is_plugin_run_cancelled(run_id)? {
         return Err("Plugin run cancelled.".to_string());
     }
@@ -2526,8 +2555,7 @@ fn execute_python_plugin(
     let python_result = Python::attach(|py| -> PyResult<()> {
         PyModule::import(py, "sys")?.setattr("dont_write_bytecode", true)?;
         install_cultivator_api(py)?;
-        set_thread_search_roots(datasource.paths.clone())
-            .map_err(|message| PyRuntimeError::new_err(message))?;
+        set_thread_search_roots(datasource.paths.clone()).map_err(PyRuntimeError::new_err)?;
 
         let module = load_plugin_module(py, plugin)?;
         let function = module.getattr(plugin.manifest.function.as_str())?;
@@ -3066,7 +3094,7 @@ fn build_plugin_execution_plan(
     let mut tasks = Vec::new();
 
     for target_file in all_files {
-        if plugin_matches_target_file(&matcher, &target_file) {
+        if plugin_matches_target_file(&matcher, target_file) {
             tasks.push(PluginExecutionTask {
                 plugin_id: plugin.manifest.id.clone(),
                 file_path: target_file.path.clone(),

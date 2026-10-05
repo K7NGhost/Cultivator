@@ -1,9 +1,7 @@
 use super::{FileFormatDetail, FileFormatPreview};
 
 pub fn preview(path: &str, bytes: &[u8]) -> Option<FileFormatPreview> {
-    let Some(brand) = mp4_major_brand(bytes) else {
-        return None;
-    };
+    let brand = mp4_major_brand(bytes)?;
 
     Some(FileFormatPreview {
         kind: "mp4".to_string(),
