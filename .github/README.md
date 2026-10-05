@@ -8,7 +8,8 @@
   Native builds verify Windows, Linux, macOS Intel, and macOS ARM. Python worker
   protocol tests run through uv. PRs compile the application without generating installers.
 - `performance.yml` benchmarks SQLite header parsing, MP4 container metadata,
-  and preview serialization through CodSpeed CPU simulation. The existing
+  image header parsing (PNG, GIF, BMP, JPEG), preview serialization, and hex
+  preview page formatting through CodSpeed CPU simulation. The existing
   asynchronous text-preview benchmark runs separately with Criterion, and its
   timing reports are uploaded as workflow artifacts. Those I/O timings are
   diagnostic; shared-runner noise makes them unsuitable as a strict merge gate.
@@ -111,6 +112,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets --no-de
 cargo test --manifest-path src-tauri/Cargo.toml --locked --no-default-features
 cargo test --manifest-path src-tauri/Cargo.toml --locked --benches --no-default-features
 cargo bench --manifest-path src-tauri/Cargo.toml --locked --bench file_format
+cargo bench --manifest-path src-tauri/Cargo.toml --locked --bench hex_preview
 cargo bench --manifest-path src-tauri/Cargo.toml --locked --bench text_preview
 ```
 
@@ -118,5 +120,6 @@ All-feature Cargo checks require the bundled Python environment. The CI setup
 script exports it to GitHub's environment files; `bun run tauri` configures it
 automatically for native builds. To run the large benchmark locally, set
 `CULTIVATOR_BENCH_LARGE=1` before invoking the text-preview bench. Install
-`cargo-codspeed` 5.0.1 to build the CPU suite with `cargo codspeed build --bench
-file_format --no-default-features --locked` from `src-tauri`.
+`cargo-codspeed` 5.0.2 to build the CPU suite with `cargo codspeed build -m
+simulation --bench file_format --bench hex_preview --no-default-features --locked`
+from `src-tauri`, then run it with `codspeed run -m simulation -- cargo codspeed run`.
