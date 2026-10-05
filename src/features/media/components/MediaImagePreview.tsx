@@ -2,8 +2,8 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { ImageOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { renderMediaThumbnail } from "@/features/media/mediaRepository";
-import type { MediaItem } from "@/features/media/types";
+import { renderMediaThumbnail } from "../services/mediaRepository";
+import type { MediaItem } from "../model/types";
 import { cn } from "@/lib/utils";
 
 const convertedPreviewPaths = new Map<string, string>();

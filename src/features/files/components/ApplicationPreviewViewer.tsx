@@ -11,7 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { EvidenceDirectoryEntry } from "@/features/evidence/evidence-provider";
+import type { EvidenceDirectoryEntry } from "@/features/evidence";
 import { cn } from "@/lib/utils";
 
 export type FileFormatPreview = {

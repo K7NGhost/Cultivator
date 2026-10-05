@@ -1,7 +1,7 @@
 export {
   artifactModelDefinitions,
   artifactModelsByKind,
-} from "@/features/artifacts/artifactModels";
+} from "./model/artifactModels";
 export type {
   AccountArtifact,
   ApplicationArtifact,
@@ -26,4 +26,7 @@ export type {
   NoteArtifact,
   SystemArtifact,
   TimelineArtifact,
-} from "@/features/artifacts/types";
+} from "./model/types";
+export {
+  buildCultivatorApiReferenceForLlms,
+} from "./utils/llmApiReference";

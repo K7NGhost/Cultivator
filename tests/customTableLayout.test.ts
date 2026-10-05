@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { getCustomTableViewportLayout } from "../src/features/artifacts/customTableLayout";
+import { getCustomTableViewportLayout } from "../src/features/artifacts/utils/customTableLayout";
 
 describe("custom table viewport layout", () => {
   test("fills spare horizontal space across data columns", () => {

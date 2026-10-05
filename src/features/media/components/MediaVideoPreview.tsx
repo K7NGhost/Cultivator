@@ -1,8 +1,8 @@
 import { Film, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import type { MediaItem } from "@/features/media/types";
-import { getVideoThumbnail } from "@/features/media/videoThumbnails";
+import type { MediaItem } from "../model/types";
+import { getVideoThumbnail } from "../utils/videoThumbnails";
 import { cn } from "@/lib/utils";
 
 export function MediaVideoPreview({ item, className }: {

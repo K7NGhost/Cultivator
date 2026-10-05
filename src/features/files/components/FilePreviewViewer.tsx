@@ -1,13 +1,13 @@
 import { Database, FileCode2, Hexagon } from "lucide-react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { EvidenceDirectoryEntry } from "@/features/evidence/evidence-provider";
+import type { EvidenceDirectoryEntry } from "@/features/evidence";
 import {
   ApplicationPreviewViewer,
   type FileFormatPreview,
-} from "@/features/files/components/ApplicationPreviewViewer";
-import { HexPreviewViewer } from "@/features/files/components/HexPreviewViewer";
-import { TextPreviewViewer } from "@/features/files/components/TextPreviewViewer";
+} from "./ApplicationPreviewViewer";
+import { HexPreviewViewer } from "./HexPreviewViewer";
+import { TextPreviewViewer } from "./TextPreviewViewer";
 
 type FilePreviewViewerProps = {
   activeTab: FilePreviewTab;

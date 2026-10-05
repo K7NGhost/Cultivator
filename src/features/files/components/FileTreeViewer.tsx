@@ -41,8 +41,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
-import type { EvidenceTreeNode } from "@/features/evidence/evidence-provider";
-import type { FileTagSummary } from "@/features/files/fileTagRepository";
+import type { EvidenceTreeNode } from "@/features/evidence";
+import type { FileTagSummary } from "../services/fileTagRepository";
 import { cn } from "@/lib/utils";
 
 type FileTreeViewerProps = {

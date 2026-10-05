@@ -28,7 +28,7 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { useCases } from "@/features/cases/case-provider";
+import { useCases } from "@/features/cases";
 import { cn } from "@/lib/utils";
 
 const navGroups = [

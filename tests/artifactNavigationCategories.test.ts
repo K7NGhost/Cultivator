@@ -3,8 +3,8 @@ import { describe, expect, test } from "bun:test";
 import {
   ARTIFACT_NAVIGATION_CATEGORIES,
   getArtifactNavigationCategory,
-} from "../src/features/artifacts/artifactNavigationCategories";
-import type { StoredArtifactRecord } from "../src/features/artifacts/types";
+} from "../src/features/artifacts/model/artifactNavigationCategories";
+import type { StoredArtifactRecord } from "../src/features/artifacts/model/types";
 
 function artifact(
   resultKind: string,

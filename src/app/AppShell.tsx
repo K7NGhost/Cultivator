@@ -12,15 +12,15 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { ArtifactsPage } from "@/features/artifacts/ArtifactsPage";
-import { CasePage } from "@/features/cases/CasePage";
-import { CaseProvider, useCases } from "@/features/cases/case-provider";
-import { EvidenceProvider } from "@/features/evidence/evidence-provider";
-import { FilesPage } from "@/features/files/FilesPage";
-import { MediaPage } from "@/features/media/MediaPage";
-import { PluginsPage } from "@/features/plugins/PluginsPage";
-import { SearchPage } from "@/features/search/SearchPage";
-import { PlaceholderPage } from "@/features/workspace/PlaceholderPage";
+import { ArtifactsPage } from "@/features/artifacts/pages/ArtifactsPage";
+import { CasePage } from "@/features/cases/pages/CasePage";
+import { CaseProvider, useCases } from "@/features/cases";
+import { EvidenceProvider } from "@/features/evidence";
+import { FilesPage } from "@/features/files/pages/FilesPage";
+import { MediaPage } from "@/features/media/pages/MediaPage";
+import { PluginsPage } from "@/features/plugins/pages/PluginsPage";
+import { SearchPage } from "@/features/search/pages/SearchPage";
+import { PlaceholderPage } from "@/features/workspace";
 
 const workspaceRoutes = [
   {

@@ -54,11 +54,11 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import type { EvidenceDirectoryEntry } from "@/features/evidence/evidence-provider";
+import type { EvidenceDirectoryEntry } from "@/features/evidence";
 import type {
   FileTagGroup,
   FileTagRecord,
-} from "@/features/files/fileTagRepository";
+} from "../services/fileTagRepository";
 import { cn } from "@/lib/utils";
 
 type FileListViewerProps = {

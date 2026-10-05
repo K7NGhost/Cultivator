@@ -4,8 +4,8 @@ import {
   combineCustomTableArtifacts,
   getArtifactEntryMetrics,
   getCustomTableRowSources,
-} from "../src/features/artifacts/customTableGrouping";
-import type { StoredArtifactRecord } from "../src/features/artifacts/types";
+} from "../src/features/artifacts/utils/customTableGrouping";
+import type { StoredArtifactRecord } from "../src/features/artifacts/model/types";
 
 function tableArtifact(
   id: string,

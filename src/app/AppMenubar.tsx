@@ -30,23 +30,23 @@ import {
   MenubarTrigger,
 } from "@/components/ui/menubar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useCases } from "@/features/cases/case-provider";
-import { DataSourceWizardDialog } from "@/features/datasources/DataSourceWizardDialog";
-import { useEvidence } from "@/features/evidence/evidence-provider";
+import { useCases } from "@/features/cases";
+import { DataSourceWizardDialog } from "@/features/datasources/components/DataSourceWizardDialog";
+import { useEvidence } from "@/features/evidence";
 import {
   getStoredCreatePluginMode,
   storeCreatePluginMode,
-} from "@/features/plugins/createPluginPreferences";
+} from "@/features/plugins";
 import {
   isSafePluginFolderName,
   isSafePluginOrganizationPath,
-} from "@/features/plugins/pluginManifest";
+} from "@/features/plugins";
 import {
   createPythonPlugin,
   openPythonApiGuide,
   openPythonPluginFolder,
   openPythonPluginFolderInVscode,
-} from "@/features/plugins/pluginRepository";
+} from "@/features/plugins";
 
 const triggerClassName = "px-1.5 py-0.5 text-xs";
 const itemClassName = "py-1 text-xs";

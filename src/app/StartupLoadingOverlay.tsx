@@ -7,9 +7,9 @@ import {
   filesWorkspaceReadyEvent,
   getFilesWorkspaceReadiness,
   type FilesWorkspaceReadyDetail,
-} from "@/app/startupEvents";
-import { useCases } from "@/features/cases/case-provider";
-import { listDataSources } from "@/features/datasources/dataSourceRepository";
+} from "@/features/files";
+import { useCases } from "@/features/cases";
+import { listDataSources } from "@/features/datasources";
 
 type StartupState =
   | { stage: "cases" }
