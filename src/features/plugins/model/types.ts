@@ -2,6 +2,13 @@ import type { DataSourcePlugin } from "@/features/datasources";
 
 export type PythonPlugin = DataSourcePlugin;
 
+export type PythonRuntimeStatus = {
+  uvAvailable: boolean;
+  ready: boolean;
+  directory: string;
+  python: string;
+};
+
 export type CreatedPythonPlugin = {
   id: string;
   directory: string;

@@ -40,6 +40,8 @@ impl HashCalculatorPlugin {
 impl BuiltinPlugin for HashCalculatorPlugin {
     fn manifest(&self) -> PythonPluginManifest {
         PythonPluginManifest {
+            python: "3.12".to_string(),
+            dependencies: Vec::new(),
             id: "hash-calculator".to_string(),
             name: "Hash Calculator".to_string(),
             organization_folder: None,

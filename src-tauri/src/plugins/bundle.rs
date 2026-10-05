@@ -2059,6 +2059,8 @@ mod tests {
 
     fn fixture_manifest(id: &str) -> PythonPluginManifest {
         PythonPluginManifest {
+            python: crate::plugins::default_python_version(),
+            dependencies: Vec::new(),
             id: id.to_string(),
             name: format!("{id} Plugin"),
             organization_folder: None,

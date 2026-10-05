@@ -82,6 +82,7 @@ import type {
   PythonPlugin,
 } from "../model/types";
 import { cn } from "@/lib/utils";
+import { PythonRuntimePanel } from "../components/PythonRuntimePanel";
 
 type LoadState = {
   error: string | null;
@@ -898,6 +899,8 @@ export function PluginsPage() {
           <span>{datasources.length} datasources</span>
         </div>
       </section>
+
+      <PythonRuntimePanel />
 
       {loadState.error && (
         <section className="flex h-8 shrink-0 items-center gap-2 border-b px-2 text-xs text-destructive">

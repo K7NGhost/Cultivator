@@ -8,10 +8,19 @@ import type {
   PluginLogRecord,
   PluginRunSummary,
   PythonPlugin,
+  PythonRuntimeStatus,
 } from "../model/types";
 import { waitForPluginProgressListener } from "../utils/pluginToasts";
 
 export const archiveExtractorPluginId = "archive-extractor";
+
+export function getPythonRuntimeStatus(): Promise<PythonRuntimeStatus> {
+  return invoke("python_runtime_status");
+}
+
+export function preparePythonRuntime(): Promise<PythonRuntimeStatus> {
+  return invoke("prepare_python_runtime");
+}
 
 export function pluginRunUpdatedDatasourcePaths(summary: PluginRunSummary) {
   return (
@@ -52,6 +61,8 @@ export async function createPythonPlugin(
           name: string;
           author: string;
           version: string;
+          python?: string;
+          dependencies?: string[];
           description: string;
           type: string;
           target:

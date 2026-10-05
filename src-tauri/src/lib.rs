@@ -26,6 +26,7 @@ use tauri::Emitter;
 
 mod plugins;
 pub mod preview;
+mod scripting;
 #[path = "tauri/commands.rs"]
 mod tauri_commands;
 
@@ -533,16 +534,6 @@ fn describe_paths_impl(paths: Vec<String>) -> Result<Vec<DirectoryEntry>, String
 }
 
 #[tauri::command]
-async fn list_file_view_entries(
-    roots: Vec<String>,
-    view_id: String,
-) -> Result<Vec<DirectoryEntry>, String> {
-    tokio::task::spawn_blocking(move || list_file_view_entries_impl(roots, &view_id))
-        .await
-        .map_err(|error| format!("Failed to join file view scan task: {error}"))?
-}
-
-#[tauri::command]
 async fn list_file_view_entries_page(
     roots: Vec<String>,
     view_id: String,
@@ -564,6 +555,20 @@ async fn build_file_view_index(roots: Vec<String>) -> Result<FileViewIndex, Stri
 }
 
 #[tauri::command]
+fn python_runtime_status(
+    app_handle: tauri::AppHandle,
+) -> Result<scripting::runtime::RuntimeStatus, String> {
+    plugins::python_runtime_status(app_handle)
+}
+
+#[tauri::command]
+async fn prepare_python_runtime(
+    app_handle: tauri::AppHandle,
+) -> Result<scripting::runtime::RuntimeStatus, String> {
+    plugins::prepare_python_runtime(app_handle).await
+}
+
+#[tauri::command]
 fn list_python_plugins(
     app_handle: tauri::AppHandle,
 ) -> Result<Vec<plugins::PythonPluginManifest>, String> {
@@ -573,11 +578,6 @@ fn list_python_plugins(
 #[tauri::command]
 fn list_python_plugin_folders(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
     plugins::list_python_plugin_folders(app_handle)
-}
-
-#[tauri::command]
-fn python_plugin_directory(app_handle: tauri::AppHandle) -> Result<String, String> {
-    plugins::python_plugin_directory(app_handle)
 }
 
 #[tauri::command]
@@ -1742,13 +1742,6 @@ fn list_immediate_entries(path: &Path) -> Result<Vec<DirectoryEntry>, String> {
     Ok(entries)
 }
 
-fn list_file_view_entries_impl(
-    roots: Vec<String>,
-    view_id: &str,
-) -> Result<Vec<DirectoryEntry>, String> {
-    Ok(list_file_view_entries_page_impl(roots, view_id, 0, Some(MAX_FILE_VIEW_ENTRIES))?.entries)
-}
-
 fn list_file_view_entries_page_impl(
     roots: Vec<String>,
     view_id: &str,
@@ -2212,12 +2205,12 @@ pub fn run() {
             list_directory,
             list_directory_entries,
             describe_paths,
-            list_file_view_entries,
             list_file_view_entries_page,
             build_file_view_index,
             list_python_plugins,
+            python_runtime_status,
+            prepare_python_runtime,
             list_python_plugin_folders,
-            python_plugin_directory,
             open_python_plugin_directory,
             open_python_plugin_directory_in_vscode,
             open_python_api_guide,
@@ -2245,7 +2238,6 @@ pub fn run() {
             tauri_commands::open_text_preview,
             tauri_commands::read_text_preview_lines,
             tauri_commands::read_hex_preview,
-            tauri_commands::read_hex_file,
             tauri_commands::open_hex_preview,
             tauri_commands::read_hex_preview_page,
             tauri_commands::read_file_format_preview,

@@ -1,37 +1,18 @@
+use crate::scripting::runtime::{self, PythonRuntime};
 #[cfg(feature = "python-plugins")]
 use globset::{GlobBuilder, GlobMatcher};
 #[cfg(feature = "python-plugins")]
-use grep::{
-    matcher::Matcher,
-    regex::{RegexMatcher, RegexMatcherBuilder},
-    searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkFinish, SinkMatch},
-};
-#[cfg(feature = "python-plugins")]
 use ignore::WalkBuilder;
-#[cfg(feature = "python-plugins")]
-use pyo3::{
-    exceptions::PyRuntimeError,
-    prelude::*,
-    types::{PyBytes, PyDict, PyList, PyModule},
-    Bound,
-};
 #[cfg(feature = "python-plugins")]
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
-#[cfg(not(feature = "python-plugins"))]
 use serde_json::Value as JsonValue;
-#[cfg(feature = "python-plugins")]
-use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
-#[cfg(feature = "python-plugins")]
-use sha2::{Digest, Sha256};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     Row, SqlitePool,
 };
 #[cfg(feature = "python-plugins")]
-use std::io::{self, BufRead, BufReader, Write};
-#[cfg(feature = "python-plugins")]
-use std::thread::ThreadId;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -65,196 +46,10 @@ const LEGACY_DEMO_PLUGIN_IDS: &[&str] = &[
 ];
 const LEGACY_DEMO_ARTIFACT_KINDS: &[&str] = &["file_metadata", "text_sample"];
 const MEDIA_PREVIEW_MAX_DIMENSION: u32 = 1_600;
-const MEDIA_PREVIEW_PYTHON: &str = r#"
-import struct
-import sys
-import zlib
-
-from PIL import Image, ImageOps
-
-try:
-    import pillow_heif
-    pillow_heif.register_heif_opener()
-except ImportError:
-    pass
-
-
-def paeth_predictor(left, above, upper_left):
-    estimate = left + above - upper_left
-    left_distance = abs(estimate - left)
-    above_distance = abs(estimate - above)
-    upper_left_distance = abs(estimate - upper_left)
-    if left_distance <= above_distance and left_distance <= upper_left_distance:
-        return left
-    if above_distance <= upper_left_distance:
-        return above
-    return upper_left
-
-
-def unfilter_cgbi_row(row, previous_row, channels, filter_type, row_number):
-    if filter_type == 1:
-        for index in range(len(row)):
-            left = row[index - channels] if index >= channels else 0
-            row[index] = (row[index] + left) & 0xFF
-    elif filter_type == 2:
-        for index in range(len(row)):
-            row[index] = (row[index] + previous_row[index]) & 0xFF
-    elif filter_type == 3:
-        for index in range(len(row)):
-            left = row[index - channels] if index >= channels else 0
-            row[index] = (row[index] + ((left + previous_row[index]) // 2)) & 0xFF
-    elif filter_type == 4:
-        for index in range(len(row)):
-            left = row[index - channels] if index >= channels else 0
-            upper_left = previous_row[index - channels] if index >= channels else 0
-            prediction = paeth_predictor(left, previous_row[index], upper_left)
-            row[index] = (row[index] + prediction) & 0xFF
-    elif filter_type != 0:
-        raise ValueError(f"Unsupported CgBI PNG filter {filter_type} on row {row_number}")
-
-
-def decode_cgbi_png(path):
-    with open(path, "rb") as source:
-        data = source.read()
-
-    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise ValueError("CgBI image does not have a valid PNG signature")
-
-    position = 8
-    header = None
-    compressed_rows = []
-    found_cgbi = False
-    while position + 12 <= len(data):
-        chunk_length = struct.unpack(">I", data[position : position + 4])[0]
-        chunk_type = data[position + 4 : position + 8]
-        chunk_start = position + 8
-        chunk_end = chunk_start + chunk_length
-        if chunk_end + 4 > len(data):
-            raise ValueError("CgBI image contains a truncated PNG chunk")
-
-        chunk_data = data[chunk_start:chunk_end]
-        if chunk_type == b"CgBI":
-            found_cgbi = True
-        elif chunk_type == b"IHDR":
-            header = struct.unpack(">IIBBBBB", chunk_data)
-        elif chunk_type == b"IDAT":
-            compressed_rows.append(chunk_data)
-        elif chunk_type == b"IEND":
-            break
-        position = chunk_end + 4
-
-    if not found_cgbi or header is None or not compressed_rows:
-        raise ValueError("CgBI image is missing required PNG chunks")
-
-    width, height, bit_depth, color_type, compression, filtering, interlace = header
-    if bit_depth != 8 or color_type not in (2, 6):
-        raise ValueError(
-            f"Unsupported CgBI format: bit depth {bit_depth}, color type {color_type}"
-        )
-    if compression != 0 or filtering != 0 or interlace not in (0, 1):
-        raise ValueError("Unsupported CgBI PNG encoding")
-    if width == 0 or height == 0 or width * height > 50_000_000:
-        raise ValueError(f"Unsafe CgBI image dimensions: {width} x {height}")
-
-    channels = 4 if color_type == 6 else 3
-    row_size = width * channels
-    passes = (
-        ((0, 0, 1, 1),)
-        if interlace == 0
-        else (
-            (0, 0, 8, 8),
-            (4, 0, 8, 8),
-            (0, 4, 4, 8),
-            (2, 0, 4, 4),
-            (0, 2, 2, 4),
-            (1, 0, 2, 2),
-            (0, 1, 1, 2),
-        )
-    )
-    pass_dimensions = []
-    expected_size = 0
-    for start_x, start_y, step_x, step_y in passes:
-        pass_width = (width - start_x + step_x - 1) // step_x if width > start_x else 0
-        pass_height = (
-            (height - start_y + step_y - 1) // step_y if height > start_y else 0
-        )
-        pass_dimensions.append((start_x, start_y, step_x, step_y, pass_width, pass_height))
-        if pass_width and pass_height:
-            expected_size += pass_height * (pass_width * channels + 1)
-
-    raw_rows = zlib.decompress(b"".join(compressed_rows), -zlib.MAX_WBITS)
-    if len(raw_rows) != expected_size:
-        raise ValueError(
-            f"CgBI pixel data has {len(raw_rows)} bytes; expected {expected_size}"
-        )
-
-    pixels = bytearray(height * row_size)
-    source_offset = 0
-    for start_x, start_y, step_x, step_y, pass_width, pass_height in pass_dimensions:
-        if not pass_width or not pass_height:
-            continue
-
-        pass_row_size = pass_width * channels
-        previous_row = bytearray(pass_row_size)
-        for pass_row in range(pass_height):
-            filter_type = raw_rows[source_offset]
-            source_offset += 1
-            row = bytearray(raw_rows[source_offset : source_offset + pass_row_size])
-            source_offset += pass_row_size
-            target_y = start_y + pass_row * step_y
-            unfilter_cgbi_row(row, previous_row, channels, filter_type, target_y)
-
-            for pass_column in range(pass_width):
-                target_x = start_x + pass_column * step_x
-                source_pixel = pass_column * channels
-                target_pixel = (target_y * width + target_x) * channels
-                pixels[target_pixel : target_pixel + channels] = row[
-                    source_pixel : source_pixel + channels
-                ]
-            previous_row = row
-
-    corrected = bytearray(len(pixels))
-    if channels == 4:
-        for index in range(0, len(pixels), 4):
-            blue, green, red, alpha = pixels[index : index + 4]
-            if alpha:
-                red = min(255, (red * 255 + alpha // 2) // alpha)
-                green = min(255, (green * 255 + alpha // 2) // alpha)
-                blue = min(255, (blue * 255 + alpha // 2) // alpha)
-            corrected[index : index + 4] = (red, green, blue, alpha)
-        return Image.frombytes("RGBA", (width, height), bytes(corrected))
-
-    for index in range(0, len(pixels), 3):
-        blue, green, red = pixels[index : index + 3]
-        corrected[index : index + 3] = (red, green, blue)
-    return Image.frombytes("RGB", (width, height), bytes(corrected))
-
-
-def open_media_image(path):
-    with open(path, "rb") as source:
-        header = source.read(16)
-    if len(header) >= 16 and header[12:16] == b"CgBI":
-        return decode_cgbi_png(path)
-    return Image.open(path)
-
-
-source_path, output_path, max_dimension = sys.argv[1], sys.argv[2], int(sys.argv[3])
-with open_media_image(source_path) as source:
-    source.seek(0)
-    image = ImageOps.exif_transpose(source)
-    image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
-    image.convert("RGB").save(output_path, "JPEG", quality=88, optimize=True)
-"#;
+const MEDIA_PREVIEW_PYTHON: &str = crate::scripting::MEDIA_WORKER;
 
 static NEXT_ID_SUFFIX: AtomicU64 = AtomicU64::new(1);
 static PLUGIN_CANCELLATIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-#[cfg(feature = "python-plugins")]
-static PYTHON_LOGS: OnceLock<Mutex<HashMap<u64, Vec<PendingPluginLog>>>> = OnceLock::new();
-#[cfg(feature = "python-plugins")]
-static PYTHON_ARTIFACTS: OnceLock<Mutex<HashMap<u64, Vec<PluginResultRecord>>>> = OnceLock::new();
-#[cfg(feature = "python-plugins")]
-static PYTHON_SEARCH_ROOTS: OnceLock<Mutex<HashMap<u64, Vec<String>>>> = OnceLock::new();
-
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PythonPluginMode {
@@ -274,6 +69,10 @@ pub struct PythonPluginManifest {
     pub author: String,
     #[serde(default = "default_plugin_version")]
     pub version: String,
+    #[serde(default = "default_python_version")]
+    pub python: String,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
     pub description: String,
     #[serde(rename = "type")]
     pub plugin_type: String,
@@ -397,6 +196,10 @@ pub struct CreatePythonPluginManifestRequest {
     pub author: String,
     #[serde(default = "default_plugin_version")]
     pub version: String,
+    #[serde(default = "default_python_version")]
+    pub python: String,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
     pub description: String,
     #[serde(rename = "type")]
     pub plugin_type: String,
@@ -493,17 +296,10 @@ struct PluginExecutionOutput {
     logs: Vec<PendingPluginLog>,
 }
 
-#[derive(Clone)]
-#[cfg_attr(not(feature = "python-plugins"), allow(dead_code))]
-struct PythonRuntime {
-    executable: PathBuf,
-    home: Option<PathBuf>,
-    library_paths: Vec<PathBuf>,
-}
-
 #[derive(Serialize)]
 #[cfg(feature = "python-plugins")]
 struct PythonPluginProcessInput<'a> {
+    protocol_version: u32,
     plugin: &'a PythonPluginManifest,
     plugin_directory: String,
     case_database_path: &'a str,
@@ -583,461 +379,6 @@ pub struct PluginArtifactRecord {
     pub created_at: String,
 }
 
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (path, max_bytes=None))]
-fn read_bytes<'py>(
-    py: Python<'py>,
-    path: String,
-    max_bytes: Option<usize>,
-) -> PyResult<Bound<'py, PyBytes>> {
-    let mut bytes = fs::read(&path).map_err(|error| {
-        PyRuntimeError::new_err(format!("Failed to read bytes from '{path}': {error}"))
-    })?;
-
-    if let Some(max_bytes) = max_bytes {
-        bytes.truncate(max_bytes);
-    }
-
-    Ok(PyBytes::new(py, &bytes))
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (path, max_bytes=None, encoding="utf-8", errors="replace"))]
-fn read_text(
-    py: Python<'_>,
-    path: String,
-    max_bytes: Option<usize>,
-    encoding: &str,
-    errors: &str,
-) -> PyResult<String> {
-    let mut bytes = fs::read(&path).map_err(|error| {
-        PyRuntimeError::new_err(format!("Failed to read text from '{path}': {error}"))
-    })?;
-
-    if let Some(max_bytes) = max_bytes {
-        bytes.truncate(max_bytes);
-    }
-
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("errors", errors)?;
-
-    PyBytes::new(py, &bytes)
-        .call_method("decode", (encoding,), Some(&kwargs))?
-        .extract()
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (path, encoding="utf-8", errors="replace"))]
-fn read_lines<'py>(
-    py: Python<'py>,
-    path: String,
-    encoding: &str,
-    errors: &str,
-) -> PyResult<Bound<'py, PyAny>> {
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("encoding", encoding)?;
-    kwargs.set_item("errors", errors)?;
-
-    py.import("builtins")?
-        .getattr("open")?
-        .call((path, "r"), Some(&kwargs))
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction]
-fn sha256(path: String) -> PyResult<String> {
-    let bytes = fs::read(&path).map_err(|error| {
-        PyRuntimeError::new_err(format!("Failed to hash file '{path}': {error}"))
-    })?;
-    let digest = pyo3_sha256(&bytes);
-
-    Ok(digest)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction]
-fn log(level: String, message: String) -> PyResult<()> {
-    let logs = PYTHON_LOGS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut logs = logs
-        .lock()
-        .map_err(|_| PyRuntimeError::new_err("Plugin log registry is poisoned."))?;
-
-    logs.entry(current_thread_key())
-        .or_default()
-        .push(PendingPluginLog { level, message });
-
-    Ok(())
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (kind, label, **fields))]
-fn create_artifact<'py>(
-    py: Python<'py>,
-    kind: String,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, &kind, &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (name, category, headers, label=None, icon=None, **fields))]
-fn create_table_artifact<'py>(
-    py: Python<'py>,
-    name: String,
-    category: String,
-    headers: &Bound<'py, PyAny>,
-    label: Option<String>,
-    icon: Option<String>,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    let artifact = PyDict::new(py);
-    let table = PyDict::new(py);
-    let rows = PyList::empty(py);
-
-    if let Some(fields) = fields {
-        for (key, value) in fields.iter() {
-            artifact.set_item(key, value)?;
-        }
-    }
-
-    table.set_item("name", name.as_str())?;
-    table.set_item("columns", build_table_columns(py, headers)?)?;
-    table.set_item("rows", rows)?;
-
-    artifact.set_item("kind", "custom_table")?;
-    artifact.set_item("category", normalize_custom_category(&category))?;
-    artifact.set_item("label", label.unwrap_or_else(|| name.clone()))?;
-    if let Some(icon) = icon.filter(|value| !value.trim().is_empty()) {
-        artifact.set_item("icon", icon)?;
-    }
-    artifact.set_item("table", table)?;
-
-    Ok(artifact)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (table, values=None, **fields))]
-fn add_table_row<'py>(
-    py: Python<'py>,
-    table: &Bound<'py, PyDict>,
-    values: Option<&Bound<'py, PyDict>>,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<()> {
-    let table_payload = table
-        .get_item("table")?
-        .ok_or_else(|| PyRuntimeError::new_err("Table artifact is missing the 'table' object."))?;
-    let table_payload = table_payload
-        .cast::<PyDict>()
-        .map_err(|_| PyRuntimeError::new_err("Table artifact 'table' value must be a dict."))?;
-    let rows = table_payload
-        .get_item("rows")?
-        .ok_or_else(|| PyRuntimeError::new_err("Table artifact is missing table rows."))?;
-    let rows = rows
-        .cast::<PyList>()
-        .map_err(|_| PyRuntimeError::new_err("Table artifact rows must be a list."))?;
-    let row = PyDict::new(py);
-
-    if let Some(values) = values {
-        for (key, value) in values.iter() {
-            row.set_item(key, value)?;
-        }
-    }
-
-    if let Some(fields) = fields {
-        for (key, value) in fields.iter() {
-            row.set_item(key, value)?;
-        }
-    }
-
-    rows.append(row)?;
-
-    Ok(())
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (artifact, file_path=None, group=None))]
-fn add_artifact(
-    artifact: &Bound<'_, PyAny>,
-    file_path: Option<String>,
-    group: Option<&Bound<'_, PyAny>>,
-) -> PyResult<()> {
-    let mut payload = py_any_to_json(artifact)?;
-
-    if let Some(group) = group.filter(|value| !value.is_none()) {
-        if let JsonValue::Object(payload) = &mut payload {
-            payload.insert("group".to_string(), py_any_to_json(group)?);
-        }
-    }
-
-    let fallback_file_path = file_path
-        .or_else(|| artifact_file_path_from_payload(&payload))
-        .unwrap_or_default();
-    let record = json_value_to_result_record(payload, &fallback_file_path);
-    let artifacts = PYTHON_ARTIFACTS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut artifacts = artifacts
-        .lock()
-        .map_err(|_| PyRuntimeError::new_err("Plugin artifact registry is poisoned."))?;
-
-    artifacts
-        .entry(current_thread_key())
-        .or_default()
-        .push(record);
-
-    Ok(())
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, id=None))]
-fn create_group<'py>(
-    py: Python<'py>,
-    label: String,
-    id: Option<String>,
-) -> PyResult<Bound<'py, PyDict>> {
-    let group = PyDict::new(py);
-    let id = id
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| normalize_custom_category(&label));
-
-    group.set_item("id", id)?;
-    group.set_item("label", label)?;
-
-    Ok(group)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction]
-fn datetime_from_unix(py: Python<'_>, ts: f64) -> PyResult<String> {
-    let datetime = py.import("datetime")?.getattr("datetime")?;
-
-    datetime
-        .call_method1("fromtimestamp", (ts,))?
-        .call_method0("isoformat")?
-        .extract()
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction]
-fn datetime_from_iso(py: Python<'_>, text: &str) -> PyResult<String> {
-    let normalized_text = text.trim().replace('Z', "+00:00");
-    let datetime = py.import("datetime")?.getattr("datetime")?;
-
-    datetime
-        .call_method1("fromisoformat", (normalized_text,))?
-        .call_method0("isoformat")?
-        .extract()
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction]
-fn datetime_from_datetime(value: &Bound<'_, PyAny>) -> PyResult<String> {
-    value.call_method0("isoformat")?.extract()
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn account<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "account", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn application<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "application", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn browser_history<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "browser_history", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn call<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "call", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn contact<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "contact", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn credential<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "credential", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn file_artifact<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "file", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn location<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "location", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn media<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "media", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn message<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "message", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn note<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "note", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn system_artifact<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "system", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (label, **fields))]
-fn timeline_event<'py>(
-    py: Python<'py>,
-    label: String,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    build_artifact_dict(py, "timeline_event", &label, fields)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (
-    root_path,
-    query,
-    regex = false,
-    case_sensitive = false,
-    binary_files = false,
-    max_matches = None
-))]
-fn search_files<'py>(
-    py: Python<'py>,
-    root_path: String,
-    query: String,
-    regex: bool,
-    case_sensitive: bool,
-    binary_files: bool,
-    max_matches: Option<usize>,
-) -> PyResult<Bound<'py, PyList>> {
-    let matches = search_files_with_grep(
-        &root_path,
-        &query,
-        regex,
-        case_sensitive,
-        binary_files,
-        max_matches,
-    )
-    .map_err(PyRuntimeError::new_err)?;
-
-    plugin_search_matches_to_py(py, matches)
-}
-
-#[cfg(feature = "python-plugins")]
-#[pyfunction(signature = (
-    query,
-    regex = false,
-    case_sensitive = false,
-    binary_files = false,
-    max_matches = None
-))]
-fn search<'py>(
-    py: Python<'py>,
-    query: String,
-    regex: bool,
-    case_sensitive: bool,
-    binary_files: bool,
-    max_matches: Option<usize>,
-) -> PyResult<Bound<'py, PyList>> {
-    let roots = current_search_roots().map_err(PyRuntimeError::new_err)?;
-    let match_limit = max_matches.unwrap_or(usize::MAX);
-    let mut matches = Vec::new();
-
-    for root in roots {
-        if matches.len() >= match_limit {
-            break;
-        }
-
-        let remaining = match_limit.saturating_sub(matches.len());
-
-        matches.extend(
-            search_files_with_grep(
-                &root,
-                &query,
-                regex,
-                case_sensitive,
-                binary_files,
-                Some(remaining),
-            )
-            .map_err(PyRuntimeError::new_err)?,
-        );
-    }
-
-    plugin_search_matches_to_py(py, matches)
-}
-
 pub fn list_python_plugins(app_handle: AppHandle) -> Result<Vec<PythonPluginManifest>, String> {
     let _operation_guard = bundle::lock_bundle_operations()?;
     let mut plugins = builtin::plugins()
@@ -1064,12 +405,6 @@ pub fn list_python_plugin_folders(app_handle: AppHandle) -> Result<Vec<String>, 
     let _operation_guard = bundle::lock_bundle_operations()?;
     let plugin_root = ensure_python_plugin_directory(&app_handle)?;
     discover_python_plugin_organization_folders(&plugin_root)
-}
-
-pub fn python_plugin_directory(app_handle: AppHandle) -> Result<String, String> {
-    Ok(ensure_python_plugin_directory(&app_handle)?
-        .to_string_lossy()
-        .to_string())
 }
 
 pub fn open_python_plugin_directory(app_handle: AppHandle) -> Result<(), String> {
@@ -1548,9 +883,10 @@ pub async fn render_media_thumbnail(
     case_database_path: String,
     source_path: String,
 ) -> Result<String, String> {
-    let runtime = resolve_python_runtime(&app_handle)?;
+    let root = python_runtime_directory(&app_handle)?;
 
     tauri::async_runtime::spawn_blocking(move || {
+        let runtime = runtime::prepare_media(&root)?;
         render_media_thumbnail_file(&runtime, &case_database_path, &source_path)
     })
     .await
@@ -1620,12 +956,7 @@ fn render_media_thumbnail_file(
         .arg(&temporary_path)
         .arg(MEDIA_PREVIEW_MAX_DIMENSION.to_string());
 
-    if let Some(python_home) = &python_runtime.home {
-        command.env("PYTHONHOME", python_home);
-    }
-
-    command.env("PYTHONDONTWRITEBYTECODE", "1");
-    apply_python_library_path(&mut command, &python_runtime.library_paths);
+    runtime::configure_worker(&mut command);
 
     let output = command.output().map_err(|error| {
         format!(
@@ -2004,7 +1335,6 @@ pub async fn run_datasource_plugins(
 
     #[cfg(feature = "python-plugins")]
     let datasource_files = enumerate_datasource_files(&datasource)?;
-    let mut python_runtime = None;
     let mut job_handles = Vec::new();
 
     for plugin_id in &requested_plugin_ids {
@@ -2076,14 +1406,18 @@ pub async fn run_datasource_plugins(
             let execution_plugin_options =
                 resolved_plugin_options(&plugin.manifest, plugin_options.as_ref());
             let execution_app_handle = app_handle.clone();
-            let execution_python_runtime = python_runtime
-                .get_or_insert_with(|| resolve_python_runtime(&app_handle))
-                .clone()?;
+            let runtime_root = python_runtime_directory(&app_handle)?;
             let job_pool = pool.clone();
             let job_datasource_id = datasource.id.clone();
 
             let handle = tauri::async_runtime::spawn(async move {
                 let output = tauri::async_runtime::spawn_blocking(move || {
+                    let execution_python_runtime = runtime::prepare(
+                        &runtime_root,
+                        &plugin.manifest.id,
+                        &plugin.manifest.python,
+                        &plugin.manifest.dependencies,
+                    )?;
                     execute_python_plugin_process(
                         &plugin,
                         &execution_datasource,
@@ -2099,7 +1433,7 @@ pub async fn run_datasource_plugins(
                     )
                 })
                 .await
-                .map_err(|error| format!("Plugin worker failed: {error}"))?;
+                .unwrap_or_else(|error| Err(format!("Plugin worker failed: {error}")));
 
                 finish_python_plugin_job(
                     &job_pool,
@@ -2122,9 +1456,9 @@ pub async fn run_datasource_plugins(
             let execution_case_database_path = case_database_path.clone();
             let execution_case_folder_path = case_folder_path.clone();
             let execution_run_id = run_id.clone();
-            let execution_python_runtime = python_runtime
-                .get_or_insert_with(|| resolve_python_runtime(&app_handle))
-                .clone()?;
+            let execution_python_runtime = PythonRuntime {
+                executable: PathBuf::new(),
+            };
             let job_id = job.id.clone();
             let job_pool = pool.clone();
             let job_datasource_id = datasource.id.clone();
@@ -2141,7 +1475,7 @@ pub async fn run_datasource_plugins(
                     )
                 })
                 .await
-                .map_err(|error| format!("Plugin worker failed: {error}"))?;
+                .unwrap_or_else(|error| Err(format!("Plugin worker failed: {error}")));
 
                 finish_python_plugin_job(
                     &job_pool,
@@ -2420,6 +1754,7 @@ fn execute_python_plugin_process(
     }
 
     let input = PythonPluginProcessInput {
+        protocol_version: 1,
         plugin: &plugin.manifest,
         plugin_directory: plugin.directory.to_string_lossy().to_string(),
         case_database_path,
@@ -2442,12 +1777,7 @@ fn execute_python_plugin_process(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    if let Some(python_home) = &python_runtime.home {
-        command.env("PYTHONHOME", python_home);
-    }
-
-    command.env("PYTHONDONTWRITEBYTECODE", "1");
-    apply_python_library_path(&mut command, &python_runtime.library_paths);
+    runtime::configure_worker(&mut command);
 
     let mut child = command
         .spawn()
@@ -2488,29 +1818,52 @@ fn execute_python_plugin_process(
         diagnostics.join("\n")
     });
 
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("Failed to wait for Python plugin process: {error}"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to open Python plugin stdout.".to_string())?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let mut cancelled = false;
+    let status = loop {
+        if is_plugin_run_cancelled(run_id)? {
+            cancelled = true;
+            let _ = child.kill();
+            break child
+                .wait()
+                .map_err(|error| format!("Failed to stop Python worker: {error}"))?;
+        }
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("Failed to wait for Python worker: {error}"))?
+        {
+            break status;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| "Python stdout reader failed.".to_string())?
+        .map_err(|error| format!("Failed to read Python output: {error}"))?;
     let stderr = stderr_reader.join().unwrap_or_default();
 
-    if is_plugin_run_cancelled(run_id)? {
+    if cancelled || is_plugin_run_cancelled(run_id)? {
         return Err("Plugin run cancelled.".to_string());
     }
 
-    if !output.status.success() {
+    if !status.success() {
         let message = stderr.trim();
 
         return Err(if message.is_empty() {
-            format!(
-                "Python plugin process exited with status {}.",
-                output.status
-            )
+            format!("Python plugin process exited with status {}.", status)
         } else {
             message.to_string()
         });
     }
 
-    serde_json::from_slice::<PluginExecutionOutput>(&output.stdout)
+    serde_json::from_slice::<PluginExecutionOutput>(&stdout)
         .map_err(|error| format!("Failed to read Python plugin output: {error}"))
 }
 
@@ -2527,560 +1880,6 @@ fn execute_python_plugin_process(
         "Python plugin runtime is not enabled in this build. Run Tauri with the Cargo feature `python-plugins`."
             .to_string(),
     )
-}
-
-#[cfg(feature = "python-plugins")]
-#[allow(dead_code)]
-fn execute_python_plugin(
-    plugin: &LoadedPythonPlugin,
-    datasource: &DatasourceForPlugins,
-    case_database_path: &str,
-    case_folder_path: &str,
-    run_id: Option<&str>,
-) -> Result<PluginExecutionOutput, String> {
-    let all_files = enumerate_datasource_files(datasource)?;
-    let plan = build_plugin_execution_plan(plugin, datasource, &all_files)?;
-    let matched_files = plan.tasks.len() as u64;
-    let scanned_files = plan.scanned_files;
-    let matched_file_paths = plan
-        .tasks
-        .iter()
-        .map(|task| task.file_path.clone())
-        .collect::<Vec<_>>();
-    let mut records = Vec::new();
-
-    reset_thread_logs()?;
-    reset_thread_artifacts()?;
-
-    let python_result = Python::attach(|py| -> PyResult<()> {
-        PyModule::import(py, "sys")?.setattr("dont_write_bytecode", true)?;
-        install_cultivator_api(py)?;
-        set_thread_search_roots(datasource.paths.clone()).map_err(PyRuntimeError::new_err)?;
-
-        let module = load_plugin_module(py, plugin)?;
-        let function = module.getattr(plugin.manifest.function.as_str())?;
-
-        for task in &plan.tasks {
-            if is_plugin_run_cancelled(run_id).map_err(PyRuntimeError::new_err)? {
-                return Err(PyRuntimeError::new_err("Plugin run cancelled."));
-            }
-
-            let context = build_plugin_context(
-                py,
-                case_database_path,
-                case_folder_path,
-                datasource,
-                &plugin.manifest,
-                task,
-                &matched_file_paths,
-            )?;
-            let result = function.call1((context,))?;
-            records.extend(normalize_python_result(&result, &task.file_path)?);
-
-            if is_plugin_run_cancelled(run_id).map_err(PyRuntimeError::new_err)? {
-                return Err(PyRuntimeError::new_err("Plugin run cancelled."));
-            }
-        }
-
-        Ok(())
-    });
-
-    let mut logs = take_thread_logs()?;
-    records.extend(take_thread_artifacts()?);
-    let _ = clear_thread_search_roots();
-
-    if let Err(error) = python_result {
-        logs.push(PendingPluginLog {
-            level: "error".to_string(),
-            message: error.to_string(),
-        });
-        return Err(error.to_string());
-    }
-
-    Ok(PluginExecutionOutput {
-        scanned_files,
-        matched_files,
-        records,
-        logs,
-    })
-}
-
-#[cfg(not(feature = "python-plugins"))]
-#[allow(dead_code)]
-fn execute_python_plugin(
-    _plugin: &LoadedPythonPlugin,
-    _datasource: &DatasourceForPlugins,
-    _case_database_path: &str,
-    _case_folder_path: &str,
-    _run_id: Option<&str>,
-) -> Result<PluginExecutionOutput, String> {
-    Err(
-        "Python plugin runtime is not enabled in this build. Run Tauri with the Cargo feature `python-plugins`, for example `bun run tauri:python`."
-            .to_string(),
-    )
-}
-
-#[cfg(feature = "python-plugins")]
-fn build_plugin_context<'py>(
-    py: Python<'py>,
-    case_database_path: &str,
-    case_folder_path: &str,
-    datasource: &DatasourceForPlugins,
-    plugin: &PythonPluginManifest,
-    task: &PluginExecutionTask,
-    matched_files: &[String],
-) -> PyResult<Bound<'py, PyDict>> {
-    let context = PyDict::new(py);
-    let case = PyDict::new(py);
-    let datasource_dict = PyDict::new(py);
-    let plugin_dict = PyDict::new(py);
-    let file = PyDict::new(py);
-    let task_dict = PyDict::new(py);
-    let artifacts_path = PathBuf::from(case_folder_path).join("artifacts");
-
-    case.set_item("id", datasource.case_id.as_str())?;
-    case.set_item("database_path", case_database_path)?;
-    case.set_item("folder_path", case_folder_path)?;
-    case.set_item(
-        "artifacts_path",
-        artifacts_path.to_string_lossy().to_string(),
-    )?;
-
-    datasource_dict.set_item("id", datasource.id.as_str())?;
-    datasource_dict.set_item("name", datasource.name.as_str())?;
-    datasource_dict.set_item("paths", PyList::new(py, &datasource.paths)?)?;
-
-    plugin_dict.set_item("id", plugin.id.as_str())?;
-    plugin_dict.set_item("name", plugin.name.as_str())?;
-    plugin_dict.set_item("target", plugin_target_value(&plugin.target))?;
-    plugin_dict.set_item("mode", plugin_mode_label(&plugin.mode))?;
-    plugin_dict.set_item("matched_files", PyList::new(py, matched_files)?)?;
-
-    file.set_item("path", task.target_file.path.as_str())?;
-    file.set_item("name", task.target_file.name.as_str())?;
-    file.set_item("extension", task.target_file.extension.as_str())?;
-    file.set_item("size", task.target_file.size)?;
-
-    task_dict.set_item("plugin_id", task.plugin_id.as_str())?;
-    task_dict.set_item("file_path", task.file_path.as_str())?;
-    task_dict.set_item("datasource_id", task.datasource_id.as_str())?;
-    task_dict.set_item("case_id", task.case_id.as_str())?;
-
-    context.set_item("case", case)?;
-    context.set_item("datasource", datasource_dict)?;
-    context.set_item("plugin", plugin_dict)?;
-    context.set_item("file", file)?;
-    context.set_item("task", task_dict)?;
-
-    Ok(context)
-}
-
-#[cfg(feature = "python-plugins")]
-fn install_cultivator_api(py: Python<'_>) -> PyResult<()> {
-    let module = PyModule::new(py, "cultivator_api")?;
-
-    module.add_function(wrap_pyfunction!(read_bytes, &module)?)?;
-    module.add_function(wrap_pyfunction!(read_text, &module)?)?;
-    module.add_function(wrap_pyfunction!(read_lines, &module)?)?;
-    module.add_function(wrap_pyfunction!(sha256, &module)?)?;
-    module.add_function(wrap_pyfunction!(log, &module)?)?;
-    module.add_function(wrap_pyfunction!(create_artifact, &module)?)?;
-    module.add_function(wrap_pyfunction!(create_table_artifact, &module)?)?;
-    module.add_function(wrap_pyfunction!(add_table_row, &module)?)?;
-    module.add_function(wrap_pyfunction!(add_artifact, &module)?)?;
-    module.add_function(wrap_pyfunction!(create_group, &module)?)?;
-    module.add_function(wrap_pyfunction!(datetime_from_unix, &module)?)?;
-    module.add_function(wrap_pyfunction!(datetime_from_iso, &module)?)?;
-    module.add_function(wrap_pyfunction!(datetime_from_datetime, &module)?)?;
-    module.add_function(wrap_pyfunction!(account, &module)?)?;
-    module.add_function(wrap_pyfunction!(application, &module)?)?;
-    module.add_function(wrap_pyfunction!(browser_history, &module)?)?;
-    module.add_function(wrap_pyfunction!(call, &module)?)?;
-    module.add_function(wrap_pyfunction!(contact, &module)?)?;
-    module.add_function(wrap_pyfunction!(credential, &module)?)?;
-    module.add_function(wrap_pyfunction!(file_artifact, &module)?)?;
-    module.add_function(wrap_pyfunction!(location, &module)?)?;
-    module.add_function(wrap_pyfunction!(media, &module)?)?;
-    module.add_function(wrap_pyfunction!(message, &module)?)?;
-    module.add_function(wrap_pyfunction!(note, &module)?)?;
-    module.add_function(wrap_pyfunction!(system_artifact, &module)?)?;
-    module.add_function(wrap_pyfunction!(timeline_event, &module)?)?;
-    module.add_function(wrap_pyfunction!(search_files, &module)?)?;
-    module.add_function(wrap_pyfunction!(search, &module)?)?;
-
-    let sys = py.import("sys")?;
-    let modules = sys.getattr("modules")?;
-    let modules = modules.cast::<PyDict>()?;
-
-    modules.set_item("cultivator_api", module)?;
-
-    Ok(())
-}
-
-#[cfg(feature = "python-plugins")]
-fn load_plugin_module<'py>(
-    py: Python<'py>,
-    plugin: &LoadedPythonPlugin,
-) -> PyResult<Bound<'py, PyAny>> {
-    let entry_path = plugin.directory.join(&plugin.manifest.entry);
-    let module_name = format!(
-        "cultivator_plugin_{}",
-        sanitize_identifier(&plugin.manifest.id)
-    );
-    let sys = py.import("sys")?;
-    let sys_path_object = sys.getattr("path")?;
-    let sys_path = sys_path_object.cast::<PyList>()?;
-    let plugin_directory = plugin.directory.to_string_lossy().to_string();
-
-    sys_path.insert(0, plugin_directory)?;
-
-    let importlib_util = py.import("importlib.util")?;
-    let spec = importlib_util.call_method1(
-        "spec_from_file_location",
-        (module_name, entry_path.to_string_lossy().to_string()),
-    )?;
-    let loader = spec.getattr("loader")?;
-    let module = importlib_util.call_method1("module_from_spec", (&spec,))?;
-
-    loader.call_method1("exec_module", (&module,))?;
-
-    Ok(module)
-}
-
-#[cfg(feature = "python-plugins")]
-fn normalize_python_result(
-    result: &Bound<'_, PyAny>,
-    file_path: &str,
-) -> PyResult<Vec<PluginResultRecord>> {
-    if result.is_none() {
-        return Ok(Vec::new());
-    }
-
-    if let Ok(dict) = result.cast::<PyDict>() {
-        return Ok(vec![json_value_to_result_record(
-            JsonValue::Object(py_dict_to_json_map(dict)?),
-            file_path,
-        )]);
-    }
-
-    if let Ok(list) = result.cast::<PyList>() {
-        let mut records = Vec::new();
-
-        for value in list.iter() {
-            if value.is_none() {
-                continue;
-            }
-
-            records.push(json_value_to_result_record(
-                py_any_to_json(&value)?,
-                file_path,
-            ));
-        }
-
-        return Ok(records);
-    }
-
-    Ok(vec![json_value_to_result_record(
-        py_any_to_json(result)?,
-        file_path,
-    )])
-}
-
-#[cfg(feature = "python-plugins")]
-fn json_value_to_result_record(mut payload: JsonValue, file_path: &str) -> PluginResultRecord {
-    let result_kind = payload
-        .get("kind")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("record")
-        .to_string();
-    let artifact_category = artifact_category_for_kind(&result_kind);
-
-    if let JsonValue::Object(payload_object) = &mut payload {
-        payload_object
-            .entry("kind".to_string())
-            .or_insert_with(|| JsonValue::String(result_kind.clone()));
-
-        if let Some(category) = artifact_category {
-            payload_object
-                .entry("category".to_string())
-                .or_insert_with(|| JsonValue::String(category.to_string()));
-        }
-    }
-
-    let label = payload
-        .get("label")
-        .and_then(JsonValue::as_str)
-        .or_else(|| artifact_label_from_payload(&payload))
-        .unwrap_or("")
-        .to_string();
-
-    PluginResultRecord {
-        file_path: file_path.to_string(),
-        result_kind,
-        label,
-        payload,
-    }
-}
-
-#[cfg(feature = "python-plugins")]
-fn artifact_category_for_kind(kind: &str) -> Option<&'static str> {
-    match kind {
-        "account" => Some("accounts"),
-        "application" => Some("applications"),
-        "browser_history" => Some("browser"),
-        "call" => Some("calls"),
-        "contact" => Some("contacts"),
-        "credential" => Some("credentials"),
-        "file" => Some("files"),
-        "location" => Some("locations"),
-        "media" => Some("media"),
-        "message" => Some("messages"),
-        "sms" => Some("messages"),
-        "mms" => Some("messages"),
-        "instant_message" => Some("messages"),
-        "email" => Some("communications"),
-        "chat" => Some("communications"),
-        "voice_mail" => Some("communications"),
-        "note" => Some("notes"),
-        "calendar_entry" => Some("calendar"),
-        "user_account" => Some("accounts"),
-        "password" => Some("credentials"),
-        "journey" => Some("journeys"),
-        "installed_application" => Some("applications"),
-        "cookie" => Some("browser"),
-        "application_usage" => Some("applications"),
-        "visited_page" => Some("browser"),
-        "dictionary_word" => Some("search"),
-        "web_bookmark" => Some("browser"),
-        "shared_file" => Some("files"),
-        "bluetooth_device" => Some("networks"),
-        "map" => Some("maps"),
-        "searched_item" => Some("search"),
-        "wireless_network" => Some("networks"),
-        "notification" => Some("system"),
-        "carved_string" => Some("search"),
-        "powering_event" => Some("system"),
-        "system" => Some("system"),
-        "timeline_event" => Some("timeline"),
-        "custom_table" => Some("other"),
-        "record" => Some("other"),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "python-plugins")]
-fn artifact_label_from_payload(payload: &JsonValue) -> Option<&str> {
-    ["name", "title", "url", "path", "key", "eventType"]
-        .into_iter()
-        .find_map(|key| payload.get(key).and_then(JsonValue::as_str))
-}
-
-#[cfg(feature = "python-plugins")]
-fn artifact_file_path_from_payload(payload: &JsonValue) -> Option<String> {
-    payload
-        .get("source")
-        .and_then(|source| source.get("filePath"))
-        .and_then(JsonValue::as_str)
-        .or_else(|| payload.get("path").and_then(JsonValue::as_str))
-        .map(str::to_string)
-}
-
-#[cfg(feature = "python-plugins")]
-fn build_artifact_dict<'py>(
-    py: Python<'py>,
-    kind: &str,
-    label: &str,
-    fields: Option<&Bound<'py, PyDict>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    let artifact = PyDict::new(py);
-
-    artifact.set_item("kind", kind)?;
-
-    if let Some(category) = artifact_category_for_kind(kind) {
-        artifact.set_item("category", category)?;
-    }
-
-    artifact.set_item("label", label)?;
-
-    if let Some(fields) = fields {
-        for (key, value) in fields.iter() {
-            artifact.set_item(key, value)?;
-        }
-    }
-
-    Ok(artifact)
-}
-
-#[cfg(feature = "python-plugins")]
-fn build_table_columns<'py>(
-    py: Python<'py>,
-    headers: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyList>> {
-    let headers = headers
-        .cast::<PyList>()
-        .map_err(|_| PyRuntimeError::new_err("Table headers must be a list."))?;
-    let columns = PyList::empty(py);
-    let mut keys = Vec::new();
-
-    for header in headers.iter() {
-        let column = PyDict::new(py);
-        let (key, label) = if let Ok(header_label) = header.extract::<String>() {
-            (table_header_key(&header_label, &mut keys), header_label)
-        } else if let Ok(header_dict) = header.cast::<PyDict>() {
-            let label = header_dict
-                .get_item("label")?
-                .and_then(|value| value.extract::<String>().ok())
-                .or_else(|| {
-                    header_dict
-                        .get_item("key")
-                        .ok()
-                        .flatten()
-                        .and_then(|value| value.extract::<String>().ok())
-                })
-                .ok_or_else(|| {
-                    PyRuntimeError::new_err("Table header dictionaries require 'label' or 'key'.")
-                })?;
-            let explicit_key = header_dict
-                .get_item("key")?
-                .and_then(|value| value.extract::<String>().ok())
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty());
-            let key = if let Some(key) = explicit_key {
-                keys.push(key.clone());
-                key
-            } else {
-                table_header_key(&label, &mut keys)
-            };
-
-            (key, label)
-        } else {
-            return Err(PyRuntimeError::new_err(
-                "Table headers must be strings or dictionaries.",
-            ));
-        };
-
-        column.set_item("key", key)?;
-        column.set_item("label", label)?;
-        columns.append(column)?;
-    }
-
-    Ok(columns)
-}
-
-#[cfg(feature = "python-plugins")]
-fn table_header_key(label: &str, existing_keys: &mut Vec<String>) -> String {
-    let mut key = String::new();
-    let mut last_was_separator = false;
-
-    for character in label.trim().chars() {
-        if character.is_ascii_alphanumeric() {
-            key.push(character.to_ascii_lowercase());
-            last_was_separator = false;
-        } else if !last_was_separator && !key.is_empty() {
-            key.push('_');
-            last_was_separator = true;
-        }
-    }
-
-    let base_key = key.trim_matches('_');
-    let base_key = if base_key.is_empty() {
-        "column".to_string()
-    } else {
-        base_key.to_string()
-    };
-    let mut key = base_key.clone();
-    let mut suffix = 2;
-
-    while existing_keys
-        .iter()
-        .any(|existing_key| existing_key == &key)
-    {
-        key = format!("{base_key}_{suffix}");
-        suffix += 1;
-    }
-
-    existing_keys.push(key.clone());
-    key
-}
-
-#[cfg(feature = "python-plugins")]
-fn normalize_custom_category(category: &str) -> String {
-    let mut normalized = String::new();
-    let mut last_was_separator = false;
-
-    for character in category.trim().chars() {
-        if character.is_ascii_alphanumeric() {
-            normalized.push(character.to_ascii_lowercase());
-            last_was_separator = false;
-        } else if !last_was_separator && !normalized.is_empty() {
-            normalized.push('_');
-            last_was_separator = true;
-        }
-    }
-
-    let normalized = normalized.trim_matches('_');
-
-    if normalized.is_empty() {
-        "other".to_string()
-    } else {
-        normalized.to_string()
-    }
-}
-
-#[cfg(feature = "python-plugins")]
-fn py_any_to_json(value: &Bound<'_, PyAny>) -> PyResult<JsonValue> {
-    if value.is_none() {
-        return Ok(JsonValue::Null);
-    }
-
-    if let Ok(value) = value.extract::<bool>() {
-        return Ok(JsonValue::Bool(value));
-    }
-
-    if let Ok(value) = value.extract::<i64>() {
-        return Ok(JsonValue::Number(JsonNumber::from(value)));
-    }
-
-    if let Ok(value) = value.extract::<u64>() {
-        return Ok(JsonValue::Number(JsonNumber::from(value)));
-    }
-
-    if let Ok(value) = value.extract::<f64>() {
-        if let Some(number) = JsonNumber::from_f64(value) {
-            return Ok(JsonValue::Number(number));
-        }
-    }
-
-    if let Ok(value) = value.extract::<String>() {
-        return Ok(JsonValue::String(value));
-    }
-
-    if let Ok(dict) = value.cast::<PyDict>() {
-        return Ok(JsonValue::Object(py_dict_to_json_map(dict)?));
-    }
-
-    if let Ok(list) = value.cast::<PyList>() {
-        let mut values = Vec::new();
-
-        for item in list.iter() {
-            values.push(py_any_to_json(&item)?);
-        }
-
-        return Ok(JsonValue::Array(values));
-    }
-
-    Ok(JsonValue::String(value.str()?.to_string()))
-}
-
-#[cfg(feature = "python-plugins")]
-fn py_dict_to_json_map(dict: &Bound<'_, PyDict>) -> PyResult<JsonMap<String, JsonValue>> {
-    let mut map = JsonMap::new();
-
-    for (key, value) in dict.iter() {
-        map.insert(key.extract::<String>()?, py_any_to_json(&value)?);
-    }
-
-    Ok(map)
 }
 
 #[cfg(feature = "python-plugins")]
@@ -3436,380 +2235,28 @@ fn ensure_python_plugin_directory(app_handle: &AppHandle) -> Result<PathBuf, Str
     Ok(plugin_root)
 }
 
-fn resolve_python_runtime(app_handle: &AppHandle) -> Result<PythonRuntime, String> {
-    if let Ok(executable) = std::env::var("PYO3_PYTHON") {
-        let executable = PathBuf::from(executable);
-
-        if executable.is_file() {
-            return Ok(PythonRuntime {
-                home: std::env::var("PYTHONHOME").ok().map(PathBuf::from),
-                library_paths: python_library_paths_from_env(),
-                executable,
-            });
-        }
-    }
-
-    let resource_dir = app_handle
+pub fn python_runtime_directory(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    app_handle
         .path()
-        .resource_dir()
-        .map_err(|error| format!("Failed to resolve app resource directory: {error}"))?;
-    let runtime_dir = resource_dir
-        .join("python-runtime")
-        .join(python_runtime_target());
-    let executable = runtime_dir.join(python_executable_relative_path());
+        .app_data_dir()
+        .map(|directory| directory.join("python"))
+        .map_err(|error| format!("Failed to resolve Python data directory: {error}"))
+}
 
-    if !executable.is_file() {
-        return Err(format!(
-            "Python runtime executable was not found at '{}'. Run `bun run python:runtime` before running plugins.",
-            executable.display()
-        ));
-    }
+pub fn python_runtime_status(app_handle: AppHandle) -> Result<runtime::RuntimeStatus, String> {
+    Ok(runtime::status(&python_runtime_directory(&app_handle)?))
+}
 
-    Ok(PythonRuntime {
-        executable,
-        home: Some(runtime_dir.clone()),
-        library_paths: python_runtime_library_paths(&runtime_dir),
+pub async fn prepare_python_runtime(
+    app_handle: AppHandle,
+) -> Result<runtime::RuntimeStatus, String> {
+    let root = python_runtime_directory(&app_handle)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        runtime::prepare_default(&root)?;
+        Ok(runtime::status(&root))
     })
-}
-
-fn python_library_paths_from_env() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-
-    if let Ok(path) = std::env::var("PYTHONHOME") {
-        paths.push(PathBuf::from(path));
-    }
-
-    if let Some(path_value) = std::env::var_os(path_env_key()) {
-        paths.extend(std::env::split_paths(&path_value));
-    }
-
-    paths
-}
-
-fn python_runtime_library_paths(runtime_dir: &Path) -> Vec<PathBuf> {
-    let mut paths = vec![runtime_dir.to_path_buf()];
-
-    #[cfg(target_os = "windows")]
-    {
-        paths.push(runtime_dir.join("DLLs"));
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        paths.push(runtime_dir.join("lib"));
-    }
-
-    paths
-}
-
-fn apply_python_library_path(command: &mut ProcessCommand, library_paths: &[PathBuf]) {
-    let key = path_env_key();
-    let mut paths = library_paths.to_vec();
-
-    if let Some(existing_paths) = std::env::var_os(key) {
-        paths.extend(std::env::split_paths(&existing_paths));
-    }
-
-    if let Ok(joined_paths) = std::env::join_paths(paths) {
-        command.env(key, joined_paths);
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let mut loader_paths = library_paths.to_vec();
-
-        if let Some(existing_paths) = std::env::var_os("DYLD_LIBRARY_PATH") {
-            loader_paths.extend(std::env::split_paths(&existing_paths));
-        }
-
-        if let Ok(joined_paths) = std::env::join_paths(loader_paths) {
-            command.env("DYLD_LIBRARY_PATH", joined_paths);
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let mut loader_paths = library_paths.to_vec();
-
-        if let Some(existing_paths) = std::env::var_os("LD_LIBRARY_PATH") {
-            loader_paths.extend(std::env::split_paths(&existing_paths));
-        }
-
-        if let Ok(joined_paths) = std::env::join_paths(loader_paths) {
-            command.env("LD_LIBRARY_PATH", joined_paths);
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn path_env_key() -> &'static str {
-    "Path"
-}
-
-#[cfg(not(target_os = "windows"))]
-fn path_env_key() -> &'static str {
-    "PATH"
-}
-
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-fn python_runtime_target() -> &'static str {
-    "windows-x64"
-}
-
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-fn python_runtime_target() -> &'static str {
-    "macos-x64"
-}
-
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-fn python_runtime_target() -> &'static str {
-    "macos-arm64"
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn python_runtime_target() -> &'static str {
-    "linux-x64"
-}
-
-#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-fn python_runtime_target() -> &'static str {
-    "linux-arm64"
-}
-
-#[cfg(target_os = "windows")]
-fn python_executable_relative_path() -> PathBuf {
-    PathBuf::from("python.exe")
-}
-
-#[cfg(not(target_os = "windows"))]
-fn python_executable_relative_path() -> PathBuf {
-    PathBuf::from("bin").join("python3")
-}
-
-#[cfg(feature = "python-plugins")]
-struct PluginSearchMatch {
-    path: String,
-    file: String,
-    line: u64,
-    column: u64,
-    matched_text: String,
-    context: String,
-}
-
-#[cfg(feature = "python-plugins")]
-fn search_files_with_grep(
-    root_path: &str,
-    query: &str,
-    regex: bool,
-    case_sensitive: bool,
-    binary_files: bool,
-    max_matches: Option<usize>,
-) -> Result<Vec<PluginSearchMatch>, String> {
-    let root = PathBuf::from(root_path);
-    let trimmed_query = query.trim();
-
-    if trimmed_query.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    if !root.exists() {
-        return Err(format!("Search root does not exist: {root_path}"));
-    }
-
-    let matcher = build_plugin_grep_matcher(trimmed_query, regex, case_sensitive)
-        .map_err(|error| format!("Failed to build search matcher: {error}"))?;
-    let mut matches = Vec::new();
-    let match_limit = max_matches.unwrap_or(usize::MAX);
-
-    if root.is_file() {
-        search_plugin_file(&matcher, &root, binary_files, match_limit, &mut matches)?;
-        return Ok(matches);
-    }
-
-    if !root.is_dir() {
-        return Err(format!(
-            "Search root is not a file or directory: {root_path}"
-        ));
-    }
-
-    let mut walker = WalkBuilder::new(&root);
-
-    walker
-        .hidden(false)
-        .ignore(false)
-        .parents(false)
-        .git_global(false)
-        .git_ignore(false)
-        .git_exclude(false);
-
-    for entry in walker.build().filter_map(Result::ok) {
-        if matches.len() >= match_limit {
-            break;
-        }
-
-        let entry_path = entry.into_path();
-
-        if entry_path.is_file() {
-            search_plugin_file(
-                &matcher,
-                &entry_path,
-                binary_files,
-                match_limit,
-                &mut matches,
-            )?;
-        }
-    }
-
-    Ok(matches)
-}
-
-#[cfg(feature = "python-plugins")]
-fn plugin_search_matches_to_py<'py>(
-    py: Python<'py>,
-    matches: Vec<PluginSearchMatch>,
-) -> PyResult<Bound<'py, PyList>> {
-    let values = PyList::empty(py);
-
-    for file_match in matches {
-        let value = PyDict::new(py);
-
-        value.set_item("path", file_match.path)?;
-        value.set_item("file", file_match.file)?;
-        value.set_item("line", file_match.line)?;
-        value.set_item("column", file_match.column)?;
-        value.set_item("matched_text", file_match.matched_text)?;
-        value.set_item("context", file_match.context)?;
-        values.append(value)?;
-    }
-
-    Ok(values)
-}
-
-#[cfg(feature = "python-plugins")]
-fn search_plugin_file(
-    matcher: &RegexMatcher,
-    path: &Path,
-    binary_files: bool,
-    match_limit: usize,
-    matches: &mut Vec<PluginSearchMatch>,
-) -> Result<(), String> {
-    let mut searcher = build_plugin_grep_searcher(binary_files);
-    let mut sink = PluginGrepSink {
-        path,
-        matcher,
-        matches,
-        match_limit,
-    };
-
-    searcher
-        .search_path(matcher, path, &mut sink)
-        .map_err(|error| format!("Failed to search '{}': {error}", path.display()))
-}
-
-#[cfg(feature = "python-plugins")]
-fn build_plugin_grep_matcher(
-    query: &str,
-    regex: bool,
-    case_sensitive: bool,
-) -> Result<RegexMatcher, grep::regex::Error> {
-    RegexMatcherBuilder::new()
-        .case_insensitive(!case_sensitive)
-        .fixed_strings(!regex)
-        .build(query)
-}
-
-#[cfg(feature = "python-plugins")]
-fn build_plugin_grep_searcher(binary_files: bool) -> Searcher {
-    SearcherBuilder::new()
-        .line_number(true)
-        .binary_detection(if binary_files {
-            BinaryDetection::none()
-        } else {
-            BinaryDetection::quit(b'\x00')
-        })
-        .build()
-}
-
-#[cfg(feature = "python-plugins")]
-struct PluginGrepSink<'a> {
-    path: &'a Path,
-    matcher: &'a RegexMatcher,
-    matches: &'a mut Vec<PluginSearchMatch>,
-    match_limit: usize,
-}
-
-#[cfg(feature = "python-plugins")]
-impl Sink for PluginGrepSink<'_> {
-    type Error = io::Error;
-
-    fn matched(
-        &mut self,
-        _searcher: &Searcher,
-        matched: &SinkMatch<'_>,
-    ) -> Result<bool, Self::Error> {
-        if self.matches.len() >= self.match_limit {
-            return Ok(false);
-        }
-
-        let line_number = matched.line_number().unwrap_or(0);
-        let line_bytes = trim_plugin_search_line_ending_bytes(matched.bytes());
-        let context = String::from_utf8_lossy(line_bytes).to_string();
-        let path = self.path.to_string_lossy().to_string();
-        let file = self
-            .path
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.clone());
-        let mut should_continue = true;
-
-        self.matcher
-            .find_iter(line_bytes, |submatch| {
-                if self.matches.len() >= self.match_limit {
-                    should_continue = false;
-                    return false;
-                }
-
-                let column = submatch.start() as u64 + 1;
-                let matched_text = String::from_utf8_lossy(&line_bytes[submatch]).to_string();
-
-                self.matches.push(PluginSearchMatch {
-                    path: path.clone(),
-                    file: file.clone(),
-                    line: line_number,
-                    column,
-                    matched_text,
-                    context: context.clone(),
-                });
-
-                true
-            })
-            .map_err(|error| io::Error::other(error.to_string()))?;
-
-        Ok(should_continue && self.matches.len() < self.match_limit)
-    }
-
-    fn binary_data(
-        &mut self,
-        _searcher: &Searcher,
-        _binary_byte_offset: u64,
-    ) -> Result<bool, Self::Error> {
-        Ok(true)
-    }
-
-    fn finish(&mut self, _searcher: &Searcher, _finish: &SinkFinish) -> Result<(), Self::Error> {
-        Ok(())
-    }
-}
-
-#[cfg(feature = "python-plugins")]
-fn trim_plugin_search_line_ending_bytes(bytes: &[u8]) -> &[u8] {
-    if bytes.ends_with(b"\r\n") {
-        &bytes[..bytes.len().saturating_sub(2)]
-    } else if bytes.ends_with(b"\n") {
-        &bytes[..bytes.len().saturating_sub(1)]
-    } else {
-        bytes
-    }
+    .await
+    .map_err(|error| format!("Python setup worker failed: {error}"))?
 }
 
 fn seed_cultivator_api_stub(plugin_root: &Path) -> Result<(), String> {
@@ -3820,425 +2267,7 @@ fn seed_cultivator_api_stub(plugin_root: &Path) -> Result<(), String> {
 }
 
 #[cfg(feature = "python-plugins")]
-const PYTHON_PLUGIN_PROCESS_RUNNER: &str = r#"
-import contextlib
-import csv
-import datetime
-import hashlib
-import importlib.util
-import io
-import json
-import os
-import re
-import sys
-import types
-import traceback
-
-ARTIFACT_CATEGORIES = {
-    "account": "accounts",
-    "application": "applications",
-    "browser_history": "browser",
-    "call": "calls",
-    "contact": "contacts",
-    "credential": "credentials",
-    "file": "files",
-    "location": "locations",
-    "media": "media",
-    "message": "messages",
-    "sms": "messages",
-    "mms": "messages",
-    "instant_message": "messages",
-    "email": "communications",
-    "chat": "communications",
-    "voice_mail": "communications",
-    "note": "notes",
-    "calendar_entry": "calendar",
-    "user_account": "accounts",
-    "password": "credentials",
-    "journey": "journeys",
-    "installed_application": "applications",
-    "cookie": "browser",
-    "application_usage": "applications",
-    "visited_page": "browser",
-    "dictionary_word": "search",
-    "web_bookmark": "browser",
-    "shared_file": "files",
-    "bluetooth_device": "networks",
-    "map": "maps",
-    "searched_item": "search",
-    "wireless_network": "networks",
-    "notification": "system",
-    "carved_string": "search",
-    "powering_event": "system",
-    "system": "system",
-    "timeline_event": "timeline",
-    "custom_table": "other",
-    "record": "other",
-}
-
-logs = []
-artifacts = []
-search_roots = []
-
-
-def artifact_category_for_kind(kind):
-    return ARTIFACT_CATEGORIES.get(kind)
-
-
-def artifact_label_from_payload(payload):
-    for key in ("name", "title", "url", "path", "key", "eventType"):
-        value = payload.get(key)
-        if isinstance(value, str):
-            return value
-    return ""
-
-
-def json_record(payload, file_path):
-    if not isinstance(payload, dict):
-        payload = {"kind": "record", "label": str(payload), "value": payload}
-
-    kind = str(payload.get("kind") or "record")
-    payload.setdefault("kind", kind)
-    category = artifact_category_for_kind(kind)
-
-    if category:
-        payload.setdefault("category", category)
-
-    return {
-        "filePath": file_path,
-        "resultKind": kind,
-        "label": str(payload.get("label") or artifact_label_from_payload(payload)),
-        "payload": payload,
-    }
-
-
-def normalize_result(result, file_path):
-    if result is None:
-        return []
-
-    if isinstance(result, list):
-        records = []
-        for item in result:
-            if item is not None:
-                records.append(json_record(item, file_path))
-        return records
-
-    return [json_record(result, file_path)]
-
-
-def read_bytes(path, max_bytes=None):
-    with open(path, "rb") as file:
-        return file.read() if max_bytes is None else file.read(max_bytes)
-
-
-def read_text(path, max_bytes=None, encoding="utf-8", errors="replace"):
-    data = read_bytes(path, max_bytes)
-    return data.decode(encoding, errors=errors)
-
-
-def read_lines(path, encoding="utf-8", errors="replace"):
-    return open(path, "r", encoding=encoding, errors=errors)
-
-
-def sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def log(level, message):
-    logs.append({"level": str(level), "message": str(message)})
-
-
-def progress(completed, total, message=None, eta_seconds=None):
-    completed = int(completed)
-    total = int(total)
-    if total <= 0 or completed < 0 or completed > total:
-        raise ValueError("progress requires 0 <= completed <= total and total > 0")
-    payload = {"completed": completed, "total": total}
-    if message is not None:
-        payload["message"] = str(message)
-    if eta_seconds is not None:
-        payload["etaSeconds"] = max(0, int(eta_seconds))
-    print("__CULTIVATOR_PROGRESS__" + json.dumps(payload, separators=(",", ":")), file=sys.stderr, flush=True)
-
-
-def create_artifact(kind, label, **fields):
-    artifact = {"kind": kind}
-    category = artifact_category_for_kind(kind)
-    if category:
-        artifact["category"] = category
-    artifact["label"] = label
-    artifact.update(fields)
-    return artifact
-
-
-def normalize_custom_category(category):
-    value = re.sub(r"[^0-9A-Za-z]+", "_", str(category).strip()).strip("_").lower()
-    return value or "other"
-
-
-def table_header_key(label, existing):
-    base = re.sub(r"[^0-9A-Za-z]+", "_", str(label).strip()).strip("_").lower() or "column"
-    key = base
-    suffix = 2
-    while key in existing:
-        key = f"{base}_{suffix}"
-        suffix += 1
-    existing.add(key)
-    return key
-
-
-def create_table_artifact(name, category, headers, label=None, icon=None, **fields):
-    existing = set()
-    columns = []
-    for header in headers:
-        if isinstance(header, dict):
-            header_label = str(header.get("label") or header.get("key") or "")
-            key = str(header.get("key") or table_header_key(header_label, existing))
-            existing.add(key)
-        else:
-            header_label = str(header)
-            key = table_header_key(header_label, existing)
-        columns.append({"key": key, "label": header_label})
-
-    artifact = create_artifact(
-        "custom_table",
-        label or str(name),
-        category=normalize_custom_category(category),
-        table={"name": str(name), "columns": columns, "rows": []},
-        **fields,
-    )
-    if icon:
-        artifact["icon"] = str(icon)
-    return artifact
-
-
-def add_table_row(table, values=None, **fields):
-    row = {}
-    if values:
-        row.update(values)
-    row.update(fields)
-    table.setdefault("table", {}).setdefault("rows", []).append(row)
-
-
-def create_group(label, id=None):
-    return {
-        "id": str(id or normalize_custom_category(label)),
-        "label": str(label),
-    }
-
-
-def add_artifact(artifact, file_path=None, group=None):
-    if isinstance(artifact, dict):
-        if group is not None:
-            artifact["group"] = group
-        source = artifact.get("source")
-        if not file_path and isinstance(source, dict):
-            file_path = source.get("filePath")
-        if not file_path:
-            file_path = artifact.get("path")
-    artifacts.append({"filePath": file_path, "payload": artifact})
-
-
-def datetime_from_unix(ts):
-    return datetime.datetime.fromtimestamp(float(ts)).isoformat()
-
-
-def datetime_from_iso(text):
-    return datetime.datetime.fromisoformat(str(text).strip().replace("Z", "+00:00")).isoformat()
-
-
-def datetime_from_datetime(value):
-    return value.isoformat()
-
-
-def account(label, **fields): return create_artifact("account", label, **fields)
-def application(label, **fields): return create_artifact("application", label, **fields)
-def browser_history(label, **fields): return create_artifact("browser_history", label, **fields)
-def call(label, **fields): return create_artifact("call", label, **fields)
-def contact(label, **fields): return create_artifact("contact", label, **fields)
-def credential(label, **fields): return create_artifact("credential", label, **fields)
-def file_artifact(label, **fields): return create_artifact("file", label, **fields)
-def location(label, **fields): return create_artifact("location", label, **fields)
-def media(label, **fields): return create_artifact("media", label, **fields)
-def message(label, **fields): return create_artifact("message", label, **fields)
-def sms(label, **fields): return create_artifact("sms", label, **fields)
-def mms(label, **fields): return create_artifact("mms", label, **fields)
-def email(label, **fields): return create_artifact("email", label, **fields)
-def chat(label, **fields): return create_artifact("chat", label, **fields)
-def instant_message(label, **fields): return create_artifact("instant_message", label, **fields)
-def user_account(label, **fields): return create_artifact("user_account", label, **fields)
-def voice_mail(label, **fields): return create_artifact("voice_mail", label, **fields)
-def calendar_entry(label, **fields): return create_artifact("calendar_entry", label, **fields)
-def password(label, **fields): return create_artifact("password", label, **fields)
-def journey(label, **fields): return create_artifact("journey", label, **fields)
-def installed_application(label, **fields): return create_artifact("installed_application", label, **fields)
-def cookie(label, **fields): return create_artifact("cookie", label, **fields)
-def application_usage(label, **fields): return create_artifact("application_usage", label, **fields)
-def visited_page(label, **fields): return create_artifact("visited_page", label, **fields)
-def dictionary_word(label, **fields): return create_artifact("dictionary_word", label, **fields)
-def web_bookmark(label, **fields): return create_artifact("web_bookmark", label, **fields)
-def shared_file(label, **fields): return create_artifact("shared_file", label, **fields)
-def bluetooth_device(label, **fields): return create_artifact("bluetooth_device", label, **fields)
-def map_artifact(label, **fields): return create_artifact("map", label, **fields)
-def searched_item(label, **fields): return create_artifact("searched_item", label, **fields)
-def wireless_network(label, **fields): return create_artifact("wireless_network", label, **fields)
-def notification(label, **fields): return create_artifact("notification", label, **fields)
-def carved_string(label, **fields): return create_artifact("carved_string", label, **fields)
-def powering_event(label, **fields): return create_artifact("powering_event", label, **fields)
-def note(label, **fields): return create_artifact("note", label, **fields)
-def system_artifact(label, **fields): return create_artifact("system", label, **fields)
-def timeline_event(label, **fields): return create_artifact("timeline_event", label, **fields)
-
-
-def search_files(root_path, query, regex=False, case_sensitive=False, binary_files=False, max_matches=None):
-    flags = 0 if case_sensitive else re.IGNORECASE
-    pattern = re.compile(query if regex else re.escape(query), flags)
-    matches = []
-
-    for root, _, files in os.walk(root_path):
-        for name in files:
-            path = os.path.join(root, name)
-            try:
-                text = read_text(path)
-            except Exception:
-                continue
-
-            if not binary_files and "\x00" in text:
-                continue
-
-            for line_index, line in enumerate(text.splitlines(), 1):
-                match = pattern.search(line)
-                if not match:
-                    continue
-                matches.append({
-                    "path": path,
-                    "file": name,
-                    "line": line_index,
-                    "column": match.start() + 1,
-                    "matched_text": match.group(0),
-                    "context": line,
-                })
-                if max_matches is not None and len(matches) >= max_matches:
-                    return matches
-    return matches
-
-
-def search(query, regex=False, case_sensitive=False, binary_files=False, max_matches=None):
-    matches = []
-    for root in search_roots:
-        remaining = None if max_matches is None else max_matches - len(matches)
-        if remaining is not None and remaining <= 0:
-            break
-        matches.extend(search_files(root, query, regex, case_sensitive, binary_files, remaining))
-    return matches
-
-
-api = types.ModuleType("cultivator_api")
-for name, value in list(globals().items()):
-    if name in {
-        "read_bytes", "read_text", "read_lines", "sha256", "log", "progress", "create_artifact",
-        "create_table_artifact", "add_table_row", "add_artifact", "create_group",
-        "datetime_from_unix", "datetime_from_iso", "datetime_from_datetime", "account",
-        "application", "browser_history", "call", "contact", "credential",
-        "file_artifact", "location", "media", "message", "note",
-        "sms", "mms", "email", "chat", "instant_message", "user_account",
-        "voice_mail", "calendar_entry", "password", "journey",
-        "installed_application", "cookie", "application_usage", "visited_page",
-        "dictionary_word", "web_bookmark", "shared_file", "bluetooth_device",
-        "map_artifact", "searched_item", "wireless_network", "notification",
-        "carved_string", "powering_event", "system_artifact", "timeline_event",
-        "search_files", "search",
-    }:
-        setattr(api, name, value)
-sys.modules["cultivator_api"] = api
-
-
-def load_plugin(plugin, plugin_directory):
-    entry_path = os.path.join(plugin_directory, plugin["entry"])
-    module_name = "cultivator_plugin_" + re.sub(r"\W+", "_", plugin["id"])
-    sys.path.insert(0, plugin_directory)
-    spec = importlib.util.spec_from_file_location(module_name, entry_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def build_context(input_data, task, matched_files):
-    artifacts_path = os.path.join(input_data["case_folder_path"], "artifacts")
-    target_file = task["target_file"]
-    plugin = input_data["plugin"]
-    datasource = input_data["datasource"]
-    return {
-        "case": {
-            "id": datasource["case_id"],
-            "database_path": input_data["case_database_path"],
-            "folder_path": input_data["case_folder_path"],
-            "artifacts_path": artifacts_path,
-        },
-        "datasource": {
-            "id": datasource["id"],
-            "name": datasource["name"],
-            "paths": datasource["paths"],
-        },
-        "plugin": {
-            "id": plugin["id"],
-            "name": plugin["name"],
-            "target": plugin["target"],
-            "mode": plugin["mode"],
-            "matched_files": matched_files,
-        },
-        "options": input_data.get("options", {}),
-        "file": {
-            "path": target_file["path"],
-            "name": target_file["name"],
-            "extension": target_file["extension"],
-            "size": target_file["size"],
-        },
-        "task": {
-            "plugin_id": task["plugin_id"],
-            "file_path": task["file_path"],
-            "datasource_id": task["datasource_id"],
-            "case_id": task["case_id"],
-        },
-    }
-
-
-def main():
-    input_data = json.loads(sys.stdin.buffer.read().decode("utf-8"))
-    search_roots[:] = list(input_data["datasource"]["paths"])
-    with contextlib.redirect_stdout(sys.stderr):
-        module = load_plugin(input_data["plugin"], input_data["plugin_directory"])
-        function = getattr(module, input_data["plugin"]["function"])
-    records = []
-    matched_files = [item["file_path"] for item in input_data["tasks"]]
-
-    for task in input_data["tasks"]:
-        with contextlib.redirect_stdout(sys.stderr):
-            result = function(build_context(input_data, task, matched_files))
-        records.extend(normalize_result(result, task["file_path"]))
-
-    for artifact in artifacts:
-        file_path = artifact.get("filePath") or ""
-        records.append(json_record(artifact.get("payload"), file_path))
-
-    json.dump({
-        "scannedFiles": input_data["scanned_files"],
-        "matchedFiles": len(input_data["tasks"]),
-        "records": records,
-        "logs": logs,
-    }, sys.stdout, separators=(",", ":"))
-
-
-try:
-    main()
-except Exception:
-    traceback.print_exc(file=sys.stderr)
-    sys.exit(1)
-"#;
+const PYTHON_PLUGIN_PROCESS_RUNNER: &str = crate::scripting::PLUGIN_WORKER;
 
 const CULTIVATOR_API_STUB: &str = r#"from typing import Any, Iterator, Literal, Optional, TypedDict
 
@@ -4985,6 +3014,7 @@ path_glob = ["*/recents_storage", "*/favorites_storage"]</code></pre>
 "#;
 
 fn validate_manifest(manifest: &PythonPluginManifest, plugin_dir: &Path) -> Result<(), String> {
+    runtime::validate_requirements(&manifest.python, &manifest.dependencies)?;
     if manifest.id.trim().is_empty() {
         return Err("Python plugin manifest id is required.".to_string());
     }
@@ -5735,96 +3765,8 @@ async fn insert_plugin_logs(
     Ok(())
 }
 
-#[cfg(feature = "python-plugins")]
-fn reset_thread_logs() -> Result<(), String> {
-    let logs = PYTHON_LOGS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut logs = logs
-        .lock()
-        .map_err(|_| "Plugin log registry is poisoned.".to_string())?;
-
-    logs.insert(current_thread_key(), Vec::new());
-
-    Ok(())
-}
-
-#[cfg(feature = "python-plugins")]
-fn take_thread_logs() -> Result<Vec<PendingPluginLog>, String> {
-    let logs = PYTHON_LOGS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut logs = logs
-        .lock()
-        .map_err(|_| "Plugin log registry is poisoned.".to_string())?;
-
-    Ok(logs.remove(&current_thread_key()).unwrap_or_default())
-}
-
-#[cfg(feature = "python-plugins")]
-fn reset_thread_artifacts() -> Result<(), String> {
-    let artifacts = PYTHON_ARTIFACTS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut artifacts = artifacts
-        .lock()
-        .map_err(|_| "Plugin artifact registry is poisoned.".to_string())?;
-
-    artifacts.insert(current_thread_key(), Vec::new());
-
-    Ok(())
-}
-
-#[cfg(feature = "python-plugins")]
-fn take_thread_artifacts() -> Result<Vec<PluginResultRecord>, String> {
-    let artifacts = PYTHON_ARTIFACTS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut artifacts = artifacts
-        .lock()
-        .map_err(|_| "Plugin artifact registry is poisoned.".to_string())?;
-
-    Ok(artifacts.remove(&current_thread_key()).unwrap_or_default())
-}
-
-#[cfg(feature = "python-plugins")]
-fn set_thread_search_roots(paths: Vec<String>) -> Result<(), String> {
-    let roots = PYTHON_SEARCH_ROOTS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut roots = roots
-        .lock()
-        .map_err(|_| "Plugin search root registry is poisoned.".to_string())?;
-
-    roots.insert(current_thread_key(), paths);
-
-    Ok(())
-}
-
-#[cfg(feature = "python-plugins")]
-fn current_search_roots() -> Result<Vec<String>, String> {
-    let roots = PYTHON_SEARCH_ROOTS.get_or_init(|| Mutex::new(HashMap::new()));
-    let roots = roots
-        .lock()
-        .map_err(|_| "Plugin search root registry is poisoned.".to_string())?;
-
-    roots
-        .get(&current_thread_key())
-        .cloned()
-        .filter(|paths| !paths.is_empty())
-        .ok_or_else(|| "No datasource search roots are available for this plugin run.".to_string())
-}
-
-#[cfg(feature = "python-plugins")]
-fn clear_thread_search_roots() -> Result<(), String> {
-    let roots = PYTHON_SEARCH_ROOTS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut roots = roots
-        .lock()
-        .map_err(|_| "Plugin search root registry is poisoned.".to_string())?;
-
-    roots.remove(&current_thread_key());
-
-    Ok(())
-}
-
-#[cfg(feature = "python-plugins")]
-fn current_thread_key() -> u64 {
-    let thread_id: ThreadId = std::thread::current().id();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-
-    thread_id.hash(&mut hasher);
-
-    hasher.finish()
+fn default_python_version() -> String {
+    runtime::DEFAULT_PYTHON.to_owned()
 }
 
 fn default_plugin_entry() -> String {
@@ -5936,11 +3878,13 @@ fn create_plugin_manifest_text(request: &CreatePythonPluginRequest) -> Result<St
             .unwrap_or_default();
 
         return Ok(format!(
-            "id = {}\nname = {}\nauthor = {}\nversion = {}\ndescription = {}\ntype = {}\ntarget = {}\nmode = {}\n{path_glob}{path_regex}entry = {}\nfunction = {}\n",
+            "id = {}\nname = {}\nauthor = {}\nversion = {}\npython = {}\ndependencies = [{}]\ndescription = {}\ntype = {}\ntarget = {}\nmode = {}\n{path_glob}{path_regex}entry = {}\nfunction = {}\n",
             toml_quote(&manifest.id),
             toml_quote(&manifest.name),
             toml_quote(&manifest.author),
             toml_quote(&manifest.version),
+            toml_quote(&manifest.python),
+            manifest.dependencies.iter().map(|value| toml_quote(value)).collect::<Vec<_>>().join(", "),
             toml_quote(&manifest.description),
             toml_quote(&manifest.plugin_type),
             toml_quote(plugin_target_value(&manifest.target)),
@@ -6049,6 +3993,8 @@ fn python_plugin_manifest_template(plugin_id: &str, plugin_name: &str) -> String
 name = "{plugin_name}"
 author = "Your Name"
 version = "1.0.0"
+python = "3.12"
+dependencies = []
 description = "Describe what this plugin extracts."
 type = "other"
 target = "other"
@@ -6108,15 +4054,6 @@ fn open_directory_in_vscode(directory: &Path) -> Option<()> {
     None
 }
 
-#[cfg(feature = "python-plugins")]
-fn plugin_mode_label(mode: &PythonPluginMode) -> &'static str {
-    match mode {
-        PythonPluginMode::EachFile => "each_file",
-        PythonPluginMode::PathGlob => "path_glob",
-        PythonPluginMode::PathRegex => "path_regex",
-    }
-}
-
 fn create_id(prefix: &str) -> String {
     format!(
         "{}-{}-{}",
@@ -6171,27 +4108,6 @@ fn sanitize_path_segment(value: &str) -> String {
     } else {
         sanitized
     }
-}
-
-#[cfg(feature = "python-plugins")]
-fn sanitize_identifier(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-#[cfg(feature = "python-plugins")]
-fn pyo3_sha256(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -6322,87 +4238,5 @@ mod tests {
         assert!(resolve_plugin_organization_folder(&root, "../outside").is_err());
         assert!(resolve_plugin_organization_folder(&root, "VLEAPP//Ford").is_err());
         assert!(resolve_plugin_organization_folder(&root, "C:\\outside").is_err());
-    }
-
-    #[cfg(feature = "python-plugins")]
-    #[test]
-    fn plugin_context_exposes_target_and_all_matched_files() {
-        let datasource = DatasourceForPlugins {
-            id: "datasource-1".to_string(),
-            case_id: "case-1".to_string(),
-            name: "Fixture".to_string(),
-            paths: vec!["C:\\evidence".to_string()],
-            plugin_ids: vec!["fixture-plugin".to_string()],
-        };
-        let plugin = PythonPluginManifest {
-            id: "fixture-plugin".to_string(),
-            name: "Fixture Plugin".to_string(),
-            organization_folder: None,
-            author: "Cultivator".to_string(),
-            version: "1.0.0".to_string(),
-            description: "Fixture".to_string(),
-            plugin_type: "other".to_string(),
-            target: PythonPluginTarget::Ios,
-            mode: PythonPluginMode::PathGlob,
-            path_glob: vec!["**/*.plist".to_string()],
-            archive_path_glob: Vec::new(),
-            path_regex: None,
-            entry: "plugin.py".to_string(),
-            function: "run".to_string(),
-            options: Vec::new(),
-        };
-        let task = PluginExecutionTask {
-            plugin_id: plugin.id.clone(),
-            file_path: "C:\\evidence\\one.plist".to_string(),
-            datasource_id: datasource.id.clone(),
-            case_id: datasource.case_id.clone(),
-            target_file: TargetFile {
-                path: "C:\\evidence\\one.plist".to_string(),
-                name: "one.plist".to_string(),
-                extension: "plist".to_string(),
-                size: 10,
-            },
-        };
-        let matched_files = vec![
-            "C:\\evidence\\one.plist".to_string(),
-            "C:\\evidence\\two.plist".to_string(),
-        ];
-
-        Python::attach(|py| {
-            let context = build_plugin_context(
-                py,
-                "C:\\case.sqlite",
-                "C:\\case",
-                &datasource,
-                &plugin,
-                &task,
-                &matched_files,
-            )
-            .unwrap();
-            let plugin_context = context
-                .get_item("plugin")
-                .unwrap()
-                .unwrap()
-                .cast_into::<PyDict>()
-                .unwrap();
-            assert_eq!(
-                plugin_context
-                    .get_item("target")
-                    .unwrap()
-                    .unwrap()
-                    .extract::<String>()
-                    .unwrap(),
-                "ios"
-            );
-            assert_eq!(
-                plugin_context
-                    .get_item("matched_files")
-                    .unwrap()
-                    .unwrap()
-                    .extract::<Vec<String>>()
-                    .unwrap(),
-                matched_files
-            );
-        });
     }
 }

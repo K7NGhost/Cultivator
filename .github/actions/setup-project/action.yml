@@ -1,11 +1,11 @@
 name: Setup Cultivator
-description: Install frontend, native build dependencies, and the bundled Python runtime.
+description: Install frontend, native build dependencies, and optional Python worker test tools.
 inputs:
   native:
     description: Install Rust and native dependencies.
     default: 'false'
   python:
-    description: Install and export the bundled CPython environment.
+    description: Install uv for external Python worker tests.
     default: 'false'
   rust-components:
     description: Additional Rust toolchain components.
@@ -49,14 +49,8 @@ runs:
         workspaces: src-tauri -> target
         shared-key: ${{ inputs.python == 'true' && 'python' || 'core' }}
         cache-on-failure: 'false'
-    - name: Cache bundled Python runtime
+    - name: Install uv
       if: inputs.python == 'true'
-      uses: actions/cache@v4
+      uses: astral-sh/setup-uv@v7
       with:
-        path: src-tauri/python-runtime
-        key: python-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/python-runtime.mjs') }}
-    - name: Set up bundled Python runtime
-      if: inputs.python == 'true'
-      shell: bash
-      working-directory: ${{ github.workspace }}
-      run: node scripts/ci/setup-python.mjs
+        enable-cache: true

@@ -78,12 +78,6 @@ pub async fn preview(path: String) -> Result<Vec<String>, String> {
     ))
 }
 
-pub async fn file(path: String) -> Result<Vec<String>, String> {
-    let page = read_page(path, 0).await?;
-
-    Ok(page.lines)
-}
-
 fn validate_file_path(path: String) -> Result<(PathBuf, u64), String> {
     let requested_path = PathBuf::from(path);
     let metadata = fs::metadata(&requested_path)

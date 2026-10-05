@@ -33,6 +33,8 @@ Each plugin has a plugin.toml:
 \`\`\`toml
 id = "example-plugin"
 name = "Example Plugin"
+python = "3.12"
+dependencies = [] # Package requirements, e.g. ["pillow>=12"]
 description = "Extracts artifacts from logical files."
 type = "contacts"
 target = "infotainment"
@@ -53,6 +55,8 @@ def run(context):
 \`\`\`
 
 The required target must be one of "ios", "android", "windows", "macos", "infotainment", or "other".
+
+Python runs in a separate worker process. Cultivator uses uv to create an isolated environment for each plugin before execution. The optional python field defaults to "3.12" and accepts version ranges such as ">=3.11"; dependencies is a list of Python package requirements. Changing either field creates a new environment. Plugin stdout is captured as diagnostics; return artifacts or use cultivator_api instead of writing protocol JSON yourself.
 
 Cultivator indexes case files, matches plugins by path_glob/path_regex, and calls run(context) once per matched file task.
 When present, archive_path_glob replaces path_glob only while Archive Extractor is in plugin-specific mode. This prevents intentionally broad runtime globs from extracting unrelated archive members.

@@ -25,11 +25,6 @@ pub async fn read_hex_preview(path: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub async fn read_hex_file(path: String) -> Result<Vec<String>, String> {
-    crate::preview::hex::file(path).await
-}
-
-#[tauri::command]
 pub async fn open_hex_preview(
     path: String,
 ) -> Result<crate::preview::hex::HexPreviewSummary, String> {

@@ -96,6 +96,10 @@ jobs:
         run: cargo clippy --locked --all-targets ${{ matrix.args }} -- -D warnings
       - name: Tests
         run: cargo test --locked ${{ matrix.args }}
+      - name: Python worker protocol tests
+        if: matrix.features == 'python'
+        working-directory: ${{ github.workspace }}
+        run: bun run test:python
       - name: Validate benchmark harnesses
         if: matrix.features == 'core'
         run: cargo test --locked --benches --no-default-features

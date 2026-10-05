@@ -5,8 +5,8 @@
 - `ci.yml` runs on PRs, main, merge queues, and manual dispatch. It checks workflow
   syntax, TypeScript, Bun tests, production frontend builds, Rust formatting,
   Clippy, and Rust tests. Rust is checked both with and without `python-plugins`.
-  Native builds verify Windows, Linux, macOS Intel, and macOS ARM with the bundled
-  CPython runtime. PRs compile the application without generating installers.
+  Native builds verify Windows, Linux, macOS Intel, and macOS ARM. Python worker
+  protocol tests run through uv. PRs compile the application without generating installers.
 - `performance.yml` benchmarks SQLite header parsing, MP4 container metadata,
   and preview serialization through CodSpeed CPU simulation. The existing
   asynchronous text-preview benchmark runs separately with Criterion, and its
@@ -20,10 +20,9 @@
 
 The shared `setup-project` action pins Bun 1.3.8, Node 22, and Rust 1.93.0, uses
 frozen dependency locks, installs Tauri's Linux prerequisites, and caches Bun,
-Cargo, and the platform-specific Python runtime. Python environment variables
-and library paths are exported for Cargo tests as well as Tauri builds. Native
-macOS runners match the Python runtime architecture, avoiding cross-linking
-Intel Rust binaries against ARM Python libraries.
+Cargo, and uv downloads for worker tests. Rust builds have no Python linking or
+environment requirements, and installers contain no CPython runtime. End users
+install uv once; Cultivator manages Python and plugin dependencies in app data.
 
 There is no frontend ESLint setup in this repository. Frontend checks use the
 existing strict TypeScript rules and Bun tests instead of introducing another

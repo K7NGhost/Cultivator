@@ -22,6 +22,8 @@ export type DataSourcePlugin = {
   archivePathGlob?: string | string[];
   pathRegex?: string;
   entry: string;
+  python?: string;
+  dependencies?: string[];
   function: string;
   options?: PluginOptionDefinition[];
 };
