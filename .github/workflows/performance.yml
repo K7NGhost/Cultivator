@@ -34,6 +34,10 @@ jobs:
       CARGO_TERM_COLOR: always
       CULTIVATOR_BENCH_LARGE: ${{ (github.event_name == 'schedule' || inputs.large == true || contains(github.event.pull_request.labels.*.name, 'performance')) && '1' || '0' }}
     steps:
+      # The CodSpeed build and the Criterion text-preview build use separate
+      # compiler flags, so both full release builds must fit on the runner.
+      - name: Free runner disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -44,12 +48,12 @@ jobs:
       - name: Install cargo-codspeed
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-codspeed@5.0.1
+          tool: cargo-codspeed@5.0.2
       - name: Build assets embedded by the Rust release library
         run: bun run build
       - name: Build CPU benchmarks
         working-directory: src-tauri
-        run: cargo codspeed build --bench file_format --no-default-features --locked
+        run: cargo codspeed build -m simulation --bench file_format --bench hex_preview --no-default-features --locked
       - name: Measure CPU work
         uses: CodSpeedHQ/action@v5
         with:
