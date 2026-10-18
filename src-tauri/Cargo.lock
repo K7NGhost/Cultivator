@@ -1041,6 +1041,7 @@ dependencies = [
 name = "cultivator"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "codspeed-criterion-compat",
  "ctor",
  "flate2",
