@@ -10,8 +10,36 @@ use std::{
     io::{self, Read},
     path::{Component, Path, PathBuf},
     sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 use zip::ZipArchive;
+
+mod timestamps;
+mod zip_extraction;
+use timestamps::{restore_directory_times, tar_modified_time};
+use zip_extraction::extract_zip_archive;
+
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+
+struct ProgressThrottle {
+    last_update: Instant,
+}
+
+impl ProgressThrottle {
+    fn new() -> Self {
+        Self {
+            last_update: Instant::now(),
+        }
+    }
+
+    fn should_emit(&mut self, now: Instant) -> bool {
+        if now.duration_since(self.last_update) < PROGRESS_INTERVAL {
+            return false;
+        }
+        self.last_update = now;
+        true
+    }
+}
 
 static ACTIVE_OUTPUT_ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 
@@ -121,10 +149,16 @@ where
     let archives = collect_archives(paths, &mut summary.scanned_files);
     let archive_entry_counts = archives
         .iter()
-        .map(|(path, kind)| archive_entry_count(path, *kind, matchers.as_ref()).unwrap_or(1))
+        .map(|(path, kind)| archive_entry_count(path, *kind, matchers.as_ref()))
         .collect::<Vec<_>>();
-    let total_entries = archive_entry_counts.iter().sum::<u64>();
+    // Streaming TAR inputs have no cheap entry count. Zero tells the UI to use indeterminate progress.
+    let total_entries = archive_entry_counts
+        .iter()
+        .copied()
+        .sum::<Option<u64>>()
+        .unwrap_or(0);
     let mut completed_entries = 0u64;
+    let mut throttle = ProgressThrottle::new();
 
     for (archive_index, (archive_path, archive_kind)) in archives.iter().enumerate() {
         let current_archive = display_name(archive_path);
@@ -137,6 +171,7 @@ where
             "{archive_index:04}-{}",
             sanitize_output_name(&display_name(archive_path))
         ));
+        let mut archive_completed = 0;
         let record = match extract_archive(
             archive_path,
             *archive_kind,
@@ -144,18 +179,22 @@ where
             &mut summary.errors,
             matchers.as_ref(),
             |entry_index| {
-                progress(ArchiveExtractionProgress {
-                    completed_entries: completed_entries + entry_index,
-                    total_entries,
-                    current_archive: current_archive.clone(),
-                });
+                archive_completed = entry_index;
+                if throttle.should_emit(Instant::now()) {
+                    progress(ArchiveExtractionProgress {
+                        completed_entries: completed_entries + entry_index,
+                        total_entries,
+                        current_archive: current_archive.clone(),
+                    });
+                }
             },
         ) {
             Ok(record) => record,
             Err(error) => {
                 summary.archive_count += 1;
                 summary.errors.push(error);
-                completed_entries += archive_entry_counts[archive_index];
+                completed_entries +=
+                    archive_entry_counts[archive_index].unwrap_or(archive_completed);
                 progress(ArchiveExtractionProgress {
                     completed_entries,
                     total_entries,
@@ -170,13 +209,22 @@ where
         summary.extracted_bytes += record.extracted_bytes;
         summary.skipped_entries += record.skipped_entries;
         summary.archives.push(record);
-        completed_entries += archive_entry_counts[archive_index];
+        completed_entries += archive_entry_counts[archive_index].unwrap_or(archive_completed);
         progress(ArchiveExtractionProgress {
             completed_entries,
             total_entries,
             current_archive,
         });
     }
+
+    progress(ArchiveExtractionProgress {
+        completed_entries,
+        total_entries: completed_entries,
+        current_archive: archives
+            .last()
+            .map(|(path, _)| display_name(path))
+            .unwrap_or_default(),
+    });
 
     Ok(summary)
 }
@@ -293,138 +341,6 @@ fn extract_archive(
     }
 }
 
-fn extract_zip_archive(
-    archive_path: &Path,
-    archive_output: &Path,
-    errors: &mut Vec<String>,
-    matchers: Option<&ArchiveEntryMatchers>,
-    mut progress: impl FnMut(u64),
-) -> Result<ArchiveExtractionRecord, String> {
-    let input = fs::File::open(archive_path).map_err(|error| {
-        format!(
-            "Failed to open archive '{}': {error}",
-            archive_path.display()
-        )
-    })?;
-    let mut archive = ZipArchive::new(input).map_err(|error| {
-        format!(
-            "Failed to read ZIP archive '{}': {error}",
-            archive_path.display()
-        )
-    })?;
-    let mut record = ArchiveExtractionRecord {
-        archive_path: archive_path.to_string_lossy().to_string(),
-        output_path: archive_output.to_string_lossy().to_string(),
-        entries: archive.len() as u64,
-        extracted_files: 0,
-        extracted_bytes: 0,
-        skipped_entries: 0,
-    };
-    let mut matched_entries = 0u64;
-
-    fs::create_dir_all(archive_output).map_err(|error| {
-        format!(
-            "Failed to create archive output '{}': {error}",
-            archive_output.display()
-        )
-    })?;
-
-    for index in 0..archive.len() {
-        let mut file = match archive.by_index(index) {
-            Ok(file) => file,
-            Err(error) => {
-                errors.push(format!(
-                    "Failed to read entry {index} from '{}': {error}",
-                    archive_path.display()
-                ));
-                record.skipped_entries += 1;
-                continue;
-            }
-        };
-        let entry_name = file.name().to_string();
-        if matchers.is_some_and(|matchers| !archive_entry_matches(matchers, &entry_name)) {
-            continue;
-        }
-        progress(matched_entries);
-        matched_entries += 1;
-        let Some(enclosed_name) = file.enclosed_name() else {
-            errors.push(format!(
-                "Skipped unsafe archive entry '{}' from '{}'.",
-                entry_name,
-                archive_path.display()
-            ));
-            record.skipped_entries += 1;
-            continue;
-        };
-        let Some(destination) = sanitized_destination_path(archive_output, &enclosed_name) else {
-            errors.push(format!(
-                "Skipped archive entry '{}' because its output path has no usable filename.",
-                entry_name
-            ));
-            record.skipped_entries += 1;
-            continue;
-        };
-
-        if file.is_dir() {
-            if let Err(error) = fs::create_dir_all(&destination) {
-                errors.push(format!(
-                    "Failed to create directory '{}': {error}",
-                    destination.display()
-                ));
-                record.skipped_entries += 1;
-            }
-            continue;
-        }
-
-        let Some(parent) = destination.parent() else {
-            errors.push(format!(
-                "Skipped archive entry '{}' because its output path has no parent.",
-                entry_name
-            ));
-            record.skipped_entries += 1;
-            continue;
-        };
-
-        if let Err(error) = fs::create_dir_all(parent) {
-            errors.push(format!(
-                "Failed to create directory '{}': {error}",
-                parent.display()
-            ));
-            record.skipped_entries += 1;
-            continue;
-        }
-
-        let mut output = match fs::File::create(&destination) {
-            Ok(output) => output,
-            Err(error) => {
-                errors.push(format!(
-                    "Failed to create file '{}': {error}",
-                    destination.display()
-                ));
-                record.skipped_entries += 1;
-                continue;
-            }
-        };
-        let copied = match io::copy(&mut file, &mut output) {
-            Ok(copied) => copied,
-            Err(error) => {
-                errors.push(format!(
-                    "Failed to extract '{}' from '{}': {error}",
-                    destination.display(),
-                    archive_path.display()
-                ));
-                record.skipped_entries += 1;
-                continue;
-            }
-        };
-
-        record.extracted_files += 1;
-        record.extracted_bytes += copied;
-    }
-
-    Ok(record)
-}
-
 fn extract_tar_archive<R: Read>(
     input: R,
     archive_path: &Path,
@@ -449,6 +365,7 @@ fn extract_tar_archive<R: Read>(
         skipped_entries: 0,
     };
     let mut matched_entries = 0u64;
+    let mut directory_times = Vec::new();
 
     fs::create_dir_all(archive_output).map_err(|error| {
         format!(
@@ -486,8 +403,8 @@ fn extract_tar_archive<R: Read>(
         if matchers.is_some_and(|matchers| !archive_entry_matches(matchers, &entry_name)) {
             continue;
         }
-        progress(matched_entries);
         matched_entries += 1;
+        progress(matched_entries);
 
         let Some(destination) = sanitized_destination_path(archive_output, &entry_path) else {
             errors.push(format!("Skipped unsafe or empty TAR entry '{entry_name}'."));
@@ -495,6 +412,7 @@ fn extract_tar_archive<R: Read>(
             continue;
         };
         let entry_type = entry.header().entry_type();
+        let modified = tar_modified_time(&mut entry);
 
         if entry_type.is_dir() {
             if let Err(error) = fs::create_dir_all(&destination) {
@@ -503,6 +421,8 @@ fn extract_tar_archive<R: Read>(
                     destination.display()
                 ));
                 record.skipped_entries += 1;
+            } else if let Some(modified) = modified {
+                directory_times.push((destination, modified));
             }
             continue;
         }
@@ -544,6 +464,14 @@ fn extract_tar_archive<R: Read>(
             Ok(copied) => {
                 record.extracted_files += 1;
                 record.extracted_bytes += copied;
+                if let Some(modified) = modified {
+                    if let Err(error) = output.set_modified(modified) {
+                        errors.push(format!(
+                            "Failed to restore modification time for '{}': {error}",
+                            destination.display()
+                        ));
+                    }
+                }
             }
             Err(error) => {
                 errors.push(format!(
@@ -555,6 +483,7 @@ fn extract_tar_archive<R: Read>(
         }
     }
 
+    restore_directory_times(directory_times, errors);
     Ok(record)
 }
 
@@ -629,9 +558,9 @@ fn archive_entry_count(
     kind: ArchiveKind,
     matchers: Option<&ArchiveEntryMatchers>,
 ) -> Option<u64> {
-    let input = fs::File::open(path).ok()?;
     match kind {
         ArchiveKind::Zip => {
+            let input = fs::File::open(path).ok()?;
             let mut archive = ZipArchive::new(input).ok()?;
             if matchers.is_none() {
                 return Some(archive.len() as u64);
@@ -650,29 +579,8 @@ fn archive_entry_count(
                 .count();
             Some(count as u64)
         }
-        ArchiveKind::Tar => matching_tar_entry_count(tar::Archive::new(input), matchers),
-        ArchiveKind::TarGz => {
-            matching_tar_entry_count(tar::Archive::new(GzDecoder::new(input)), matchers)
-        }
+        ArchiveKind::Tar | ArchiveKind::TarGz => None,
     }
-}
-
-fn matching_tar_entry_count<R: Read>(
-    mut archive: tar::Archive<R>,
-    matchers: Option<&ArchiveEntryMatchers>,
-) -> Option<u64> {
-    let entries = archive.entries().ok()?;
-    let count = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            entry
-                .path()
-                .ok()
-                .map(|path| path.to_string_lossy().to_string())
-        })
-        .filter(|name| matchers.is_none_or(|matchers| archive_entry_matches(matchers, name)))
-        .count();
-    Some(count as u64)
 }
 
 fn archive_kind(path: &Path) -> Option<ArchiveKind> {
@@ -800,6 +708,25 @@ mod tests {
     use crate::plugins::PythonPluginTarget;
     use flate2::{write::GzEncoder, Compression};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn progress_is_throttled_independently_of_entry_count() {
+        let mut throttle = ProgressThrottle::new();
+        let start = throttle.last_update;
+        for _ in 0..10_000 {
+            assert!(!throttle.should_emit(start + Duration::from_millis(99)));
+        }
+        assert!(throttle.should_emit(start + PROGRESS_INTERVAL));
+        assert!(!throttle.should_emit(start + Duration::from_millis(199)));
+        assert!(throttle.should_emit(start + Duration::from_millis(200)));
+    }
+
+    #[test]
+    fn streaming_tar_counts_do_not_open_or_decompress_input() {
+        let missing = Path::new("nonexistent-archive-for-counting.tar.gz");
+        assert_eq!(archive_entry_count(missing, ArchiveKind::TarGz, None), None);
+        assert_eq!(archive_entry_count(missing, ArchiveKind::Tar, None), None);
+    }
 
     #[test]
     fn archive_matchers_select_only_requested_members() {
@@ -964,9 +891,10 @@ mod tests {
 
         assert_eq!(summary.extracted_files, 1);
         assert_eq!(summary.archive_count, 1);
-        assert!(progress_events
+        assert_eq!(progress_events.last(), Some(&(1, 1)));
+        assert!(progress_events[..progress_events.len() - 1]
             .iter()
-            .all(|(_, total_entries)| *total_entries == 1));
+            .all(|(_, total)| *total == 0));
         assert!(extracted_root.join("private/Library/SMS/sms.db").is_file());
         assert!(!extracted_root.join("private/Media/DCIM/photo.jpg").exists());
         fs::remove_dir_all(test_root).expect("remove test directory");

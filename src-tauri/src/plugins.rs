@@ -2033,37 +2033,37 @@ fn target_file_from_path(path: &Path) -> Result<TargetFile, String> {
 
 fn load_python_plugins(app_handle: &AppHandle) -> Result<Vec<LoadedPythonPlugin>, String> {
     let plugin_root = ensure_python_plugin_directory(app_handle)?;
+    load_python_plugins_from_root(&plugin_root)
+}
+
+fn load_python_plugins_from_root(plugin_root: &Path) -> Result<Vec<LoadedPythonPlugin>, String> {
     let mut plugins = Vec::new();
 
-    for plugin_dir in discover_python_plugin_directories(&plugin_root)? {
+    for plugin_dir in discover_python_plugin_directories(plugin_root)? {
         let manifest_path = plugin_dir.join("plugin.toml");
-        let manifest_text = fs::read_to_string(&manifest_path)
-            .map_err(|error| format!("Failed to read '{}': {error}", manifest_path.display()))?;
-        let migrated_manifest_text = add_missing_manifest_metadata(&manifest_text)?;
-        if migrated_manifest_text != manifest_text {
-            fs::write(
-                &manifest_path,
-                normalize_toml_for_write(&migrated_manifest_text),
-            )
-            .map_err(|error| {
-                format!(
-                    "Failed to add author and version to '{}': {error}",
+        let mut manifest = match load_python_plugin_manifest(&manifest_path) {
+            Ok(Some(manifest)) => manifest,
+            Ok(None) => continue,
+            Err(error) => {
+                eprintln!(
+                    "Skipping Python plugin '{}': {error}",
                     manifest_path.display()
-                )
-            })?;
-        }
-        let mut manifest = toml::from_str::<PythonPluginManifest>(&migrated_manifest_text)
-            .map_err(|error| format!("Failed to parse '{}': {error}", manifest_path.display()))?;
+                );
+                continue;
+            }
+        };
 
-        if LEGACY_DEMO_PLUGIN_IDS.contains(&manifest.id.as_str()) {
+        if let Err(error) = validate_manifest(&manifest, &plugin_dir) {
+            eprintln!(
+                "Skipping Python plugin '{}': {error}",
+                manifest_path.display()
+            );
             continue;
         }
 
-        validate_manifest(&manifest, &plugin_dir)?;
-
         manifest.organization_folder = plugin_dir
             .parent()
-            .and_then(|parent| parent.strip_prefix(&plugin_root).ok())
+            .and_then(|parent| parent.strip_prefix(plugin_root).ok())
             .filter(|folder| !folder.as_os_str().is_empty())
             .map(display_relative_plugin_folder);
 
@@ -2076,6 +2076,40 @@ fn load_python_plugins(app_handle: &AppHandle) -> Result<Vec<LoadedPythonPlugin>
     plugins.sort_by(|left, right| left.manifest.name.cmp(&right.manifest.name));
 
     Ok(plugins)
+}
+
+fn load_python_plugin_manifest(
+    manifest_path: &Path,
+) -> Result<Option<PythonPluginManifest>, String> {
+    let manifest_text = fs::read_to_string(manifest_path)
+        .map_err(|error| format!("Failed to read '{}': {error}", manifest_path.display()))?;
+    let document = toml::from_str::<toml::Table>(&manifest_text)
+        .map_err(|error| format!("Failed to parse '{}': {error}", manifest_path.display()))?;
+    // Retired demos predate the current schema and must be skipped before deserialization.
+    if document
+        .get("id")
+        .and_then(toml::Value::as_str)
+        .is_some_and(|id| LEGACY_DEMO_PLUGIN_IDS.contains(&id))
+    {
+        return Ok(None);
+    }
+
+    let migrated_manifest_text = add_missing_manifest_metadata(&manifest_text)?;
+    if migrated_manifest_text != manifest_text {
+        fs::write(
+            &manifest_path,
+            normalize_toml_for_write(&migrated_manifest_text),
+        )
+        .map_err(|error| {
+            format!(
+                "Failed to migrate plugin metadata in '{}': {error}",
+                manifest_path.display()
+            )
+        })?;
+    }
+    let manifest = toml::from_str::<PythonPluginManifest>(&migrated_manifest_text)
+        .map_err(|error| format!("Failed to parse '{}': {error}", manifest_path.display()))?;
+    Ok(Some(manifest))
 }
 
 fn discover_python_plugin_directories(plugin_root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -3920,8 +3954,9 @@ fn add_missing_manifest_metadata(text: &str) -> Result<String, String> {
         .map_err(|error| format!("Failed to parse plugin TOML metadata: {error}"))?;
     let needs_author = !document.contains_key("author");
     let needs_version = !document.contains_key("version");
+    let needs_target = !document.contains_key("target");
 
-    if !needs_author && !needs_version {
+    if !needs_author && !needs_version && !needs_target {
         return Ok(text.to_string());
     }
 
@@ -3936,6 +3971,9 @@ fn add_missing_manifest_metadata(text: &str) -> Result<String, String> {
     }
     if needs_version {
         metadata.push("version = \"0.0.0\"".to_string());
+    }
+    if needs_target {
+        metadata.push("target = \"other\"".to_string());
     }
     lines.splice(insertion_index..insertion_index, metadata);
 
@@ -4113,6 +4151,72 @@ fn sanitize_path_segment(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_demo_manifests_are_skipped_before_schema_validation() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest_path = directory.path().join("plugin.toml");
+        for id in LEGACY_DEMO_PLUGIN_IDS {
+            let text = format!("id = \"{id}\"\n");
+            fs::write(&manifest_path, &text).unwrap();
+            assert!(load_python_plugin_manifest(&manifest_path)
+                .unwrap()
+                .is_none());
+            assert_eq!(fs::read_to_string(&manifest_path).unwrap(), text);
+        }
+    }
+
+    #[test]
+    fn legacy_active_plugin_manifests_receive_default_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest_path = directory.path().join("plugin.toml");
+        let text = python_plugin_manifest_template("custom-plugin", "Custom Plugin");
+        fs::write(&manifest_path, &text).unwrap();
+        assert!(load_python_plugin_manifest(&manifest_path)
+            .unwrap()
+            .is_some());
+
+        fs::write(&manifest_path, text.replace("target = \"other\"\n", "")).unwrap();
+        let manifest = load_python_plugin_manifest(&manifest_path)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(manifest.target, PythonPluginTarget::Other));
+        let migrated = fs::read_to_string(&manifest_path).unwrap();
+        assert!(migrated.contains("target = \"other\""));
+        assert_eq!(add_missing_manifest_metadata(&migrated).unwrap(), migrated);
+
+        fs::write(
+            &manifest_path,
+            text.replace("target = \"other\"", "target = \"invalid\""),
+        )
+        .unwrap();
+        let error = load_python_plugin_manifest(&manifest_path).err().unwrap();
+        assert!(error.contains("unknown variant `invalid`"), "{error}");
+    }
+
+    #[test]
+    fn invalid_python_plugins_do_not_block_valid_plugins() {
+        let root = tempfile::tempdir().unwrap();
+        for (id, manifest) in [
+            ("valid", python_plugin_manifest_template("valid", "Valid")),
+            ("malformed", "id = [".to_string()),
+            ("incomplete", "id = \"incomplete\"".to_string()),
+            (
+                "invalid-entry",
+                python_plugin_manifest_template("invalid-entry", "Invalid Entry")
+                    .replace("entry = \"plugin.py\"", "entry = \"../plugin.py\""),
+            ),
+        ] {
+            let directory = root.path().join(id);
+            fs::create_dir(&directory).unwrap();
+            fs::write(directory.join("plugin.toml"), manifest).unwrap();
+            fs::write(directory.join("plugin.py"), "def run(context): return []\n").unwrap();
+        }
+
+        let plugins = load_python_plugins_from_root(root.path()).unwrap();
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].manifest.id, "valid");
+    }
 
     fn temporary_plugin_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

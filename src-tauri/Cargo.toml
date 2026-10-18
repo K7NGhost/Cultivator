@@ -23,6 +23,7 @@ default = ["python-plugins"]
 python-plugins = []
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ctor = "0.8.0"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
