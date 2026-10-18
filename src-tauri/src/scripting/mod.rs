@@ -1,4 +1,5 @@
 //! External Python environments and workers. Python is never loaded into Tauri.
+pub(crate) mod process;
 pub mod runtime;
 
 #[cfg(feature = "python-plugins")]

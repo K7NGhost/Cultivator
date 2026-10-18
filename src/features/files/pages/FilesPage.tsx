@@ -60,7 +60,8 @@ import {
   cancelDatasourcePluginRun,
   listPythonPlugins,
   pluginRunUpdatedDatasourcePaths,
-  runDatasourcePlugins,
+  submitDatasourcePlugins,
+  waitForPluginRun,
 } from "@/features/plugins";
 import {
   createPluginRunId,
@@ -1129,14 +1130,15 @@ export function FilesPage() {
     setPluginRunDataSource(null);
 
     try {
-      const summary = await runDatasourcePlugins({
+      const submission = await submitDatasourcePlugins({
         caseDatabasePath: activeCase.databasePath,
         caseFolderPath: activeCase.folderPath,
         datasourceId: runDataSource.id,
         pluginIds: runPluginIds,
         pluginOptions: pluginOptionValues,
         runId,
-      });
+      }).finally(() => setIsRunningPlugins(false));
+      const summary = await waitForPluginRun(activeCase.databasePath, submission.runId);
       showPluginRunFinishedToasts({
         datasourceName: runDataSource.name,
         pluginMap,
@@ -1159,8 +1161,6 @@ export function FilesPage() {
           ? caughtError.message
           : String(caughtError),
       );
-    } finally {
-      setIsRunningPlugins(false);
     }
   }
 
@@ -1627,7 +1627,7 @@ export function FilesPage() {
               }}
             >
               <Play className="size-3.5" aria-hidden="true" />
-              {isRunningPlugins ? "Running" : "Run Plugins"}
+              {isRunningPlugins ? "Submitting" : "Run Plugins"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,3 +1,4 @@
+use crate::plugins::cancellation::{self, Check};
 use crate::plugins::{PythonPluginManifest, PythonPluginMode};
 use flate2::read::GzDecoder;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     fs,
-    io::{self, Read},
+    io::Read,
     path::{Component, Path, PathBuf},
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
@@ -106,15 +107,30 @@ pub fn manifest() -> PythonPluginManifest {
         .expect("built-in Archive Extractor manifest must be valid")
 }
 
+#[cfg(test)]
 pub fn execute_with_progress<F>(
     paths: Vec<String>,
     output_root: PathBuf,
+    selected: Option<Vec<PythonPluginManifest>>,
+    progress: F,
+) -> Result<ArchiveExtractionSummary, String>
+where
+    F: FnMut(ArchiveExtractionProgress),
+{
+    execute_with_cancellation(paths, output_root, selected, &|| false, progress)
+}
+
+pub fn execute_with_cancellation<F>(
+    paths: Vec<String>,
+    output_root: PathBuf,
     selected_manifests: Option<Vec<PythonPluginManifest>>,
+    cancelled: Check<'_>,
     mut progress: F,
 ) -> Result<ArchiveExtractionSummary, String>
 where
     F: FnMut(ArchiveExtractionProgress),
 {
+    cancellation::checkpoint(cancelled)?;
     let _active_output_guard = acquire_output_root(&output_root)?;
     let matchers = selected_manifests
         .map(build_archive_entry_matchers)
@@ -146,7 +162,7 @@ where
         errors: Vec::new(),
     };
 
-    let archives = collect_archives(paths, &mut summary.scanned_files);
+    let archives = collect_archives(paths, &mut summary.scanned_files, cancelled)?;
     let archive_entry_counts = archives
         .iter()
         .map(|(path, kind)| archive_entry_count(path, *kind, matchers.as_ref()))
@@ -161,6 +177,7 @@ where
     let mut throttle = ProgressThrottle::new();
 
     for (archive_index, (archive_path, archive_kind)) in archives.iter().enumerate() {
+        cancellation::checkpoint(cancelled)?;
         let current_archive = display_name(archive_path);
         progress(ArchiveExtractionProgress {
             completed_entries,
@@ -178,6 +195,7 @@ where
             &archive_output,
             &mut summary.errors,
             matchers.as_ref(),
+            cancelled,
             |entry_index| {
                 archive_completed = entry_index;
                 if throttle.should_emit(Instant::now()) {
@@ -191,6 +209,7 @@ where
         ) {
             Ok(record) => record,
             Err(error) => {
+                cancellation::checkpoint(cancelled)?;
                 summary.archive_count += 1;
                 summary.errors.push(error);
                 completed_entries +=
@@ -217,6 +236,7 @@ where
         });
     }
 
+    cancellation::checkpoint(cancelled)?;
     progress(ArchiveExtractionProgress {
         completed_entries,
         total_entries: completed_entries,
@@ -246,10 +266,15 @@ fn acquire_output_root(output_root: &Path) -> Result<ActiveOutputGuard, String> 
     Ok(ActiveOutputGuard { output_root })
 }
 
-fn collect_archives(paths: Vec<String>, scanned_files: &mut u64) -> Vec<(PathBuf, ArchiveKind)> {
+fn collect_archives(
+    paths: Vec<String>,
+    scanned_files: &mut u64,
+    cancelled: Check<'_>,
+) -> Result<Vec<(PathBuf, ArchiveKind)>, String> {
     let mut archives = Vec::new();
 
     for root_path in paths {
+        cancellation::checkpoint(cancelled)?;
         let root = PathBuf::from(root_path);
 
         if !root.exists() {
@@ -275,6 +300,7 @@ fn collect_archives(paths: Vec<String>, scanned_files: &mut u64) -> Vec<(PathBuf
             .git_exclude(false);
 
         for entry in walker.build().filter_map(Result::ok) {
+            cancellation::checkpoint(cancelled)?;
             if !entry
                 .file_type()
                 .is_some_and(|file_type| file_type.is_file())
@@ -291,7 +317,7 @@ fn collect_archives(paths: Vec<String>, scanned_files: &mut u64) -> Vec<(PathBuf
         }
     }
 
-    archives
+    Ok(archives)
 }
 
 fn extract_archive(
@@ -300,12 +326,18 @@ fn extract_archive(
     archive_output: &Path,
     errors: &mut Vec<String>,
     matchers: Option<&ArchiveEntryMatchers>,
+    cancelled: Check<'_>,
     progress: impl FnMut(u64),
 ) -> Result<ArchiveExtractionRecord, String> {
     match kind {
-        ArchiveKind::Zip => {
-            extract_zip_archive(archive_path, archive_output, errors, matchers, progress)
-        }
+        ArchiveKind::Zip => extract_zip_archive(
+            archive_path,
+            archive_output,
+            errors,
+            matchers,
+            cancelled,
+            progress,
+        ),
         ArchiveKind::Tar => {
             let input = fs::File::open(archive_path).map_err(|error| {
                 format!(
@@ -319,6 +351,7 @@ fn extract_archive(
                 archive_output,
                 errors,
                 matchers,
+                cancelled,
                 progress,
             )
         }
@@ -335,6 +368,7 @@ fn extract_archive(
                 archive_output,
                 errors,
                 matchers,
+                cancelled,
                 progress,
             )
         }
@@ -347,9 +381,10 @@ fn extract_tar_archive<R: Read>(
     archive_output: &Path,
     errors: &mut Vec<String>,
     matchers: Option<&ArchiveEntryMatchers>,
+    cancelled: Check<'_>,
     mut progress: impl FnMut(u64),
 ) -> Result<ArchiveExtractionRecord, String> {
-    let mut archive = tar::Archive::new(input);
+    let mut archive = tar::Archive::new(cancellation::Reader { input, cancelled });
     let entries = archive.entries().map_err(|error| {
         format!(
             "Failed to read TAR archive '{}': {error}",
@@ -375,6 +410,7 @@ fn extract_tar_archive<R: Read>(
     })?;
 
     for (index, entry) in entries.enumerate() {
+        cancellation::checkpoint(cancelled)?;
         record.entries += 1;
         let mut entry = match entry {
             Ok(entry) => entry,
@@ -460,7 +496,7 @@ fn extract_tar_archive<R: Read>(
                 continue;
             }
         };
-        match io::copy(&mut entry, &mut output) {
+        match cancellation::copy(&mut entry, &mut output, cancelled) {
             Ok(copied) => {
                 record.extracted_files += 1;
                 record.extracted_bytes += copied;
@@ -483,6 +519,7 @@ fn extract_tar_archive<R: Read>(
         }
     }
 
+    cancellation::checkpoint(cancelled)?;
     restore_directory_times(directory_times, errors);
     Ok(record)
 }
@@ -708,6 +745,20 @@ mod tests {
     use crate::plugins::PythonPluginTarget;
     use flate2::{write::GzEncoder, Compression};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn cancelled_extraction_preserves_existing_output_before_starting() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("output");
+        fs::create_dir(&output).unwrap();
+        fs::write(output.join("existing.txt"), "preserve").unwrap();
+        let result = execute_with_cancellation(Vec::new(), output.clone(), None, &|| true, |_| {});
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read_to_string(output.join("existing.txt")).unwrap(),
+            "preserve"
+        );
+    }
 
     #[test]
     fn progress_is_throttled_independently_of_entry_count() {

@@ -3,10 +3,11 @@ use super::{
     archive_entry_matches, sanitized_destination_path, ArchiveEntryMatchers,
     ArchiveExtractionRecord, ProgressThrottle, PROGRESS_INTERVAL,
 };
+use crate::plugins::cancellation::{self, Check};
 use std::time::SystemTime;
 use std::{
     collections::{HashMap, HashSet},
-    fs, io,
+    fs,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -29,8 +30,10 @@ pub(super) fn extract_zip_archive(
     archive_output: &Path,
     errors: &mut Vec<String>,
     matchers: Option<&ArchiveEntryMatchers>,
+    cancelled: Check<'_>,
     mut progress: impl FnMut(u64),
 ) -> Result<ArchiveExtractionRecord, String> {
+    cancellation::checkpoint(cancelled)?;
     let mut archive = open_archive(archive_path)?;
     let mut record = ArchiveExtractionRecord {
         archive_path: archive_path.to_string_lossy().into_owned(),
@@ -53,6 +56,7 @@ pub(super) fn extract_zip_archive(
     let mut completed = 0;
     let mut throttle = ProgressThrottle::new();
     for index in 0..archive.len() {
+        cancellation::checkpoint(cancelled)?;
         let result: Result<Option<EntryTask>, String> = (|| {
             let file = archive.by_index_raw(index).map_err(|e| e.to_string())?;
             if matchers.is_some_and(|m| !archive_entry_matches(m, file.name())) {
@@ -116,7 +120,8 @@ pub(super) fn extract_zip_archive(
     };
     if collisions || tasks.len() < 2 {
         for task in &tasks {
-            apply_result(extract_entry(&mut archive, task));
+            cancellation::checkpoint(cancelled)?;
+            apply_result(extract_entry(&mut archive, task, cancelled));
             completed += 1;
             if throttle.should_emit(Instant::now()) {
                 progress(completed);
@@ -124,10 +129,7 @@ pub(super) fn extract_zip_archive(
         }
     } else {
         // Bound both open archive readers and queued results. The callback stays on the caller's thread.
-        let workers = thread::available_parallelism()
-            .map_or(1, usize::from)
-            .min(16)
-            .min(tasks.len());
+        let workers = crate::jobs::cpu_parallelism().min(tasks.len());
         let next = AtomicUsize::new(0);
         let (sender, receiver) = mpsc::sync_channel(workers * 2);
         thread::scope(|scope| {
@@ -139,10 +141,13 @@ pub(super) fn extract_zip_archive(
                     // Each worker owns a file handle and seek position; File::try_clone would share offsets.
                     let mut reader = open_archive(archive_path);
                     loop {
+                        if cancelled() {
+                            break;
+                        }
                         let index = next.fetch_add(1, Ordering::Relaxed);
                         let Some(task) = tasks.get(index) else { break };
                         let result = match &mut reader {
-                            Ok(reader) => extract_entry(reader, task),
+                            Ok(reader) => extract_entry(reader, task, cancelled),
                             Err(error) => Err(error.clone()),
                         };
                         if sender.send((index, result)).is_err() {
@@ -178,6 +183,7 @@ pub(super) fn extract_zip_archive(
             }
         });
     }
+    cancellation::checkpoint(cancelled)?;
     restore_directory_times(
         tasks
             .iter()
@@ -202,6 +208,7 @@ fn open_archive(path: &Path) -> Result<ZipArchive<fs::File>, String> {
 fn extract_entry(
     archive: &mut ZipArchive<fs::File>,
     task: &EntryTask,
+    cancelled: Check<'_>,
 ) -> Result<(Option<u64>, Option<String>), String> {
     let mut extract = || -> Result<(Option<u64>, Option<String>), String> {
         let mut file = archive.by_index(task.index).map_err(|e| e.to_string())?;
@@ -215,7 +222,8 @@ fn extract_entry(
             .ok_or("Output path has no parent")?;
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         let mut output = fs::File::create(&task.destination).map_err(|e| e.to_string())?;
-        let bytes = io::copy(&mut file, &mut output).map_err(|e| e.to_string())?;
+        let bytes =
+            cancellation::copy(&mut file, &mut output, cancelled).map_err(|e| e.to_string())?;
         let warning = task
             .modified
             .and_then(|modified| output.set_modified(modified).err())

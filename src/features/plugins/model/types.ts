@@ -36,11 +36,34 @@ export type PluginJobRecord = {
   caseId: string;
   datasourceId: string;
   pluginId: string;
-  status: "running" | "complete" | "failed";
-  startedAt: string;
+  status: "queued" | "paused" | "running" | "cancelling" | "cancelled" | "complete" | "failed" | "interrupted";
+  runId: string;
+  queuedAt: string;
+  priority: number;
+  completed: number;
+  total: number;
+  message: string | null;
+  startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
 };
+
+export type SubmitPluginRunInput = {
+  caseDatabasePath: string;
+  caseFolderPath: string;
+  datasourceId: string;
+  pluginIds?: string[];
+  pluginOptions?: Record<string, Record<string, string>>;
+  runId?: string;
+  priority?: number;
+};
+
+export type SubmittedPluginRun = { runId: string; jobs: PluginJobRecord[] };
+export type PluginRunSnapshot = { runId: string; finished: boolean; summary: PluginRunSummary };
+
+export function isActivePluginJob(job: PluginJobRecord) {
+  return ["queued", "paused", "running", "cancelling"].includes(job.status);
+}
 
 export type PluginLogRecord = {
   id: string;

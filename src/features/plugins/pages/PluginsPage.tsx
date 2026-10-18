@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   AlertCircle,
@@ -60,6 +61,8 @@ import {
 } from "../utils/pluginManifest";
 import {
   cancelDatasourcePluginRun,
+  pausePluginJob,
+  cancelPluginJob,
   createPythonPlugin,
   createPythonPluginFolder,
   deletePythonPlugin,
@@ -81,6 +84,7 @@ import type {
   PluginLogRecord,
   PythonPlugin,
 } from "../model/types";
+import { isActivePluginJob } from "../model/types";
 import { cn } from "@/lib/utils";
 import { PythonRuntimePanel } from "../components/PythonRuntimePanel";
 
@@ -181,18 +185,6 @@ function getLatestDatasourceJob(
   return jobs.find((job) => job.datasourceId === datasourceId) ?? null;
 }
 
-function getLatestPluginJob(
-  jobs: PluginJobRecord[],
-  datasourceId: string,
-  pluginId: string,
-) {
-  return (
-    jobs.find(
-      (job) => job.datasourceId === datasourceId && job.pluginId === pluginId,
-    ) ?? null
-  );
-}
-
 function getPluginLabel(pluginMap: Map<string, PythonPlugin>, pluginId: string) {
   return pluginMap.get(pluginId)?.name ?? pluginId;
 }
@@ -208,7 +200,7 @@ function mergePluginJobs(
   }
 
   return Array.from(jobsById.values()).sort((firstJob, secondJob) =>
-    secondJob.startedAt.localeCompare(firstJob.startedAt),
+    secondJob.queuedAt.localeCompare(firstJob.queuedAt),
   );
 }
 
@@ -218,6 +210,9 @@ export function PluginsPage() {
   const [plugins, setPlugins] = useState<PythonPlugin[]>([]);
   const [pluginFolders, setPluginFolders] = useState<string[]>([]);
   const [jobs, setJobs] = useState<PluginJobRecord[]>([]);
+  const [jobPriority, setJobPriority] = useState(0);
+  const currentCaseId = useRef(activeCase?.id);
+  currentCaseId.current = activeCase?.id;
   const [logs, setLogs] = useState<PluginLogRecord[]>([]);
   const [activeRuns, setActiveRuns] = useState<ActivePluginRun[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -284,37 +279,33 @@ export function PluginsPage() {
     [bulkMoveSource, movablePlugins],
   );
   const runningPluginRows = useMemo(() => {
-    const activeRows = activeRuns.flatMap((run) =>
-      run.pluginIds.map((pluginId) => {
-        const job = getLatestPluginJob(jobs, run.datasourceId, pluginId);
-
-        return {
-          datasource: datasourceMap.get(run.datasourceId) ?? null,
-          job,
-          pluginId,
-          run,
-        };
-      }),
-    );
-    const activeJobIds = new Set(
-      activeRows
-        .map((row) => row.job?.id)
-        .filter((jobId): jobId is string => Boolean(jobId)),
-    );
-    const backendRows = jobs
-      .filter((job) => job.status === "running" && !activeJobIds.has(job.id))
-      .map((job) => ({
+    const backendRows = jobs.filter(isActivePluginJob).map((job) => {
+      const run = activeRuns.find((item) => item.runId === job.runId);
+      const restoredRun: ActivePluginRun | null = job.runId ? {
+        datasourceId: job.datasourceId,
+        pluginIds: [job.pluginId],
+        runId: job.runId,
+        status: job.status === "cancelling" ? "cancelling" : "running",
+      } : null;
+      return {
         datasource: datasourceMap.get(job.datasourceId) ?? null,
         job,
         pluginId: job.pluginId,
-        run: activeRuns.find(
-          (activeRun) =>
-            activeRun.datasourceId === job.datasourceId &&
-            activeRun.pluginIds.includes(job.pluginId),
-        ) ?? null,
-      }));
-
-    return [...activeRows, ...backendRows];
+        run: run ?? restoredRun,
+      };
+    });
+    const submittingRows = activeRuns.filter((run) => datasourceMap.has(run.datasourceId)).flatMap((run) =>
+      run.pluginIds
+        .filter((pluginId) => !jobs.some((job) =>
+          job.runId === run.runId && job.pluginId === pluginId))
+        .map((pluginId) => ({
+          datasource: datasourceMap.get(run.datasourceId) ?? null,
+          job: null,
+          pluginId,
+          run,
+        })),
+    );
+    return [...backendRows, ...submittingRows];
   }, [activeRuns, datasourceMap, jobs]);
 
   async function refreshPluginsPage(options: { showLoading?: boolean } = {}) {
@@ -340,10 +331,11 @@ export function PluginsPage() {
           listDataSources(activeCase.databasePath, activeCase.id),
           listPythonPlugins(),
           listPythonPluginFolders(),
-          listPluginJobs(activeCase.databasePath),
+          listPluginJobs(activeCase.databasePath, { limit: 500 }),
           listPluginLogs(activeCase.databasePath),
         ]);
 
+      if (currentCaseId.current !== activeCase.id) return;
       setDatasources(nextDatasources);
       setPlugins(nextPlugins);
       setPluginFolders(nextPluginFolders);
@@ -380,8 +372,11 @@ export function PluginsPage() {
         caseFolderPath: activeCase.folderPath,
         datasourceId: datasource.id,
         runId,
+        priority: jobPriority,
       });
-      setJobs((currentJobs) => mergePluginJobs(currentJobs, summary.jobs));
+      if (currentCaseId.current === activeCase.id) {
+        setJobs((currentJobs) => mergePluginJobs(currentJobs, summary.jobs));
+      }
       if (pluginRunUpdatedDatasourcePaths(summary)) {
         notifyDataSourcesChanged(activeCase.id);
       }
@@ -772,6 +767,24 @@ export function PluginsPage() {
   }
 
   useEffect(() => {
+    setJobs([]);
+    setDatasources([]);
+    if (!activeCase) return;
+    const subscriptions = [
+      listen<PluginJobRecord>("plugin-job-updated", ({ payload }) => {
+        if (payload.caseId === currentCaseId.current) {
+          setJobs((current) => mergePluginJobs(current, [payload]));
+        }
+      }),
+      listen<{ runId: string; pluginId: string; completed: number; total: number; message?: string }>("plugin-progress", ({ payload }) => {
+        setJobs((current) => current.map((job) => job.runId === payload.runId && job.pluginId === payload.pluginId
+          ? { ...job, completed: payload.completed, total: payload.total, message: payload.message ?? null } : job));
+      }),
+    ];
+    return () => { for (const subscription of subscriptions) void subscription.then((unlisten) => unlisten()); };
+  }, [activeCase?.id]);
+
+  useEffect(() => {
     void refreshPluginsPage();
   }, [activeCase?.id]);
 
@@ -793,6 +806,19 @@ export function PluginsPage() {
         <div className="text-xs font-medium uppercase text-muted-foreground">
           Python Plugins
         </div>
+        <label className="flex items-center gap-1 text-xs text-muted-foreground">
+          New job priority
+          <select
+            aria-label="New job priority"
+            className="h-7 rounded-sm border bg-background px-1 text-xs"
+            value={jobPriority}
+            onChange={(event) => setJobPriority(Number(event.target.value))}
+          >
+            <option value={10}>High</option>
+            <option value={0}>Normal</option>
+            <option value={-10}>Low</option>
+          </select>
+        </label>
         <Separator orientation="vertical" className="h-5" />
         <Button
           type="button"
@@ -1097,7 +1123,7 @@ export function PluginsPage() {
                       const activeRun = activeRuns.find(
                         (run) => run.datasourceId === datasource.id,
                       );
-                      const isRunning = Boolean(activeRun);
+
 
                       return (
                         <TableRow key={datasource.id} className="h-8">
@@ -1146,26 +1172,24 @@ export function PluginsPage() {
                               >
                                 {activeRun.status === "cancelling"
                                   ? "Cancelling"
-                                  : "Cancel"}
+                                  : "Cancel run"}
                               </Button>
-                            ) : (
+                            ) : null}
                               <Button
                                 type="button"
                                 size="xs"
                                 className="h-7 rounded-sm px-2 text-xs"
                                 disabled={
                                   !activeCase ||
-                                  datasource.pluginIds.length === 0 ||
-                                  isRunning
+                                  datasource.pluginIds.length === 0
                                 }
                                 onClick={() => {
                                   void runPlugins(datasource);
                                 }}
                               >
                                 <Play className="size-3.5" aria-hidden="true" />
-                                Run plugins
+                                {activeRun ? "Queue another run" : "Run plugins"}
                               </Button>
-                            )}
                           </TableCell>
                         </TableRow>
                       );
@@ -1208,7 +1232,7 @@ export function PluginsPage() {
               <section className="flex h-full min-h-0 min-w-0 flex-col border-b">
                 <div className="flex h-8 shrink-0 items-center justify-between border-b px-2">
                   <div className="text-xs font-medium uppercase text-muted-foreground">
-                    Running Plugins
+                    Plugin Jobs
                   </div>
                   <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
                     {runningPluginRows.length}
@@ -1254,25 +1278,44 @@ export function PluginsPage() {
                               <span className="truncate text-[11px] text-muted-foreground">
                                 {job ? formatJobTime(job.startedAt) : "Waiting to start"}
                               </span>
+                              {run && job && ["queued", "paused"].includes(job.status) && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="xs"
+                                  className="h-6 rounded-sm px-2 text-[11px]"
+                                  onClick={() => {
+                                    void pausePluginJob(job.id, job.status !== "paused")
+                                      .catch((error: unknown) => toast.error(getErrorMessage(error)));
+                                  }}
+                                >
+                                  {job.status === "paused" ? "Resume" : "Pause"}
+                                </Button>
+                              )}
                               <Button
                                 type="button"
                                 variant="outline"
                                 size="xs"
                                 className="h-6 rounded-sm px-2 text-[11px]"
-                                disabled={!run || run.status === "cancelling"}
+                                disabled={!job || job.status === "cancelling" || run?.status === "cancelling"}
                                 onClick={() => {
-                                  if (run) {
-                                    void cancelPluginRun(run.runId);
+                                  if (job) {
+                                    void cancelPluginJob(job.id).catch((error: unknown) => toast.error(getErrorMessage(error)));
                                   }
                                 }}
                               >
-                                {run?.status === "cancelling"
+                                {job?.status === "cancelling" || run?.status === "cancelling"
                                   ? "Cancelling"
                                   : run
-                                    ? "Cancel"
-                                    : "No run id"}
+                                    ? "Cancel job"
+                                    : "Submitting"}
                               </Button>
                             </div>
+                            {job && (
+                              <div className="text-[11px] text-muted-foreground">
+                                {job.message ?? ""}{job.total > 0 ? ` ${job.completed.toLocaleString()} / ${job.total.toLocaleString()}` : ""}
+                              </div>
+                            )}
                             {job?.error && (
                               <div className="line-clamp-2 text-[11px] text-destructive">
                                 {job.error}
@@ -1284,7 +1327,7 @@ export function PluginsPage() {
                     </div>
                   ) : (
                     <div className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
-                      No plugins are currently running.
+                      No active or queued plugin jobs.
                     </div>
                   )}
                 </div>

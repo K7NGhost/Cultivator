@@ -16,6 +16,8 @@ export {
   openPythonPluginFolderInVscode,
   pluginRunUpdatedDatasourcePaths,
   runDatasourcePlugins,
+  submitDatasourcePlugins,
+  waitForPluginRun,
 } from "./services/pluginRepository";
 export type {
   PythonPlugin,

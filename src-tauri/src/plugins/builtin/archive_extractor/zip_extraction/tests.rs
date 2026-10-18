@@ -28,7 +28,7 @@ fn parallel_zip_preserves_contents_counts_and_callback_thread() {
     let mut errors = Vec::new();
     let caller = thread::current().id();
     let mut events = Vec::new();
-    let record = extract_zip_archive(&path, &output, &mut errors, None, |n| {
+    let record = extract_zip_archive(&path, &output, &mut errors, None, &|| false, |n| {
         assert_eq!(thread::current().id(), caller);
         events.push(n);
     })
@@ -58,7 +58,7 @@ fn sanitized_collisions_keep_archive_order_and_unsafe_paths_are_skipped() {
     );
     let output = root.path().join("output");
     let mut errors = Vec::new();
-    let record = extract_zip_archive(&path, &output, &mut errors, None, |_| {}).unwrap();
+    let record = extract_zip_archive(&path, &output, &mut errors, None, &|| false, |_| {}).unwrap();
     assert_eq!(fs::read(output.join("a-.txt")).unwrap(), b"last");
     assert_eq!(record.extracted_files, 2);
     assert_eq!(record.skipped_entries, 1);
@@ -85,7 +85,15 @@ fn parallel_zip_respects_selective_matchers() {
     let matchers = super::super::build_archive_entry_matchers(vec![manifest]).unwrap();
     let output = root.path().join("output");
     let mut errors = Vec::new();
-    let record = extract_zip_archive(&path, &output, &mut errors, Some(&matchers), |_| {}).unwrap();
+    let record = extract_zip_archive(
+        &path,
+        &output,
+        &mut errors,
+        Some(&matchers),
+        &|| false,
+        |_| {},
+    )
+    .unwrap();
     assert!(errors.is_empty());
     assert_eq!(record.entries, 3);
     assert_eq!(record.extracted_files, 2);

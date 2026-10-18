@@ -1,10 +1,14 @@
 import { createElement, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast, type Id } from "react-toastify";
+import { invoke } from "@tauri-apps/api/core";
+import { isActivePluginJob } from "../model/types";
 
 import type {
   PluginRunSummary,
   PythonPlugin,
+  PluginJobRecord,
+  PluginRunSnapshot,
 } from "../model/types";
 
 type ActiveIngestRun = {
@@ -17,9 +21,11 @@ type ActiveIngestRun = {
 };
 
 type ActiveIngestJob = {
+  jobId?: string;
   pluginId: string;
   pluginName: string;
   progress?: PluginProgress;
+  status?: PluginJobRecord["status"];
 };
 
 type PluginProgress = {
@@ -35,6 +41,90 @@ const activeRuns = new Map<string, ActiveIngestRun>();
 const listeners = new Set<() => void>();
 let ingestToastId: Id | null = null;
 let progressUnlisten: Promise<UnlistenFn> | null = null;
+let jobUnlisten: Promise<UnlistenFn>[] | null = null;
+const finishedRuns = new Set<string>();
+let completionType: "success" | "warning" | "info" = "success";
+
+export function restorePluginJobToasts(
+  jobs: PluginJobRecord[],
+  datasourceNames = new Map<string, string>(),
+  pluginNames = new Map<string, string>(),
+) {
+  const grouped = new Map<string, PluginJobRecord[]>();
+  for (const job of jobs) {
+    const records = grouped.get(job.runId) ?? [];
+    records.push(job);
+    grouped.set(job.runId, records);
+  }
+  for (const [runId, records] of grouped) {
+    const run = activeRuns.get(runId);
+    if (run && records.length >= run.jobs.length && records.every((job) => !isActivePluginJob(job))) {
+      finishRun(runId, {
+        datasourceId: records[0].datasourceId,
+        datasourcePathsUpdated: false,
+        jobs: records,
+      });
+    }
+  }
+  for (const job of jobs.filter(isActivePluginJob)) {
+    acceptJobUpdate(job, datasourceNames.get(job.datasourceId), pluginNames.get(job.pluginId));
+  }
+}
+
+function acceptJobUpdate(
+  job: PluginJobRecord,
+  datasourceName?: string,
+  pluginName?: string,
+) {
+  if (!job.runId || finishedRuns.has(job.runId)) return;
+  const existing = activeRuns.get(job.runId);
+  if (!existing && !isActivePluginJob(job)) return;
+  if (!existing && activeRuns.size === 0) completionType = "success";
+  const jobs = existing?.jobs ?? [];
+  const updated: ActiveIngestJob = {
+    jobId: job.id,
+    pluginId: job.pluginId,
+    pluginName:
+      pluginName ??
+      jobs.find((item) => item.pluginId === job.pluginId)?.pluginName ??
+      job.pluginId,
+    status: job.status,
+    progress: {
+      completed: job.completed,
+      total: job.total,
+      message: job.message ?? undefined,
+    },
+  };
+  activeRuns.set(job.runId, {
+    datasourceName: datasourceName ?? existing?.datasourceName ?? job.datasourceId,
+    jobs: jobs.some((item) => item.pluginId === job.pluginId)
+      ? jobs.map((item) => item.pluginId === job.pluginId ? updated : item)
+      : [...jobs, updated],
+    pluginCount: existing?.pluginCount ?? 1,
+    runId: job.runId,
+    status: existing?.status ?? "running",
+    onCancel: existing?.onCancel ?? (async () => {
+      await invoke("cancel_plugin_run", { runId: job.runId });
+    }),
+  });
+  renderIngestToast();
+}
+
+function finishRun(runId: string, summary: PluginRunSummary) {
+  if (finishedRuns.has(runId)) return;
+  finishedRuns.add(runId);
+  if (finishedRuns.size > 1024) {
+    const oldest = finishedRuns.values().next().value;
+    if (oldest) finishedRuns.delete(oldest);
+  }
+  if (summary.jobs.some((job) => ["failed", "interrupted"].includes(job.status))) {
+    completionType = "warning";
+  } else if (completionType !== "warning" && summary.jobs.some((job) => job.status === "cancelled")) {
+    completionType = "info";
+  }
+  activeRuns.delete(runId);
+  renderIngestToast();
+}
 
 export function createPluginRunId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -52,6 +142,7 @@ export function showPluginRunStartedToast(input: {
   runId?: string;
 }) {
   const runId = input.runId ?? createPluginRunId();
+  if (activeRuns.size === 0) completionType = "success";
   const jobs =
     input.jobs && input.jobs.length > 0
       ? input.jobs
@@ -90,8 +181,7 @@ export function showPluginRunFinishedToasts(input: {
   );
 
   if (input.runId) {
-    activeRuns.delete(input.runId);
-    renderIngestToast();
+    finishRun(input.runId, input.summary);
     return;
   }
 
@@ -166,7 +256,7 @@ function IngestRunsToast() {
       run,
     })),
   );
-  const activeCount = ingestJobs.length;
+  const activeCount = ingestJobs.filter(({ job }) => !job.status || ["queued", "paused", "running", "cancelling"].includes(job.status)).length;
   const runCount = runs.length;
 
   return createElement(
@@ -179,7 +269,7 @@ function IngestRunsToast() {
         "span",
         null,
         activeCount > 0
-          ? `${activeCount} ingest job${activeCount === 1 ? "" : "s"} running`
+          ? `${activeCount} active plugin job${activeCount === 1 ? "" : "s"}`
           : "No ingest jobs running",
       ),
       createElement(
@@ -222,7 +312,7 @@ function IngestRunsToast() {
               { className: "text-[11px] opacity-80" },
               run.status === "cancelling"
                 ? `${run.datasourceName} - Cancelling`
-                : job.progress?.message ?? `${run.datasourceName} - Running`,
+                : `${run.datasourceName} - ${job.status ?? "queued"}${job.progress?.message ? `: ${job.progress.message}` : ""}`,
             ),
             job.progress &&
               createElement(
@@ -279,11 +369,11 @@ function IngestRunsToast() {
                 {
                   className:
                     "h-6 max-w-20 rounded-sm border border-white/30 px-2 text-[11px] disabled:opacity-50",
-                  disabled: run.status === "cancelling",
-                  onClick: () => cancelIngestRun(run),
+                  disabled: !job.status || run.status === "cancelling" || ["cancelling", "cancelled", "complete", "failed", "interrupted"].includes(job.status),
+                  onClick: () => job.jobId ? cancelIngestJob(run, job) : cancelIngestRun(run),
                   type: "button",
                 },
-                run.status === "cancelling" ? "Cancelling" : "Cancel",
+                job.status === "cancelling" || run.status === "cancelling" ? "Cancelling" : "Cancel",
               )
             : createElement(
                 "span",
@@ -307,6 +397,10 @@ function formatDuration(seconds: number) {
 }
 
 function ensureProgressListener() {
+  jobUnlisten ??= [
+    listen<PluginJobRecord>("plugin-job-updated", (event) => acceptJobUpdate(event.payload)),
+    listen<PluginRunSnapshot>("plugin-run-finished", (event) => finishRun(event.payload.runId, event.payload.summary)),
+  ];
   progressUnlisten ??= listen<PluginProgressEvent>("plugin-progress", (event) => {
     const progress = event.payload;
     const run = activeRuns.get(progress.runId);
@@ -347,6 +441,17 @@ function ensureProgressListener() {
 
 export async function waitForPluginProgressListener() {
   await ensureProgressListener();
+  await Promise.all(jobUnlisten ?? []);
+}
+
+function cancelIngestJob(run: ActiveIngestRun, job: ActiveIngestJob) {
+  activeRuns.set(run.runId, { ...run, jobs: run.jobs.map((item) => item.jobId === job.jobId ? { ...item, status: "cancelling" } : item) });
+  notifyIngestToastSubscribers();
+  void invoke("cancel_plugin_job", { jobId: job.jobId }).catch(() => {
+    const current = activeRuns.get(run.runId);
+    if (current) activeRuns.set(run.runId, { ...current, jobs: current.jobs.map((item) => item.jobId === job.jobId ? job : item) });
+    notifyIngestToastSubscribers();
+  });
 }
 
 function cancelIngestRun(run: ActiveIngestRun) {
@@ -367,8 +472,8 @@ function renderIngestToast() {
       const completedToastId = ingestToastId;
 
       toast.update(ingestToastId, {
-        render: "All ingest modules finished",
-        type: "success",
+        render: completionType === "warning" ? "Plugin jobs finished with errors" : "All plugin jobs finished",
+        type: completionType,
         isLoading: false,
         autoClose: 2500,
         closeButton: true,

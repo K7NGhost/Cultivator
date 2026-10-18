@@ -9,6 +9,9 @@ import type {
   PluginRunSummary,
   PythonPlugin,
   PythonRuntimeStatus,
+  SubmitPluginRunInput,
+  SubmittedPluginRun,
+  PluginRunSnapshot,
 } from "../model/types";
 import { waitForPluginProgressListener } from "../utils/pluginToasts";
 
@@ -117,22 +120,35 @@ export async function importPythonPlugins(
 
 export async function listPluginJobs(
   caseDatabasePath: string,
+  pagination: { limit?: number; offset?: number } = {},
 ): Promise<PluginJobRecord[]> {
   return invoke<PluginJobRecord[]>("list_plugin_jobs", {
     caseDatabasePath,
+    ...pagination,
   });
 }
 
-export async function runDatasourcePlugins(input: {
-  caseDatabasePath: string;
-  caseFolderPath: string;
-  datasourceId: string;
-  pluginIds?: string[];
-  pluginOptions?: Record<string, Record<string, string>>;
-  runId?: string;
-}): Promise<PluginRunSummary> {
+export async function submitDatasourcePlugins(input: SubmitPluginRunInput): Promise<SubmittedPluginRun> {
   await waitForPluginProgressListener();
-  return invoke<PluginRunSummary>("run_datasource_plugins", input);
+  return invoke<SubmittedPluginRun>("submit_plugin_run", { request: input });
+}
+
+export async function waitForPluginRun(caseDatabasePath: string, runId: string): Promise<PluginRunSummary> {
+  // SQLite is authoritative, including after a missed event or a webview reload.
+  while (true) {
+    const snapshot = await invoke<PluginRunSnapshot>("get_plugin_run", { caseDatabasePath, runId });
+    if (snapshot.finished) return snapshot.summary;
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
+  }
+}
+
+export async function runDatasourcePlugins(input: SubmitPluginRunInput): Promise<PluginRunSummary> {
+  const submission = await submitDatasourcePlugins(input);
+  return waitForPluginRun(input.caseDatabasePath, submission.runId);
+}
+
+export async function pauseDatasourcePluginRun(runId: string, paused: boolean): Promise<boolean> {
+  return invoke<boolean>("pause_plugin_run", { runId, paused });
 }
 
 export async function movePythonPlugin(
@@ -162,4 +178,12 @@ export async function listPluginLogs(
 
 export async function cancelDatasourcePluginRun(runId: string): Promise<boolean> {
   return invoke<boolean>("cancel_plugin_run", { runId });
+}
+
+export function cancelPluginJob(jobId: string): Promise<boolean> {
+  return invoke<boolean>("cancel_plugin_job", { jobId });
+}
+
+export function pausePluginJob(jobId: string, paused: boolean): Promise<boolean> {
+  return invoke<boolean>("pause_plugin_job", { jobId, paused });
 }

@@ -1,3 +1,4 @@
+use crate::plugins::cancellation::{self, Check};
 use crate::plugins::PythonPluginManifest;
 use ignore::{WalkBuilder, WalkState};
 use rayon::prelude::*;
@@ -165,20 +166,34 @@ pub fn manifest() -> PythonPluginManifest {
         .expect("built-in Image Metadata manifest must be valid")
 }
 
+#[cfg(test)]
 pub fn execute_with_progress<F>(paths: Vec<String>, progress: F) -> Result<MediaGallery, String>
 where
     F: FnMut(MediaScanProgress),
 {
-    scan_media_gallery_with_progress(paths, progress)
+    execute_with_cancellation(paths, &|| false, progress)
 }
 
-fn scan_media_gallery_with_progress<F>(
+pub fn execute_with_cancellation<F>(
     paths: Vec<String>,
+    cancelled: Check<'_>,
+    progress: F,
+) -> Result<MediaGallery, String>
+where
+    F: FnMut(MediaScanProgress),
+{
+    scan_media_gallery_with_cancellation(paths, cancelled, progress)
+}
+
+fn scan_media_gallery_with_cancellation<F>(
+    paths: Vec<String>,
+    cancelled: Check<'_>,
     mut progress: F,
 ) -> Result<MediaGallery, String>
 where
     F: FnMut(MediaScanProgress),
 {
+    cancellation::checkpoint(cancelled)?;
     let mut photos = Vec::new();
     let mut videos = Vec::new();
     let mut scanned_files = 0u64;
@@ -193,7 +208,8 @@ where
     });
 
     let worker_count = media_scan_worker_count();
-    let scan_paths = collect_scan_paths(paths, worker_count);
+    let scan_paths = collect_scan_paths(paths, worker_count, cancelled);
+    cancellation::checkpoint(cancelled)?;
     let total_files = scan_paths.len() as u64;
 
     progress(MediaScanProgress {
@@ -212,13 +228,18 @@ where
         let chunk_size = (worker_count * SCAN_CHUNK_FILES_PER_WORKER).clamp(64, 256);
 
         for chunk in scan_paths.chunks(chunk_size) {
+            cancellation::checkpoint(cancelled)?;
             let results = worker_pool.install(|| {
                 chunk
                     .par_iter()
-                    .map(|path| process_media_item(path))
+                    .map(|path| {
+                        cancellation::checkpoint(cancelled)?;
+                        process_media_item(path)
+                    })
                     .collect::<Vec<_>>()
             });
 
+            cancellation::checkpoint(cancelled)?;
             for (path, result) in chunk.iter().zip(results) {
                 if let Some(item) = result? {
                     match item.media_type {
@@ -264,13 +285,14 @@ fn media_scan_worker_count() -> usize {
         return configured.min(MAX_SCAN_WORKERS);
     }
 
-    std::thread::available_parallelism()
-        .map(|parallelism| parallelism.get())
-        .unwrap_or(1)
-        .clamp(1, MAX_SCAN_WORKERS)
+    crate::jobs::cpu_parallelism().min(MAX_SCAN_WORKERS)
 }
 
-fn collect_scan_paths(paths: Vec<String>, worker_count: usize) -> Vec<PathBuf> {
+fn collect_scan_paths(
+    paths: Vec<String>,
+    worker_count: usize,
+    cancelled: Check<'_>,
+) -> Vec<PathBuf> {
     let roots = paths
         .into_iter()
         .map(PathBuf::from)
@@ -301,6 +323,9 @@ fn collect_scan_paths(paths: Vec<String>, worker_count: usize) -> Vec<PathBuf> {
         };
 
         Box::new(move |entry| {
+            if cancelled() {
+                return WalkState::Quit;
+            }
             if let Ok(entry) = entry {
                 if entry
                     .file_type()

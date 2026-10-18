@@ -19,6 +19,7 @@ import { EvidenceProvider } from "@/features/evidence";
 import { FilesPage } from "@/features/files/pages/FilesPage";
 import { MediaPage } from "@/features/media/pages/MediaPage";
 import { PluginsPage } from "@/features/plugins/pages/PluginsPage";
+import { usePluginJobMonitor } from "@/features/plugins/hooks/usePluginJobMonitor";
 import { SearchPage } from "@/features/search/pages/SearchPage";
 import { PlaceholderPage } from "@/features/workspace";
 
@@ -80,6 +81,7 @@ export function AppShell() {
 function AppShellContent() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(loadSidebarOpenState);
   const { activeCase } = useCases();
+  usePluginJobMonitor(activeCase);
 
   function updateSidebarOpenState(isOpen: boolean) {
     setIsSidebarOpen(isOpen);

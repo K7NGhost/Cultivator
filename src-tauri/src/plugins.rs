@@ -19,8 +19,8 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
-    sync::atomic::{AtomicU64, Ordering},
-    sync::{Mutex, OnceLock},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager};
@@ -28,6 +28,15 @@ use tauri_plugin_opener::OpenerExt;
 
 mod builtin;
 mod bundle;
+mod cancellation;
+mod execution;
+mod job_persistence;
+mod job_progress;
+pub use execution::{
+    cancel_plugin_job, get_plugin_run, pause_plugin_job, pause_plugin_run, submit_plugin_run,
+    PluginRunSnapshot, SubmitPluginRunRequest, SubmittedPluginRun,
+};
+pub(crate) use job_persistence::initialize as initialize_job_manager;
 
 pub use builtin::MediaGallery;
 pub use bundle::{
@@ -49,7 +58,7 @@ const MEDIA_PREVIEW_MAX_DIMENSION: u32 = 1_600;
 const MEDIA_PREVIEW_PYTHON: &str = crate::scripting::MEDIA_WORKER;
 
 static NEXT_ID_SUFFIX: AtomicU64 = AtomicU64::new(1);
-static PLUGIN_CANCELLATIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static PLUGIN_CANCELLATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PythonPluginMode {
@@ -320,7 +329,7 @@ struct PluginResultRecord {
     payload: JsonValue,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginJobRecord {
     pub id: String,
@@ -328,7 +337,13 @@ pub struct PluginJobRecord {
     pub datasource_id: String,
     pub plugin_id: String,
     pub status: String,
-    pub started_at: String,
+    pub run_id: String,
+    pub queued_at: String,
+    pub priority: i64,
+    pub completed: u64,
+    pub total: u64,
+    pub message: Option<String>,
+    pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub error: Option<String>,
 }
@@ -639,42 +654,17 @@ pub fn import_python_plugins(
     bundle::import_python_plugins(&plugin_root, &installed_plugins, request)
 }
 
-pub async fn list_plugin_jobs(case_database_path: String) -> Result<Vec<PluginJobRecord>, String> {
+pub async fn list_plugin_jobs(
+    case_database_path: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<PluginJobRecord>, String> {
     let pool = open_case_database(&case_database_path).await?;
     ensure_plugin_tables(&pool).await?;
-    let rows = sqlx::query(
-        r#"
-          SELECT
-            id,
-            case_id,
-            datasource_id,
-            plugin_id,
-            status,
-            started_at,
-            finished_at,
-            error
-          FROM plugin_jobs
-          ORDER BY started_at DESC
-          LIMIT 100
-        "#,
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|error| format!("Failed to list plugin jobs: {error}"))?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| PluginJobRecord {
-            id: row.get("id"),
-            case_id: row.get("case_id"),
-            datasource_id: row.get("datasource_id"),
-            plugin_id: row.get("plugin_id"),
-            status: row.get("status"),
-            started_at: row.get("started_at"),
-            finished_at: row.get("finished_at"),
-            error: row.get("error"),
-        })
-        .collect())
+    job_persistence::recover_case(&pool).await?;
+    let rows = sqlx::query("SELECT * FROM plugin_jobs ORDER BY CASE WHEN status IN ('queued', 'paused', 'running', 'cancelling') THEN 0 ELSE 1 END, COALESCE(NULLIF(queued_at, ''), started_at) DESC, id DESC LIMIT $1 OFFSET $2")
+        .bind(limit.unwrap_or(100).clamp(1, 500)).bind(offset.unwrap_or(0).max(0)).fetch_all(&pool).await.map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(job_persistence::map_job).collect())
 }
 
 pub async fn list_plugin_logs(
@@ -1008,6 +998,11 @@ pub async fn remove_datasource(
     ensure_datasource_tables(&pool).await?;
     ensure_plugin_tables(&pool).await?;
     ensure_file_tag_table(&pool).await?;
+    let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM plugin_jobs WHERE datasource_id = $1 AND status IN ('queued', 'paused', 'running', 'cancelling')")
+        .bind(&datasource_id).fetch_one(&pool).await.map_err(|e| e.to_string())?;
+    if active > 0 {
+        return Err("Cancel or wait for this datasource's plugin jobs before deleting it.".into());
+    }
 
     let path_rows = sqlx::query(
         r#"
@@ -1252,286 +1247,25 @@ fn remove_datasource_artifact_paths(
     Ok(())
 }
 
-pub fn cancel_plugin_run(run_id: String) -> Result<bool, String> {
-    let run_id = run_id.trim();
-
-    if run_id.is_empty() {
-        return Err("Plugin run id is required.".to_string());
+pub async fn cancel_plugin_run(app: AppHandle, run_id: String) -> Result<bool, String> {
+    if run_id.trim().is_empty() {
+        return Err("Plugin run id is required.".into());
     }
-
-    request_plugin_run_cancellation(run_id)?;
-
-    Ok(true)
-}
-
-pub async fn run_datasource_plugins(
-    app_handle: AppHandle,
-    case_database_path: String,
-    case_folder_path: String,
-    datasource_id: String,
-    plugin_ids: Option<Vec<String>>,
-    plugin_options: Option<HashMap<String, JsonValue>>,
-    run_id: Option<String>,
-) -> Result<PluginRunSummary, String> {
-    let pool = open_case_database(&case_database_path).await?;
-
-    ensure_plugin_tables(&pool).await?;
-
-    let mut datasource = load_datasource_for_plugins(&pool, &datasource_id).await?;
-    let plugin_map = {
-        let _operation_guard = bundle::lock_bundle_operations()?;
-        load_python_plugins(&app_handle)?
-            .into_iter()
-            .map(|plugin| (plugin.manifest.id.clone(), plugin))
-            .collect::<HashMap<_, _>>()
+    let manager = app.state::<Arc<crate::jobs::JobManager>>();
+    let Some(control) = manager.control(&run_id) else {
+        return Ok(false);
     };
-    let requested_plugin_ids = plugin_ids.unwrap_or_else(|| datasource.plugin_ids.clone());
-    let mut jobs = Vec::new();
-    let related_manifests = requested_plugin_ids
-        .iter()
-        .filter_map(|plugin_id| {
-            builtin::plugin(plugin_id)
-                .map(|plugin| plugin.manifest())
-                .or_else(|| {
-                    plugin_map
-                        .get(plugin_id)
-                        .map(|plugin| plugin.manifest.clone())
-                })
-        })
-        .collect::<Vec<_>>();
-    let mut requested_builtins = requested_plugin_ids
-        .iter()
-        .filter_map(|plugin_id| builtin::plugin(plugin_id))
-        .collect::<Vec<_>>();
-    requested_builtins.sort_by_key(|plugin| plugin.execution_order());
-
-    let mut datasource_paths_updated = false;
-
-    for plugin in requested_builtins
-        .iter()
-        .copied()
-        .filter(|plugin| plugin.execution_order() < 100)
-    {
-        if is_plugin_run_cancelled(run_id.as_deref())? {
-            break;
-        }
-
-        let (job, paths_updated) = run_builtin_plugin_stage(
-            BuiltinPluginStageContext {
-                app_handle: &app_handle,
-                pool: &pool,
-                case_folder_path: &case_folder_path,
-                run_id: run_id.as_deref(),
-            },
-            &mut datasource,
-            plugin,
-            plugin_options.as_ref(),
-            related_manifests.clone(),
-        )
-        .await?;
-        datasource_paths_updated |= paths_updated;
-        jobs.push(job);
+    if !manager.cancel(&run_id) {
+        return Ok(false);
     }
-
-    #[cfg(feature = "python-plugins")]
-    let datasource_files = enumerate_datasource_files(&datasource)?;
-    let mut job_handles = Vec::new();
-
-    for plugin_id in &requested_plugin_ids {
-        if is_plugin_run_cancelled(run_id.as_deref())? {
-            break;
-        }
-
-        if LEGACY_DEMO_PLUGIN_IDS.contains(&plugin_id.as_str()) {
-            let job = create_plugin_job(&pool, &datasource, plugin_id).await?;
-
-            insert_plugin_logs(
-                &pool,
-                &job.id,
-                plugin_id,
-                &[PendingPluginLog {
-                    level: "info".to_string(),
-                    message: "Skipped removed demo plugin.".to_string(),
-                }],
-            )
-            .await?;
-            complete_plugin_job(&pool, &job.id).await?;
-            jobs.push(load_plugin_job(&pool, &job.id).await?);
-            continue;
-        }
-
-        if builtin::plugin(plugin_id).is_some() {
-            continue;
-        }
-
-        let Some(plugin) = plugin_map.get(plugin_id).cloned() else {
-            let job = create_plugin_job(&pool, &datasource, plugin_id).await?;
-            let message = format!("Plugin '{plugin_id}' was selected but is not installed.");
-
-            fail_plugin_job(&pool, &job.id, &message).await?;
-            jobs.push(load_plugin_job(&pool, &job.id).await?);
-            continue;
-        };
-
-        #[cfg(feature = "python-plugins")]
-        {
-            let plan = build_plugin_execution_plan(&plugin, &datasource, &datasource_files)?;
-            let job = create_plugin_job(&pool, &datasource, &plugin.manifest.id).await?;
-            let run_plugin_id = plugin.manifest.id.clone();
-            let job_id = job.id.clone();
-
-            if plan.tasks.is_empty() {
-                insert_plugin_logs(
-                    &pool,
-                    &job_id,
-                    &run_plugin_id,
-                    &[PendingPluginLog {
-                        level: "info".to_string(),
-                        message: format!(
-                            "Skipped after scanning {} files because no files matched this plugin.",
-                            plan.scanned_files
-                        ),
-                    }],
-                )
-                .await?;
-                complete_plugin_job(&pool, &job_id).await?;
-                jobs.push(load_plugin_job(&pool, &job_id).await?);
-                continue;
-            }
-
-            let execution_datasource = datasource.clone();
-            let execution_case_database_path = case_database_path.clone();
-            let execution_case_folder_path = case_folder_path.clone();
-            let execution_run_id = run_id.clone();
-            let execution_plugin_options =
-                resolved_plugin_options(&plugin.manifest, plugin_options.as_ref());
-            let execution_app_handle = app_handle.clone();
-            let runtime_root = python_runtime_directory(&app_handle)?;
-            let job_pool = pool.clone();
-            let job_datasource_id = datasource.id.clone();
-
-            let handle = tauri::async_runtime::spawn(async move {
-                let output = tauri::async_runtime::spawn_blocking(move || {
-                    let execution_python_runtime = runtime::prepare(
-                        &runtime_root,
-                        &plugin.manifest.id,
-                        &plugin.manifest.python,
-                        &plugin.manifest.dependencies,
-                    )?;
-                    execute_python_plugin_process(
-                        &plugin,
-                        &execution_datasource,
-                        plan,
-                        PythonPluginExecutionContext {
-                            case_database_path: &execution_case_database_path,
-                            case_folder_path: &execution_case_folder_path,
-                            python_runtime: &execution_python_runtime,
-                            run_id: execution_run_id.as_deref(),
-                            app_handle: &execution_app_handle,
-                            plugin_options: &execution_plugin_options,
-                        },
-                    )
-                })
-                .await
-                .unwrap_or_else(|error| Err(format!("Plugin worker failed: {error}")));
-
-                finish_python_plugin_job(
-                    &job_pool,
-                    &job_id,
-                    &job_datasource_id,
-                    &run_plugin_id,
-                    output,
-                )
-                .await
-            });
-
-            job_handles.push(handle);
-        }
-
-        #[cfg(not(feature = "python-plugins"))]
-        {
-            let job = create_plugin_job(&pool, &datasource, &plugin.manifest.id).await?;
-            let run_plugin_id = plugin.manifest.id.clone();
-            let execution_datasource = datasource.clone();
-            let execution_case_database_path = case_database_path.clone();
-            let execution_case_folder_path = case_folder_path.clone();
-            let execution_run_id = run_id.clone();
-            let execution_python_runtime = PythonRuntime {
-                executable: PathBuf::new(),
-            };
-            let job_id = job.id.clone();
-            let job_pool = pool.clone();
-            let job_datasource_id = datasource.id.clone();
-
-            let handle = tauri::async_runtime::spawn(async move {
-                let output = tauri::async_runtime::spawn_blocking(move || {
-                    execute_python_plugin_process(
-                        &plugin,
-                        &execution_datasource,
-                        &execution_case_database_path,
-                        &execution_case_folder_path,
-                        &execution_python_runtime,
-                        execution_run_id.as_deref(),
-                    )
-                })
-                .await
-                .unwrap_or_else(|error| Err(format!("Plugin worker failed: {error}")));
-
-                finish_python_plugin_job(
-                    &job_pool,
-                    &job_id,
-                    &job_datasource_id,
-                    &run_plugin_id,
-                    output,
-                )
-                .await
-            });
-
-            job_handles.push(handle);
-        }
+    let pool = open_case_database(&control.database_path).await?;
+    sqlx::query("UPDATE plugin_jobs SET status = CASE WHEN status IN ('queued', 'paused') THEN 'cancelled' ELSE 'cancelling' END, finished_at = CASE WHEN status IN ('queued', 'paused') THEN $1 ELSE NULL END, error = 'Plugin run cancelled.' WHERE run_id = $2 AND status IN ('queued', 'paused', 'running')")
+        .bind(now_iso_like()).bind(&run_id).execute(&pool).await.map_err(|e| e.to_string())?;
+    let snapshot = get_plugin_run(control.database_path.clone(), run_id).await?;
+    for job in snapshot.summary.jobs {
+        let _ = app.emit("plugin-job-updated", job);
     }
-
-    for plugin in requested_builtins
-        .iter()
-        .copied()
-        .filter(|plugin| plugin.execution_order() >= 100)
-    {
-        if is_plugin_run_cancelled(run_id.as_deref())? {
-            break;
-        }
-
-        let (job, paths_updated) = run_builtin_plugin_stage(
-            BuiltinPluginStageContext {
-                app_handle: &app_handle,
-                pool: &pool,
-                case_folder_path: &case_folder_path,
-                run_id: run_id.as_deref(),
-            },
-            &mut datasource,
-            plugin,
-            plugin_options.as_ref(),
-            related_manifests.clone(),
-        )
-        .await?;
-        datasource_paths_updated |= paths_updated;
-        jobs.push(job);
-    }
-
-    for handle in job_handles {
-        jobs.push(
-            handle
-                .await
-                .map_err(|error| format!("Plugin job task failed: {error}"))??,
-        );
-    }
-
-    clear_plugin_run_cancellation(run_id.as_deref())?;
-
-    Ok(PluginRunSummary {
-        datasource_id,
-        jobs,
-        datasource_paths_updated,
-    })
+    Ok(true)
 }
 
 async fn finish_python_plugin_job(
@@ -1555,10 +1289,9 @@ async fn finish_python_plugin_job(
 
             insert_plugin_logs(pool, job_id, plugin_id, &logs).await?;
             replace_plugin_results(pool, job_id, datasource_id, plugin_id, &output.records).await?;
-            complete_plugin_job(pool, job_id).await?;
         }
         Err(message) => {
-            fail_plugin_job(pool, job_id, &message).await?;
+            return Err(message);
         }
     }
 
@@ -1570,6 +1303,7 @@ struct BuiltinPluginStageContext<'a> {
     pool: &'a SqlitePool,
     case_folder_path: &'a str,
     run_id: Option<&'a str>,
+    reporter: &'a job_progress::Reporter,
 }
 
 async fn run_builtin_plugin_stage(
@@ -1578,16 +1312,18 @@ async fn run_builtin_plugin_stage(
     plugin: &'static dyn builtin::BuiltinPlugin,
     plugin_options: Option<&HashMap<String, JsonValue>>,
     related_manifests: Vec<PythonPluginManifest>,
+    job: PluginJobRecord,
 ) -> Result<(PluginJobRecord, bool), String> {
     let BuiltinPluginStageContext {
         app_handle,
         pool,
         case_folder_path,
         run_id,
+        reporter,
     } = context;
     let manifest = plugin.manifest();
     let plugin_id = manifest.id.clone();
-    let job = create_plugin_job(pool, datasource, &plugin_id).await?;
+
     let execution_paths = datasource.paths.clone();
     let output_root = plugin
         .output_directory_name()
@@ -1602,27 +1338,31 @@ async fn run_builtin_plugin_stage(
         .into_iter()
         .filter(|related| related.id != plugin_id)
         .collect();
-    let progress_app_handle = app_handle.clone();
+    let reporter = reporter.clone();
     let progress_run_id = run_id.unwrap_or_default().to_string();
+    let cancellation_token = PLUGIN_CANCELLATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "Plugin cancellation registry unavailable")?
+        .get(&job.id)
+        .cloned()
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let progress_plugin_id = plugin_id.clone();
     let output = tauri::async_runtime::spawn_blocking(move || {
         let mut reporter = |progress: builtin::BuiltinPluginProgress| {
             if progress.total == 0 && progress.completed == 0 && progress.message.is_none() {
                 return;
             }
-            let _ = progress_app_handle.emit(
-                "plugin-progress",
-                PluginProgressEvent {
-                    run_id: progress_run_id.clone(),
-                    plugin_id: progress_plugin_id.clone(),
-                    completed: progress.completed,
-                    total: progress.total,
-                    message: progress.message,
-                    eta_seconds: None,
-                },
-            );
+            reporter.report(PluginProgressEvent {
+                run_id: progress_run_id.clone(),
+                plugin_id: progress_plugin_id.clone(),
+                completed: progress.completed,
+                total: progress.total,
+                message: progress.message,
+                eta_seconds: None,
+            });
         };
-        let cancellation = || is_plugin_run_cancelled(Some(&progress_run_id)).unwrap_or(false);
+        let cancellation = || cancellation_token.load(Ordering::Acquire);
         let mut context = builtin::BuiltinPluginContext::new(
             execution_paths,
             output_root,
@@ -1637,12 +1377,13 @@ async fn run_builtin_plugin_stage(
     })
     .await
     .map_err(|error| format!("Built-in plugin worker failed: {error}"))?;
+    let manager = app_handle.state::<Arc<crate::jobs::JobManager>>();
+    let _writer = manager.writers.acquire().await.map_err(|e| e.to_string())?;
     let mut paths_updated = false;
     let job_record = match output {
         Ok(effects) => {
-            if is_plugin_run_cancelled(run_id)? {
-                fail_plugin_job(pool, &job.id, "Plugin run cancelled.").await?;
-                return Ok((load_plugin_job(pool, &job.id).await?, false));
+            if is_plugin_job_cancelled(Some(&job.id))? {
+                return Err("Plugin job cancelled.".into());
             }
 
             let logs = effects
@@ -1677,7 +1418,6 @@ async fn run_builtin_plugin_stage(
                 }
             }
 
-            complete_plugin_job(pool, &job.id).await?;
             load_plugin_job(pool, &job.id).await?
         }
         Err(message) => {
@@ -1691,8 +1431,7 @@ async fn run_builtin_plugin_stage(
                 }],
             )
             .await?;
-            fail_plugin_job(pool, &job.id, &message).await?;
-            load_plugin_job(pool, &job.id).await?
+            return Err(message);
         }
     };
 
@@ -1730,8 +1469,9 @@ struct PythonPluginExecutionContext<'a> {
     case_folder_path: &'a str,
     python_runtime: &'a PythonRuntime,
     run_id: Option<&'a str>,
-    app_handle: &'a AppHandle,
+    cancel_id: &'a str,
     plugin_options: &'a JsonValue,
+    reporter: &'a job_progress::Reporter,
 }
 
 #[cfg(feature = "python-plugins")]
@@ -1746,10 +1486,11 @@ fn execute_python_plugin_process(
         case_folder_path,
         python_runtime,
         run_id,
-        app_handle,
         plugin_options,
+        reporter,
+        cancel_id,
     } = context;
-    if is_plugin_run_cancelled(run_id)? {
+    if is_plugin_job_cancelled(Some(cancel_id))? {
         return Err("Plugin run cancelled.".to_string());
     }
 
@@ -1781,23 +1522,20 @@ fn execute_python_plugin_process(
 
     let mut child = command
         .spawn()
+        .map(crate::scripting::process::ManagedChild)
         .map_err(|error| format!("Failed to start Python plugin process: {error}"))?;
 
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "Failed to open Python plugin process stdin.".to_string())?;
-        stdin
-            .write_all(&input_json)
-            .map_err(|error| format!("Failed to send plugin input: {error}"))?;
-    }
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or("Failed to open Python worker stdin")?;
+    let input_writer = std::thread::spawn(move || stdin.write_all(&input_json));
 
     let stderr = child
         .stderr
         .take()
         .ok_or_else(|| "Failed to open Python plugin process stderr.".to_string())?;
-    let progress_app_handle = app_handle.clone();
+    let reporter = reporter.clone();
     let progress_run_id = run_id.unwrap_or_default().to_string();
     let progress_plugin_id = plugin.manifest.id.clone();
     let stderr_reader = std::thread::spawn(move || {
@@ -1808,7 +1546,7 @@ fn execute_python_plugin_process(
                     progress.run_id = progress_run_id.clone();
                     progress.plugin_id = progress_plugin_id.clone();
                     if progress.total > 0 && progress.completed <= progress.total {
-                        let _ = progress_app_handle.emit("plugin-progress", progress);
+                        reporter.report(progress);
                     }
                 }
             } else {
@@ -1828,7 +1566,7 @@ fn execute_python_plugin_process(
     });
     let mut cancelled = false;
     let status = loop {
-        if is_plugin_run_cancelled(run_id)? {
+        if is_plugin_job_cancelled(Some(cancel_id))? {
             cancelled = true;
             let _ = child.kill();
             break child
@@ -1849,10 +1587,14 @@ fn execute_python_plugin_process(
         .map_err(|error| format!("Failed to read Python output: {error}"))?;
     let stderr = stderr_reader.join().unwrap_or_default();
 
-    if cancelled || is_plugin_run_cancelled(run_id)? {
+    let input_result = input_writer
+        .join()
+        .map_err(|_| "Python input writer failed")?;
+    if cancelled || is_plugin_job_cancelled(Some(cancel_id))? {
         return Err("Plugin run cancelled.".to_string());
     }
 
+    input_result.map_err(|error| format!("Failed to send plugin input: {error}"))?;
     if !status.success() {
         let message = stderr.trim();
 
@@ -1962,11 +1704,13 @@ fn plugin_matches_target_file(matcher: &PluginTargetMatcher, file: &TargetFile) 
 #[cfg(feature = "python-plugins")]
 fn enumerate_datasource_files(
     datasource: &DatasourceForPlugins,
+    cancelled: cancellation::Check<'_>,
 ) -> Result<Vec<TargetFile>, String> {
     let mut files = Vec::new();
     let mut seen_paths = HashSet::new();
 
     for source_path in &datasource.paths {
+        cancellation::checkpoint(cancelled)?;
         let path = PathBuf::from(source_path);
 
         if path.is_file() {
@@ -1996,6 +1740,7 @@ fn enumerate_datasource_files(
             let entry_path = entry.into_path();
 
             if entry_path.is_file() {
+                cancellation::checkpoint(cancelled)?;
                 if let Ok(target_file) = target_file_from_path(&entry_path) {
                     if seen_paths.insert(normalize_case_database_path(&target_file.path)) {
                         files.push(target_file);
@@ -3217,6 +2962,7 @@ async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
     .execute(pool)
     .await
     .map_err(|error| format!("Failed to create plugin_jobs table: {error}"))?;
+    job_persistence::ensure_schema(pool).await?;
 
     sqlx::query(
         r#"
@@ -3456,122 +3202,13 @@ async fn add_datasource_path_if_missing(
     Ok(())
 }
 
-async fn create_plugin_job(
-    pool: &SqlitePool,
-    datasource: &DatasourceForPlugins,
-    plugin_id: &str,
-) -> Result<PluginJobRecord, String> {
-    let job = PluginJobRecord {
-        id: create_id("plugin-job"),
-        case_id: datasource.case_id.clone(),
-        datasource_id: datasource.id.clone(),
-        plugin_id: plugin_id.to_string(),
-        status: "running".to_string(),
-        started_at: now_iso_like(),
-        finished_at: None,
-        error: None,
-    };
-
-    sqlx::query(
-        r#"
-          INSERT INTO plugin_jobs (
-            id,
-            case_id,
-            datasource_id,
-            plugin_id,
-            status,
-            started_at,
-            finished_at,
-            error
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        "#,
-    )
-    .bind(&job.id)
-    .bind(&job.case_id)
-    .bind(&job.datasource_id)
-    .bind(&job.plugin_id)
-    .bind(&job.status)
-    .bind(&job.started_at)
-    .bind(&job.finished_at)
-    .bind(&job.error)
-    .execute(pool)
-    .await
-    .map_err(|error| format!("Failed to create plugin job: {error}"))?;
-
-    Ok(job)
-}
-
-async fn complete_plugin_job(pool: &SqlitePool, job_id: &str) -> Result<(), String> {
-    sqlx::query(
-        r#"
-          UPDATE plugin_jobs
-          SET status = 'complete',
-              finished_at = $1,
-              error = NULL
-          WHERE id = $2
-        "#,
-    )
-    .bind(now_iso_like())
-    .bind(job_id)
-    .execute(pool)
-    .await
-    .map_err(|error| format!("Failed to complete plugin job: {error}"))?;
-
-    Ok(())
-}
-
-async fn fail_plugin_job(pool: &SqlitePool, job_id: &str, message: &str) -> Result<(), String> {
-    sqlx::query(
-        r#"
-          UPDATE plugin_jobs
-          SET status = 'failed',
-              finished_at = $1,
-              error = $2
-          WHERE id = $3
-        "#,
-    )
-    .bind(now_iso_like())
-    .bind(message)
-    .bind(job_id)
-    .execute(pool)
-    .await
-    .map_err(|error| format!("Failed to fail plugin job: {error}"))?;
-
-    Ok(())
-}
-
 async fn load_plugin_job(pool: &SqlitePool, job_id: &str) -> Result<PluginJobRecord, String> {
-    let row = sqlx::query(
-        r#"
-          SELECT
-            id,
-            case_id,
-            datasource_id,
-            plugin_id,
-            status,
-            started_at,
-            finished_at,
-            error
-          FROM plugin_jobs
-          WHERE id = $1
-        "#,
-    )
-    .bind(job_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|error| format!("Failed to load plugin job: {error}"))?;
-
-    Ok(PluginJobRecord {
-        id: row.get("id"),
-        case_id: row.get("case_id"),
-        datasource_id: row.get("datasource_id"),
-        plugin_id: row.get("plugin_id"),
-        status: row.get("status"),
-        started_at: row.get("started_at"),
-        finished_at: row.get("finished_at"),
-        error: row.get("error"),
-    })
+    let row = sqlx::query("SELECT * FROM plugin_jobs WHERE id = $1")
+        .bind(job_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(job_persistence::map_job(row))
 }
 
 async fn replace_plugin_results(
@@ -3600,6 +3237,9 @@ async fn replace_plugin_results(
     .map_err(|error| format!("Failed to remove previous plugin results: {error}"))?;
 
     for record in records {
+        if is_plugin_job_cancelled(Some(job_id))? {
+            return Err("Plugin job cancelled.".into());
+        }
         if LEGACY_DEMO_ARTIFACT_KINDS.contains(&record.result_kind.as_str()) {
             continue;
         }
@@ -3627,6 +3267,9 @@ async fn replace_plugin_results(
         .map_err(|error| format!("Failed to insert replacement plugin result: {error}"))?;
     }
 
+    if is_plugin_job_cancelled(Some(job_id))? {
+        return Err("Plugin job cancelled.".into());
+    }
     transaction
         .commit()
         .await
@@ -3658,6 +3301,9 @@ async fn replace_media_gallery_items(
     let updated_at = now_iso_like();
 
     for item in gallery.photos.iter().chain(gallery.videos.iter()) {
+        if is_plugin_job_cancelled(Some(job_id))? {
+            return Err("Plugin job cancelled.".into());
+        }
         let media_type = match item.media_type {
             builtin::MediaType::Image => "image",
             builtin::MediaType::Video => "video",
@@ -3693,6 +3339,9 @@ async fn replace_media_gallery_items(
         .map_err(|error| format!("Failed to insert media gallery item: {error}"))?;
     }
 
+    if is_plugin_job_cancelled(Some(job_id))? {
+        return Err("Plugin job cancelled.".into());
+    }
     transaction
         .commit()
         .await
@@ -3724,43 +3373,6 @@ async fn invalidate_media_items_under_path(
     .execute(pool)
     .await
     .map_err(|error| format!("Failed to invalidate replaced media files: {error}"))?;
-
-    Ok(())
-}
-
-fn request_plugin_run_cancellation(run_id: &str) -> Result<(), String> {
-    let cancellations = PLUGIN_CANCELLATIONS.get_or_init(|| Mutex::new(HashSet::new()));
-    let mut cancellations = cancellations
-        .lock()
-        .map_err(|_| "Plugin cancellation registry is poisoned.".to_string())?;
-
-    cancellations.insert(run_id.to_string());
-
-    Ok(())
-}
-
-fn is_plugin_run_cancelled(run_id: Option<&str>) -> Result<bool, String> {
-    let Some(run_id) = run_id else {
-        return Ok(false);
-    };
-    let cancellations = PLUGIN_CANCELLATIONS.get_or_init(|| Mutex::new(HashSet::new()));
-    let cancellations = cancellations
-        .lock()
-        .map_err(|_| "Plugin cancellation registry is poisoned.".to_string())?;
-
-    Ok(cancellations.contains(run_id))
-}
-
-fn clear_plugin_run_cancellation(run_id: Option<&str>) -> Result<(), String> {
-    let Some(run_id) = run_id else {
-        return Ok(());
-    };
-    let cancellations = PLUGIN_CANCELLATIONS.get_or_init(|| Mutex::new(HashSet::new()));
-    let mut cancellations = cancellations
-        .lock()
-        .map_err(|_| "Plugin cancellation registry is poisoned.".to_string())?;
-
-    cancellations.remove(run_id);
 
     Ok(())
 }
@@ -3797,6 +3409,19 @@ async fn insert_plugin_logs(
     }
 
     Ok(())
+}
+
+fn is_plugin_job_cancelled(job_id: Option<&str>) -> Result<bool, String> {
+    let Some(id) = job_id else {
+        return Ok(false);
+    };
+    let registry = PLUGIN_CANCELLATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "Plugin cancellation registry unavailable")?;
+    Ok(registry
+        .get(id)
+        .is_some_and(|token| token.load(Ordering::Acquire)))
 }
 
 fn default_python_version() -> String {

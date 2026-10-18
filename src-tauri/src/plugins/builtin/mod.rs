@@ -32,7 +32,7 @@ pub struct BuiltinPluginContext<'a> {
     pub related_manifests: Vec<PythonPluginManifest>,
     progress: &'a mut dyn FnMut(BuiltinPluginProgress),
     #[allow(dead_code)]
-    cancelled: &'a dyn Fn() -> bool,
+    cancelled: &'a (dyn Fn() -> bool + Sync),
     effects: BuiltinPluginEffects,
 }
 
@@ -49,7 +49,7 @@ impl<'a> BuiltinPluginContext<'a> {
         options: JsonValue,
         related_manifests: Vec<PythonPluginManifest>,
         progress: &'a mut dyn FnMut(BuiltinPluginProgress),
-        cancelled: &'a dyn Fn() -> bool,
+        cancelled: &'a (dyn Fn() -> bool + Sync),
     ) -> Self {
         Self {
             paths,
@@ -153,10 +153,12 @@ impl BuiltinPlugin for ArchiveExtractorPlugin {
             .and_then(JsonValue::as_str)
             == Some("plugin_specific");
         let related_manifests = selective.then_some(context.related_manifests.clone());
-        let summary = archive_extractor::execute_with_progress(
+        let cancelled = context.cancelled;
+        let summary = archive_extractor::execute_with_cancellation(
             context.paths.clone(),
             output_root,
             related_manifests,
+            cancelled,
             |event| {
                 context.progress(
                     event.completed_entries,
@@ -211,19 +213,21 @@ impl BuiltinPlugin for ImageMetadataPlugin {
     }
 
     fn run(&self, context: &mut BuiltinPluginContext<'_>) -> Result<(), String> {
-        let gallery = image_metadata::execute_with_progress(context.paths.clone(), |event| {
-            context.progress(
-                event.scanned_files,
-                event.total_files,
-                format!(
-                    "Scanned {} of {} files; found {} media file{}",
+        let cancelled = context.cancelled;
+        let gallery =
+            image_metadata::execute_with_cancellation(context.paths.clone(), cancelled, |event| {
+                context.progress(
                     event.scanned_files,
                     event.total_files,
-                    event.matched_files,
-                    if event.matched_files == 1 { "" } else { "s" }
-                ),
-            );
-        })?;
+                    format!(
+                        "Scanned {} of {} files; found {} media file{}",
+                        event.scanned_files,
+                        event.total_files,
+                        event.matched_files,
+                        if event.matched_files == 1 { "" } else { "s" }
+                    ),
+                );
+            })?;
         let matched_files = gallery.photos.len() + gallery.videos.len();
         context.log(
             "info",

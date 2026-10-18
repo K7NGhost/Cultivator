@@ -24,6 +24,7 @@ use std::{
 };
 use tauri::Emitter;
 
+mod jobs;
 mod plugins;
 pub mod preview;
 mod scripting;
@@ -650,8 +651,10 @@ async fn import_python_plugins(
 #[tauri::command]
 async fn list_plugin_jobs(
     case_database_path: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
 ) -> Result<Vec<plugins::PluginJobRecord>, String> {
-    plugins::list_plugin_jobs(case_database_path).await
+    plugins::list_plugin_jobs(case_database_path, limit, offset).await
 }
 
 #[tauri::command]
@@ -704,38 +707,73 @@ async fn render_media_thumbnail(
 
 #[tauri::command]
 async fn remove_datasource(
+    app_handle: tauri::AppHandle,
     case_database_path: String,
     case_id: String,
     datasource_id: String,
 ) -> Result<(), String> {
+    use tauri::Manager;
+    if app_handle
+        .state::<Arc<jobs::JobManager>>()
+        .has_active_datasource(&case_database_path, &datasource_id)
+    {
+        return Err("Cancel or wait for this datasource's plugin jobs before deleting it.".into());
+    }
+    let canonical = fs::canonicalize(&case_database_path).map_err(|e| e.to_string())?;
+    let manager = app_handle.state::<Arc<jobs::JobManager>>();
+    let resource = manager.resource(format!(
+        "{}:{}",
+        canonical.to_string_lossy().to_lowercase(),
+        datasource_id
+    ));
+    let _guard = resource.try_lock().map_err(|_| {
+        "This datasource is being processed. Cancel or wait for its jobs before deleting it."
+    })?;
     plugins::remove_datasource(case_database_path, case_id, datasource_id).await
 }
 
 #[tauri::command]
-async fn run_datasource_plugins(
+async fn submit_plugin_run(
     app_handle: tauri::AppHandle,
-    case_database_path: String,
-    case_folder_path: String,
-    datasource_id: String,
-    plugin_ids: Option<Vec<String>>,
-    plugin_options: Option<std::collections::HashMap<String, serde_json::Value>>,
-    run_id: Option<String>,
-) -> Result<plugins::PluginRunSummary, String> {
-    plugins::run_datasource_plugins(
-        app_handle,
-        case_database_path,
-        case_folder_path,
-        datasource_id,
-        plugin_ids,
-        plugin_options,
-        run_id,
-    )
-    .await
+    request: plugins::SubmitPluginRunRequest,
+) -> Result<plugins::SubmittedPluginRun, String> {
+    plugins::submit_plugin_run(app_handle, request).await
 }
 
 #[tauri::command]
-fn cancel_plugin_run(run_id: String) -> Result<bool, String> {
-    plugins::cancel_plugin_run(run_id)
+async fn get_plugin_run(
+    case_database_path: String,
+    run_id: String,
+) -> Result<plugins::PluginRunSnapshot, String> {
+    plugins::get_plugin_run(case_database_path, run_id).await
+}
+
+#[tauri::command]
+async fn pause_plugin_run(
+    app_handle: tauri::AppHandle,
+    run_id: String,
+    paused: bool,
+) -> Result<bool, String> {
+    plugins::pause_plugin_run(app_handle, run_id, paused).await
+}
+
+#[tauri::command]
+async fn cancel_plugin_job(app_handle: tauri::AppHandle, job_id: String) -> Result<bool, String> {
+    plugins::cancel_plugin_job(app_handle, job_id).await
+}
+
+#[tauri::command]
+async fn pause_plugin_job(
+    app_handle: tauri::AppHandle,
+    job_id: String,
+    paused: bool,
+) -> Result<bool, String> {
+    plugins::pause_plugin_job(app_handle, job_id, paused).await
+}
+
+#[tauri::command]
+async fn cancel_plugin_run(app_handle: tauri::AppHandle, run_id: String) -> Result<bool, String> {
+    plugins::cancel_plugin_run(app_handle, run_id).await
 }
 
 #[tauri::command]
@@ -2197,6 +2235,16 @@ pub fn run_search_worker_stdio() -> i32 {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(jobs::JobManager::new())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = plugins::initialize_job_manager(&handle).await {
+                    eprintln!("Plugin scheduler recovery failed: {error}");
+                }
+            });
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
@@ -2228,8 +2276,12 @@ pub fn run() {
             list_media_gallery,
             render_media_thumbnail,
             remove_datasource,
-            run_datasource_plugins,
+            submit_plugin_run,
+            get_plugin_run,
+            pause_plugin_run,
             cancel_plugin_run,
+            cancel_plugin_job,
+            pause_plugin_job,
             create_case_workspace,
             search_files,
             cancel_search,
@@ -2244,6 +2296,20 @@ pub fn run() {
             list_sqlite_tables,
             read_sqlite_table_rows
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                use tauri::Manager;
+                let manager = app.state::<Arc<jobs::JobManager>>().inner().clone();
+                if !manager.is_stopping() {
+                    api.prevent_exit();
+                    let handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        manager.shutdown().await;
+                        handle.exit(code.unwrap_or(0));
+                    });
+                }
+            }
+        });
 }

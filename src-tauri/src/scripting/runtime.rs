@@ -82,11 +82,30 @@ pub fn prepare(
     python: &str,
     dependencies: &[String],
 ) -> Result<PythonRuntime, String> {
+    prepare_with_cancellation(root, name, python, dependencies, &|| false)
+}
+
+pub fn prepare_with_cancellation(
+    root: &Path,
+    name: &str,
+    python: &str,
+    dependencies: &[String],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<PythonRuntime, String> {
     validate_requirements(python, dependencies)?;
     // Serialize provisioning so concurrent plugin jobs never observe a partial environment.
-    let _guard = PROVISION_LOCK
-        .lock()
-        .map_err(|_| "Python environment registry is unavailable.".to_owned())?;
+    let _guard = loop {
+        if cancelled() {
+            return Err("Plugin run cancelled.".into());
+        }
+        match PROVISION_LOCK.try_lock() {
+            Ok(guard) => break guard,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(std::time::Duration::from_millis(100))
+            }
+            Err(_) => return Err("Python environment registry is unavailable.".into()),
+        }
+    };
     let environment = environment_path(root, name, python, dependencies);
     let executable = python_executable(&environment);
     if environment_ready(&environment) {
@@ -98,6 +117,7 @@ pub fn prepare(
     run_uv(
         &uv,
         root,
+        cancelled,
         &[
             "venv".as_ref(),
             "--clear".as_ref(),
@@ -114,6 +134,7 @@ pub fn prepare(
         run_uv(
             &uv,
             root,
+            cancelled,
             &[
                 "pip".as_ref(),
                 "install".as_ref(),
@@ -192,11 +213,29 @@ fn uv_works(path: &Path) -> bool {
     hide_window(&mut command);
     command
         .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let Ok(child) = command.spawn() else {
+        return false;
+    };
+    let mut child = super::process::ManagedChild(child);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Err(_) => return false,
+            _ if std::time::Instant::now() >= deadline => return false,
+            _ => std::thread::sleep(std::time::Duration::from_millis(25)),
+        }
+    }
 }
 
-fn run_uv(uv: &Path, root: &Path, arguments: &[&std::ffi::OsStr]) -> Result<(), String> {
+fn run_uv(
+    uv: &Path,
+    root: &Path,
+    cancelled: &dyn Fn() -> bool,
+    arguments: &[&std::ffi::OsStr],
+) -> Result<(), String> {
     let mut command = Command::new(uv);
     hide_window(&mut command);
     command
@@ -211,16 +250,49 @@ fn run_uv(uv: &Path, root: &Path, arguments: &[&std::ffi::OsStr]) -> Result<(), 
         .env_remove("VIRTUAL_ENV")
         .env_remove("PYTHONHOME")
         .env_remove("PYTHONPATH");
-    let output = command
-        .output()
-        .map_err(|error| format!("Failed to start uv: {error}"))?;
-    if output.status.success() {
+    use std::io::Read;
+    command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    let mut child = super::process::ManagedChild(
+        command
+            .spawn()
+            .map_err(|e| format!("Failed to start uv: {e}"))?,
+    );
+    let stderr = child.stderr.take().ok_or("Cannot read uv diagnostics")?;
+    let diagnostics = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut stderr = stderr;
+        let mut buffer = [0; 8192];
+        while let Ok(count) = stderr.read(&mut buffer) {
+            if count == 0 {
+                break;
+            }
+            if bytes.len() < 1_048_576 {
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+        }
+        bytes
+    });
+    let status = loop {
+        if cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = diagnostics.join();
+            return Err("Plugin run cancelled.".into());
+        }
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let stderr = diagnostics.join().unwrap_or_default();
+    if status.success() {
         return Ok(());
     }
     Err(format!(
-        "Python environment setup failed ({}): {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr).trim()
+        "Python environment setup failed ({status}): {}",
+        String::from_utf8_lossy(&stderr).trim()
     ))
 }
 
