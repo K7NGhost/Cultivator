@@ -1,13 +1,13 @@
 use crate::plugins::cancellation::{self, Check};
 use crate::plugins::PythonPluginManifest;
-use ignore::{WalkBuilder, WalkState};
+use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    io::{BufRead, BufReader, Read, Seek},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::OnceLock,
     time::{Duration, Instant, UNIX_EPOCH},
 };
 
@@ -52,6 +52,13 @@ pub struct MediaItem {
     pub media_path: String,
     pub thumbnail_path: String,
     pub metadata: Vec<MediaMetadataField>,
+    #[serde(default = "default_metadata_loaded")]
+    pub metadata_loaded: bool,
+}
+
+fn default_metadata_loaded() -> bool {
+    // Rows written before deferred extraction already contain full EXIF.
+    true
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -85,23 +92,19 @@ struct MediaFormat {
     format: &'static str,
 }
 
-struct PathBatchCollector {
-    batches: Arc<Mutex<Vec<Vec<PathBuf>>>>,
-    paths: Vec<PathBuf>,
-}
+static MEDIA_WORKERS: OnceLock<Result<rayon::ThreadPool, String>> = OnceLock::new();
 
-impl Drop for PathBatchCollector {
-    fn drop(&mut self) {
-        if self.paths.is_empty() {
-            return;
-        }
-
-        let mut batches = match self.batches.lock() {
-            Ok(batches) => batches,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        batches.push(std::mem::take(&mut self.paths));
-    }
+fn media_workers() -> Result<&'static rayon::ThreadPool, String> {
+    MEDIA_WORKERS
+        .get_or_init(|| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(media_scan_worker_count())
+                .thread_name(|index| format!("cultivator-media-{index}"))
+                .build()
+                .map_err(|error| format!("Failed to create media workers: {error}"))
+        })
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,60 +210,71 @@ where
         current_path: String::new(),
     });
 
-    let worker_count = media_scan_worker_count();
-    let scan_paths = collect_scan_paths(paths, worker_count, cancelled);
-    cancellation::checkpoint(cancelled)?;
-    let total_files = scan_paths.len() as u64;
-
-    progress(MediaScanProgress {
-        scanned_files: 0,
-        total_files,
-        matched_files: 0,
-        current_path: String::new(),
-    });
-
-    if total_files > 0 {
-        let worker_pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(worker_count)
-            .thread_name(|index| format!("cultivator-media-{index}"))
-            .build()
-            .map_err(|error| format!("Failed to create media scan worker pool: {error}"))?;
-        let chunk_size = (worker_count * SCAN_CHUNK_FILES_PER_WORKER).clamp(64, 256);
-
-        for chunk in scan_paths.chunks(chunk_size) {
-            cancellation::checkpoint(cancelled)?;
-            let results = worker_pool.install(|| {
-                chunk
-                    .par_iter()
-                    .map(|path| {
-                        cancellation::checkpoint(cancelled)?;
-                        process_media_item(path)
-                    })
-                    .collect::<Vec<_>>()
-            });
-
-            cancellation::checkpoint(cancelled)?;
-            for (path, result) in chunk.iter().zip(results) {
-                if let Some(item) = result? {
-                    match item.media_type {
-                        MediaType::Image => photos.push(item),
-                        MediaType::Video => videos.push(item),
-                    }
+    let worker_pool = media_workers()?;
+    let chunk_size =
+        (worker_pool.current_num_threads() * SCAN_CHUNK_FILES_PER_WORKER).clamp(64, 256);
+    // Normalize overlapping roots once; do not retain every discovered file path.
+    let roots = scan_roots(paths);
+    let mut chunk = Vec::with_capacity(chunk_size);
+    let mut process_chunk = |chunk: &mut Vec<PathBuf>| -> Result<(), String> {
+        cancellation::checkpoint(cancelled)?;
+        let results = worker_pool.install(|| {
+            chunk
+                .par_iter()
+                .map(|path| {
+                    cancellation::checkpoint(cancelled)?;
+                    process_media_item(path)
+                })
+                .collect::<Vec<_>>()
+        });
+        for (path, result) in chunk.iter().zip(results) {
+            if let Some(item) = result? {
+                match item.media_type {
+                    MediaType::Image => photos.push(item),
+                    MediaType::Video => videos.push(item),
                 }
-
-                scanned_files += 1;
-                maybe_report_progress(
-                    path,
-                    scanned_files,
-                    total_files,
-                    (photos.len() + videos.len()) as u64,
-                    &mut last_progress_file_count,
-                    &mut last_progress_at,
-                    &mut progress,
-                );
+            }
+            scanned_files += 1;
+            maybe_report_progress(
+                path,
+                scanned_files,
+                0,
+                (photos.len() + videos.len()) as u64,
+                &mut last_progress_file_count,
+                &mut last_progress_at,
+                &mut progress,
+            );
+        }
+        chunk.clear();
+        Ok(())
+    };
+    for root in roots {
+        let mut walker = WalkBuilder::new(root);
+        walker
+            .hidden(false)
+            .ignore(false)
+            .parents(false)
+            .git_global(false)
+            .git_ignore(false)
+            .git_exclude(false);
+        for entry in walker.build() {
+            cancellation::checkpoint(cancelled)?;
+            let entry = entry.map_err(|error| format!("Failed to discover media: {error}"))?;
+            if entry.file_type().is_some_and(|kind| kind.is_file()) {
+                chunk.push(entry.into_path());
+                if chunk.len() == chunk_size {
+                    process_chunk(&mut chunk)?;
+                }
             }
         }
     }
+    if !chunk.is_empty() {
+        process_chunk(&mut chunk)?;
+    }
+    // Presentation order remains stable regardless of traversal order.
+    photos.sort_by(|a, b| a.path.cmp(&b.path));
+    videos.sort_by(|a, b| a.path.cmp(&b.path));
+    let total_files = scanned_files;
 
     progress(MediaScanProgress {
         scanned_files,
@@ -288,70 +302,20 @@ fn media_scan_worker_count() -> usize {
     crate::jobs::cpu_parallelism().min(MAX_SCAN_WORKERS)
 }
 
-fn collect_scan_paths(
-    paths: Vec<String>,
-    worker_count: usize,
-    cancelled: Check<'_>,
-) -> Vec<PathBuf> {
-    let roots = paths
+fn scan_roots(paths: Vec<String>) -> Vec<PathBuf> {
+    let mut roots = paths
         .into_iter()
-        .map(PathBuf::from)
-        .filter(|root| root.exists())
+        .filter_map(|path| fs::canonicalize(path).ok())
         .collect::<Vec<_>>();
-    let Some((first_root, additional_roots)) = roots.split_first() else {
-        return Vec::new();
-    };
-
-    let batches = Arc::new(Mutex::new(Vec::<Vec<PathBuf>>::new()));
-    let mut walker = WalkBuilder::new(first_root);
-    for root in additional_roots {
-        walker.add(root);
+    roots.sort();
+    roots.dedup();
+    let mut unique = Vec::<PathBuf>::new();
+    for root in roots {
+        if !unique.iter().any(|parent| root.starts_with(parent)) {
+            unique.push(root);
+        }
     }
-    walker
-        .hidden(false)
-        .ignore(false)
-        .parents(false)
-        .git_global(false)
-        .git_ignore(false)
-        .git_exclude(false)
-        .threads(worker_count);
-
-    walker.build_parallel().run(|| {
-        let mut collector = PathBatchCollector {
-            batches: Arc::clone(&batches),
-            paths: Vec::new(),
-        };
-
-        Box::new(move |entry| {
-            if cancelled() {
-                return WalkState::Quit;
-            }
-            if let Ok(entry) = entry {
-                if entry
-                    .file_type()
-                    .is_some_and(|file_type| file_type.is_file())
-                {
-                    collector.paths.push(entry.into_path());
-                }
-            }
-
-            WalkState::Continue
-        })
-    });
-
-    let mut scan_paths = Vec::new();
-    let mut collected_batches = match batches.lock() {
-        Ok(batches) => batches,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    for batch in collected_batches.drain(..) {
-        scan_paths.extend(batch);
-    }
-    drop(collected_batches);
-
-    scan_paths.sort();
-    scan_paths.dedup();
-    scan_paths
+    unique
 }
 
 fn maybe_report_progress<F>(
@@ -387,7 +351,7 @@ fn maybe_report_progress<F>(
 fn process_media_item(path: &Path) -> Result<Option<MediaItem>, String> {
     let file = fs::File::open(path)
         .map_err(|error| format!("Failed to open '{}': {error}", path.display()))?;
-    let mut reader = BufReader::new(file);
+    let mut reader = BufReader::with_capacity(4096, file);
     let mut header = [0u8; MAX_HEADER_BYTES];
     let bytes_read = reader
         .read(&mut header)
@@ -408,11 +372,7 @@ fn process_media_item(path: &Path) -> Result<Option<MediaItem>, String> {
     let media_path = path.to_string_lossy().to_string();
 
     let (width, height) = image_dimensions(format, &mut reader, header);
-    let mut item_metadata = if format_supports_exif(format.format) {
-        read_exif_metadata(&mut reader)
-    } else {
-        Vec::new()
-    };
+    let mut item_metadata = Vec::new();
     if let Some(png_header) = parse_png_header(header) {
         item_metadata.splice(0..0, png_signature_metadata(png_header));
     }
@@ -430,6 +390,7 @@ fn process_media_item(path: &Path) -> Result<Option<MediaItem>, String> {
         media_path: media_path.clone(),
         thumbnail_path: media_path,
         metadata: item_metadata,
+        metadata_loaded: !format_supports_exif(format.format),
     };
 
     Ok(Some(item))
@@ -550,7 +511,7 @@ where
             i32::from_le_bytes([header[18], header[19], header[20], header[21]]).unsigned_abs(),
             i32::from_le_bytes([header[22], header[23], header[24], header[25]]).unsigned_abs(),
         )),
-        "JPEG" => image_size_from_reader(reader).or_else(|| jpeg_dimensions(reader)),
+        "JPEG" => jpeg_dimensions(reader),
         _ if matches!(format.media_type, MediaType::Image) => image_size_from_reader(reader),
         _ => None,
     };
@@ -564,7 +525,8 @@ fn image_size_from_reader<R>(reader: &mut R) -> Option<(u32, u32)>
 where
     R: BufRead + Seek,
 {
-    reader.rewind().ok()?;
+    let position = i64::try_from(reader.stream_position().ok()?).ok()?;
+    reader.seek_relative(-position).ok()?;
     let size = imagesize::reader_size(reader).ok()?;
     Some((
         u32::try_from(size.width).ok()?,
@@ -574,9 +536,10 @@ where
 
 fn jpeg_dimensions<R>(reader: &mut R) -> Option<(u32, u32)>
 where
-    R: Read + Seek,
+    R: BufRead + Seek,
 {
-    reader.rewind().ok()?;
+    let position = i64::try_from(reader.stream_position().ok()?).ok()?;
+    reader.seek_relative(-position).ok()?;
     let mut signature = [0u8; 2];
     reader.read_exact(&mut signature).ok()?;
     if signature != [0xff, 0xd8] {
@@ -608,9 +571,7 @@ where
             return Some((width, height));
         }
 
-        reader
-            .seek(SeekFrom::Current(i64::from(segment_length) - 2))
-            .ok()?;
+        reader.seek_relative(i64::from(segment_length) - 2).ok()?;
     }
 }
 
@@ -742,6 +703,16 @@ fn format_supports_exif(format: &str) -> bool {
     )
 }
 
+pub fn load_metadata(mut item: MediaItem) -> Result<MediaItem, String> {
+    if !item.metadata_loaded {
+        let file = fs::File::open(&item.path).map_err(|error| error.to_string())?;
+        let mut reader = BufReader::new(file);
+        item.metadata.extend(read_exif_metadata(&mut reader));
+        item.metadata_loaded = true;
+    }
+    Ok(item)
+}
+
 fn read_exif_metadata<R>(reader: &mut R) -> Vec<MediaMetadataField>
 where
     R: BufRead + Seek,
@@ -801,6 +772,56 @@ fn display_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_defers_exif_and_details_preserve_source() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("photo.jpg");
+        let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0".to_vec();
+        // One TIFF orientation field, value 6 (rotate 90 degrees).
+        exif.extend_from_slice(&[1, 0, 0x12, 1, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0]);
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpeg.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        jpeg.extend(exif);
+        jpeg.extend_from_slice(&jpeg_with_fill_byte_marker(640, 480)[2..]);
+        fs::write(&path, &jpeg).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let item = process_media_item(&path).unwrap().unwrap();
+        assert_eq!((item.width, item.height), (Some(640), Some(480)));
+        assert!(item.metadata.is_empty());
+        assert!(!item.metadata_loaded);
+        let item = load_metadata(item).unwrap();
+        assert!(item.metadata_loaded);
+        assert!(item
+            .metadata
+            .iter()
+            .any(|field| field.label == "Orientation"));
+        let count = item.metadata.len();
+        assert_eq!(load_metadata(item).unwrap().metadata.len(), count);
+        assert_eq!(fs::read(&path).unwrap(), jpeg);
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
+    fn streaming_scan_reports_unknown_total_and_can_cancel_between_batches() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..650 {
+            fs::write(root.path().join(format!("{index}.txt")), b"not an image").unwrap();
+        }
+        let cancelled = AtomicBool::new(false);
+        let result = execute_with_cancellation(
+            vec![root.path().to_string_lossy().into_owned()],
+            &|| cancelled.load(Ordering::Relaxed),
+            |event| {
+                assert_eq!(event.total_files, 0);
+                if event.scanned_files >= 500 {
+                    cancelled.store(true, Ordering::Relaxed);
+                }
+            },
+        );
+        assert!(result.err().unwrap().contains("cancelled"));
+    }
 
     #[test]
     fn parses_standard_png_dimensions() {
@@ -918,15 +939,29 @@ mod tests {
         let root = std::env::var("CULTIVATOR_MEDIA_BENCH_PATH")
             .expect("CULTIVATOR_MEDIA_BENCH_PATH must name the benchmark root");
         let started_at = Instant::now();
-        let gallery =
-            execute_with_progress(vec![root], |_| {}).expect("benchmark media scan succeeds");
+        let mut first_progress_ms = None;
+        let gallery = execute_with_progress(vec![root], |event| {
+            if event.scanned_files > 0 && first_progress_ms.is_none() {
+                first_progress_ms = Some(started_at.elapsed().as_millis());
+            }
+        })
+        .expect("benchmark media scan succeeds");
 
         eprintln!(
-            "MEDIA_BENCH elapsed_ms={} scanned_files={} photos={} videos={}",
+            "MEDIA_BENCH elapsed_ms={} first_progress_ms={} scanned_files={} photos={} videos={}",
             started_at.elapsed().as_millis(),
+            first_progress_ms.unwrap_or_default(),
             gallery.scanned_files,
             gallery.photos.len(),
             gallery.videos.len()
+        );
+        let exif_started = Instant::now();
+        for item in gallery.photos {
+            load_metadata(item).expect("benchmark EXIF extraction succeeds");
+        }
+        eprintln!(
+            "MEDIA_BENCH exif_pass_ms={}",
+            exif_started.elapsed().as_millis()
         );
     }
 

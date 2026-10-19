@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
@@ -46,10 +46,16 @@ import { MediaVideoPreview } from "../components/MediaVideoPreview";
 import {
   type FileViewMediaPage,
   listFileViewMediaPage,
-  listMediaGallery,
+  listMediaGalleryPage,
+  loadMediaDetails,
 } from "../services/mediaRepository";
 import type { MediaGalleryResult, MediaItem } from "../model/types";
 import { cn } from "@/lib/utils";
+import { VirtualMediaCache } from "../services/virtualMediaCache";
+import { useLocation } from "react-router-dom";
+import { usePerformanceSettings, recordCacheBytes, thumbnailCacheBytes } from "../../settings/performanceSettings";
+import { GalleryPrefetch, galleryPrefetchRange } from "../services/galleryPrefetch";
+import { clearPreparedThumbnails, prepareThumbnail, useThumbnailEpoch } from "../services/preparedThumbnails";
 
 type MediaGalleryProps = {
   caseDatabasePath: string | null;
@@ -57,9 +63,8 @@ type MediaGalleryProps = {
   emptyText: string;
   icon: typeof FileImage;
   isLoading: boolean;
-  isLoadingMore: boolean;
   mediaType: "image" | "video";
-  onLoadMore: () => void;
+  fetchPage: (type: "image" | "video", offset: number) => Promise<FileViewMediaPage>;
   onSelectItem: (item: MediaItem) => void;
   selectedItem: MediaItem | null;
   tiles: MediaItem[];
@@ -78,13 +83,13 @@ type VirtualizedMediaGridData = {
   mediaType: "image" | "video";
   onSelectItem: (item: MediaItem) => void;
   selectedPath: string | null;
-  tiles: MediaItem[];
+  cache: VirtualMediaCache;
 };
 
 const MEDIA_TILE_MIN_WIDTH = 144;
 const MEDIA_TILE_GAP = 8;
 const MEDIA_TILE_ASPECT_RATIO = 3 / 4;
-const MEDIA_GRID_OVERSCAN_ROWS = 3;
+const MEDIA_GRID_OVERSCAN_SCREENS = 2;
 type MediaSource = "plugin" | "file-view";
 
 export function MediaPage() {
@@ -104,13 +109,15 @@ export function MediaPage() {
   const [isDataSourcesLoading, setIsDataSourcesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  useEffect(() => {
+    // A refresh or source change starts a new indexed-evidence snapshot. Native
+    // requests will revalidate the source fingerprint before repopulating RAM.
+    clearPreparedThumbnails();
+  }, [activeCase?.databasePath, selectedDataSourceId, mediaSource, refreshKey]);
   const [fileViewPages, setFileViewPages] = useState<{
     image: FileViewMediaPage | null;
     video: FileViewMediaPage | null;
   }>({ image: null, video: null });
-  const [loadingMoreType, setLoadingMoreType] = useState<
-    "image" | "video" | null
-  >(null);
   useEffect(() => {
     if (!activeCase) {
       setDataSources([]);
@@ -193,6 +200,9 @@ export function MediaPage() {
     }
 
     let isCurrent = true;
+    setGallery({ photos: [], videos: [] });
+    setFileViewPages({ image: null, video: null });
+    setSelectedItem(null);
 
     setIsLoading(true);
     setError(null);
@@ -200,21 +210,13 @@ export function MediaPage() {
     const selectedDataSource = dataSources.find(
       (dataSource) => dataSource.id === selectedDataSourceId,
     );
-    const galleryRequest: Promise<{
-      gallery: MediaGalleryResult;
-      pages: { image: FileViewMediaPage | null; video: FileViewMediaPage | null };
-    }> =
-      mediaSource === "plugin"
-        ? listMediaGallery(activeCase.databasePath, selectedDataSourceId).then(
-            (gallery) => ({ gallery, pages: { image: null, video: null } }),
-          )
-        : Promise.all([
-            listFileViewMediaPage(selectedDataSource?.paths ?? [], "image"),
-            listFileViewMediaPage(selectedDataSource?.paths ?? [], "video"),
-          ]).then(([image, video]) => ({
-            gallery: { photos: image.items, videos: video.items },
-            pages: { image, video },
-          }));
+    const getPage = (type: "image" | "video") => mediaSource === "plugin"
+      ? listMediaGalleryPage(activeCase.databasePath, selectedDataSourceId, type)
+      : listFileViewMediaPage(selectedDataSource?.paths ?? [], type);
+    const galleryRequest = Promise.all([getPage("image"), getPage("video")])
+      .then(([image, video]) => ({
+        gallery: { photos: image.items, videos: video.items }, pages: { image, video },
+      }));
 
     galleryRequest
       .then(({ gallery: nextGallery, pages }) => {
@@ -271,7 +273,19 @@ export function MediaPage() {
     };
   }, [activeCase, dataSources, mediaSource, refreshKey, selectedDataSourceId]);
 
-  const totalMedia = gallery.photos.length + gallery.videos.length;
+  useEffect(() => {
+    if (!activeCase || !selectedDataSourceId || mediaSource !== "plugin" ||
+        !selectedItem || selectedItem.metadataLoaded) return;
+    let current = true;
+    loadMediaDetails(activeCase.databasePath, selectedDataSourceId, selectedItem.path)
+      .then((item) => { if (current) setSelectedItem(item); })
+      .catch((error) => { if (current) setError(getErrorMessage(error)); });
+    return () => { current = false; };
+  }, [activeCase, selectedDataSourceId, mediaSource, selectedItem]);
+
+  const photoCount = fileViewPages.image?.totalCount ?? 0;
+  const videoCount = fileViewPages.video?.totalCount ?? 0;
+  const totalMedia = photoCount + videoCount;
   const handleSelectItem = (item: MediaItem) => {
     setSelectedItem(item);
 
@@ -279,44 +293,13 @@ export function MediaPage() {
       setPlayerItem(item);
     }
   };
-  const handleLoadMore = async (mediaType: "image" | "video") => {
-    const page = fileViewPages[mediaType];
-    const selectedDataSource = dataSources.find(
-      (dataSource) => dataSource.id === selectedDataSourceId,
-    );
-
-    if (!page?.hasNextPage || !selectedDataSource || loadingMoreType) {
-      return;
-    }
-
-    setLoadingMoreType(mediaType);
-    setError(null);
-
-    try {
-      const nextPage = await listFileViewMediaPage(
-        selectedDataSource.paths,
-        mediaType,
-        page.offset + page.limit,
-      );
-      setGallery((currentGallery) => ({
-        ...currentGallery,
-        [mediaType === "image" ? "photos" : "videos"]: [
-          ...(mediaType === "image"
-            ? currentGallery.photos
-            : currentGallery.videos),
-          ...nextPage.items,
-        ],
-      }));
-      setFileViewPages((currentPages) => ({
-        ...currentPages,
-        [mediaType]: nextPage,
-      }));
-    } catch (caughtError) {
-      setError(getErrorMessage(caughtError));
-    } finally {
-      setLoadingMoreType(null);
-    }
-  };
+  const fetchPage = useCallback((type: "image" | "video", offset: number) => {
+    const datasource = dataSources.find((source) => source.id === selectedDataSourceId);
+    if (!activeCase || !datasource) return Promise.reject(new Error("No datasource selected."));
+    return mediaSource === "plugin"
+      ? listMediaGalleryPage(activeCase.databasePath, datasource.id, type, offset)
+      : listFileViewMediaPage(datasource.paths, type, offset);
+  }, [activeCase, dataSources, selectedDataSourceId, mediaSource]);
 
   const selectedDataSource = useMemo(() => {
     return (
@@ -337,8 +320,8 @@ export function MediaPage() {
         </div>
         <Separator orientation="vertical" className="h-5" />
         <div className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
-          <span>Photos: {gallery.photos.length.toLocaleString()}</span>
-          <span>Videos: {gallery.videos.length.toLocaleString()}</span>
+          <span>Photos: {photoCount.toLocaleString()}</span>
+          <span>Videos: {videoCount.toLocaleString()}</span>
           <span>Items: {totalMedia.toLocaleString()}</span>
         </div>
         <Separator orientation="vertical" className="h-5" />
@@ -349,7 +332,7 @@ export function MediaPage() {
             variant={mediaSource === "plugin" ? "secondary" : "ghost"}
             size="xs"
             className="h-7 rounded-sm px-2 text-xs"
-            disabled={isLoading || loadingMoreType !== null}
+            disabled={isLoading}
             onClick={() => setMediaSource("plugin")}
           >
             Plugin
@@ -359,7 +342,7 @@ export function MediaPage() {
             variant={mediaSource === "file-view" ? "secondary" : "ghost"}
             size="xs"
             className="h-7 rounded-sm px-2 text-xs"
-            disabled={isLoading || loadingMoreType !== null}
+            disabled={isLoading}
             onClick={() => setMediaSource("file-view")}
           >
             File View
@@ -380,7 +363,7 @@ export function MediaPage() {
                 }
                 size="xs"
                 className="h-7 max-w-40 rounded-sm px-2 text-xs"
-                disabled={isLoading || loadingMoreType !== null}
+                disabled={isLoading}
                 title={dataSource.name}
                 onClick={() => setSelectedDataSourceId(dataSource.id)}
               >
@@ -399,7 +382,7 @@ export function MediaPage() {
           variant="ghost"
           size="xs"
           className="ml-auto h-7 rounded-sm px-2 text-xs"
-          disabled={!activeCase || isLoading || loadingMoreType !== null}
+          disabled={!activeCase || isLoading}
           onClick={() => setRefreshKey((key) => key + 1)}
         >
           <RefreshCw className={cn("size-3.5", isLoading && "animate-spin")} />
@@ -457,9 +440,8 @@ export function MediaPage() {
                 : "No files with image extensions were found in this datasource."
             }
             isLoading={isLoading}
-            isLoadingMore={loadingMoreType === "image"}
             mediaType="image"
-            onLoadMore={() => void handleLoadMore("image")}
+            fetchPage={fetchPage}
             selectedItem={selectedItem?.mediaType === "image" ? selectedItem : null}
             onSelectItem={handleSelectItem}
             totalCount={fileViewPages.image?.totalCount}
@@ -478,9 +460,8 @@ export function MediaPage() {
                 : "No files with video extensions were found in this datasource."
             }
             isLoading={isLoading}
-            isLoadingMore={loadingMoreType === "video"}
             mediaType="video"
-            onLoadMore={() => void handleLoadMore("video")}
+            fetchPage={fetchPage}
             selectedItem={selectedItem?.mediaType === "video" ? selectedItem : null}
             onSelectItem={handleSelectItem}
             totalCount={fileViewPages.video?.totalCount}
@@ -499,9 +480,8 @@ function MediaGallery({
   emptyText,
   icon: Icon,
   isLoading,
-  isLoadingMore,
   mediaType,
-  onLoadMore,
+  fetchPage,
   onSelectItem,
   selectedItem,
   tiles,
@@ -515,25 +495,8 @@ function MediaGallery({
           <Icon className="size-3.5 text-muted-foreground" aria-hidden="true" />
           <h2 className="text-xs font-medium">{title}</h2>
           <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
-            {tiles.length.toLocaleString()}
+            {(totalCount ?? tiles.length).toLocaleString()}
           </Badge>
-          {totalCount !== undefined && totalCount > tiles.length && (
-            <Button
-              type="button"
-              variant="outline"
-              size="xs"
-              className="ml-auto h-6 rounded-sm px-2 text-[11px]"
-              disabled={isLoadingMore}
-              onClick={onLoadMore}
-            >
-              <RefreshCw
-                className={cn("size-3", isLoadingMore && "animate-spin")}
-              />
-              {isLoadingMore
-                ? "Loading..."
-                : `Load next ${Math.min(10_000, totalCount - tiles.length).toLocaleString()}`}
-            </Button>
-          )}
         </div>
         <div className="min-h-0 flex-1 overflow-hidden p-2">
           {tiles.length > 0 ? (
@@ -543,6 +506,8 @@ function MediaGallery({
               onSelectItem={onSelectItem}
               selectedPath={selectedItem?.path ?? null}
               tiles={tiles}
+              totalCount={totalCount ?? tiles.length}
+              fetchPage={fetchPage}
             />
           ) : (
             <div className="flex h-full min-h-24 items-center justify-center text-xs text-muted-foreground">
@@ -563,14 +528,46 @@ function VirtualizedMediaGrid({
   onSelectItem,
   selectedPath,
   tiles,
+  totalCount,
+  fetchPage,
 }: {
   caseDatabasePath: string | null;
   mediaType: "image" | "video";
   onSelectItem: (item: MediaItem) => void;
   selectedPath: string | null;
   tiles: MediaItem[];
+  totalCount: number;
+  fetchPage: MediaGalleryProps["fetchPage"];
 }) {
   const [containerRef, size] = useElementSize<HTMLDivElement>();
+  const [revision, setRevision] = useState(0);
+  const [visibleRange, setVisibleRange] = useState({ start: 0, stop: 0, direction: 1 });
+  const settings = usePerformanceSettings();
+  const epoch = useThumbnailEpoch();
+  const location = useLocation();
+  const cache = useMemo(() => new VirtualMediaCache(
+    { items: tiles, offset: 0, limit: 500, totalCount, hasNextPage: totalCount > tiles.length },
+    (offset) => fetchPage(mediaType, offset),
+    () => setRevision((value) => value + 1),
+  ), [tiles, totalCount, fetchPage, mediaType]);
+  useEffect(() => {
+    cache.activate();
+    return () => cache.dispose();
+  }, [cache]);
+  const prefetch = useMemo(() => new GalleryPrefetch(
+    (index) => cache.itemAt(index),
+    (item, priority) => prepareThumbnail(caseDatabasePath!, item, priority),
+  ), [cache, caseDatabasePath, epoch]);
+  useEffect(() => () => prefetch.dispose(), [prefetch]);
+  useEffect(() => {
+    cache.setBudget(recordCacheBytes(settings));
+    if (size.height <= 0 || location.pathname !== "/media") { prefetch.dispose(); return; }
+    const range = galleryPrefetchRange(visibleRange.start, visibleRange.stop, totalCount,
+      settings.screensAhead, settings.screensBehind, visibleRange.direction,
+      Math.floor(thumbnailCacheBytes(settings) / (256 * 256 * 4 + 4096)));
+    cache.setRange(range.start, range.stop);
+    if (mediaType === "image" && caseDatabasePath) prefetch.update(range);
+  }, [cache, prefetch, visibleRange, settings, size.height, location.pathname, totalCount, mediaType, caseDatabasePath, revision]);
   const columnCount = Math.max(
     1,
     Math.floor(Math.max(size.width, MEDIA_TILE_MIN_WIDTH) / MEDIA_TILE_MIN_WIDTH),
@@ -582,26 +579,39 @@ function VirtualizedMediaGrid({
   const rowHeight =
     Math.round((columnWidth - MEDIA_TILE_GAP) * MEDIA_TILE_ASPECT_RATIO) +
     MEDIA_TILE_GAP;
-  const rowCount = Math.ceil(tiles.length / columnCount);
+  const rowCount = Math.ceil(totalCount / columnCount);
   const gridData: VirtualizedMediaGridData = {
     caseDatabasePath,
     columnCount,
     mediaType,
     onSelectItem,
     selectedPath,
-    tiles,
+    cache,
   };
 
   return (
-    <div ref={containerRef} className="h-full min-h-0 w-full overflow-hidden">
+    <div ref={containerRef} className="relative h-full min-h-0 w-full overflow-hidden">
+      {cache.hasError && (
+        <div role="status" className="absolute right-2 top-2 z-10 flex items-center gap-2 rounded-sm border bg-background p-2 text-xs">
+          Some images could not be loaded.
+          <Button size="xs" variant="outline" onClick={() => cache.retry()}>Retry</Button>
+        </div>
+      )}
       {size.width > 0 && size.height > 0 ? (
         <FixedSizeGrid<VirtualizedMediaGridData>
+          className="media-gallery-scroll"
           columnCount={columnCount}
           columnWidth={columnWidth}
           height={size.height}
           itemData={gridData}
+          onItemsRendered={({ visibleRowStartIndex, visibleRowStopIndex }) => {
+            const start = visibleRowStartIndex * columnCount;
+            const stop = Math.min(totalCount - 1, (visibleRowStopIndex + 1) * columnCount - 1);
+            setVisibleRange((previous) => previous.start === start && previous.stop === stop ? previous :
+              { start, stop, direction: start === previous.start ? previous.direction : start < previous.start ? -1 : 1 });
+          }}
           overscanColumnCount={1}
-          overscanRowCount={MEDIA_GRID_OVERSCAN_ROWS}
+          overscanRowCount={Math.max(3, Math.ceil(size.height / rowHeight) * MEDIA_GRID_OVERSCAN_SCREENS)}
           rowCount={rowCount}
           rowHeight={rowHeight}
           width={size.width}
@@ -620,10 +630,15 @@ function MediaGridCell({
   style,
 }: GridChildComponentProps<VirtualizedMediaGridData>) {
   const itemIndex = rowIndex * data.columnCount + columnIndex;
-  const tile = data.tiles[itemIndex];
+  const tile = data.cache.itemAt(itemIndex);
 
+  if (itemIndex >= data.cache.totalCount) return null;
   if (!tile) {
-    return null;
+    return (
+      <div style={style} className="p-1" aria-label="Loading media item">
+        <div className="h-full w-full animate-pulse rounded-sm border bg-muted" />
+      </div>
+    );
   }
 
   return (

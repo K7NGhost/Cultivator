@@ -17,6 +17,7 @@ export type MediaItem = {
   durationMs?: number | null;
   mediaPath: string;
   thumbnailPath: string;
+  metadataLoaded?: boolean;
   metadata: Array<{
     label: string;
     value: string;

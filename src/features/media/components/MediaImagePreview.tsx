@@ -2,13 +2,9 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { ImageOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { renderMediaThumbnail } from "../services/mediaRepository";
+import { prepareThumbnail, thumbnailKey, usePreparedThumbnail, useThumbnailEpoch } from "../services/preparedThumbnails";
 import type { MediaItem } from "../model/types";
 import { cn } from "@/lib/utils";
-
-const convertedPreviewPaths = new Map<string, string>();
-const failedPreviewKeys = new Set<string>();
-const pendingPreviewRequests = new Map<string, Promise<string>>();
 
 type MediaImagePreviewProps = {
   caseDatabasePath: string | null;
@@ -16,118 +12,48 @@ type MediaImagePreviewProps = {
   item: MediaItem;
 };
 
-export function MediaImagePreview({
-  caseDatabasePath,
-  className,
-  item,
-}: MediaImagePreviewProps) {
-  const previewKey = createPreviewKey(caseDatabasePath, item);
-  const requestGeneration = useRef(0);
-  const [source, setSource] = useState(() => initialSource(previewKey, item));
-  const [fallbackAttempted, setFallbackAttempted] = useState(() =>
-    convertedPreviewPaths.has(previewKey),
-  );
-  const [failed, setFailed] = useState(() => failedPreviewKeys.has(previewKey));
+export function MediaImagePreview({ caseDatabasePath, className, item }: MediaImagePreviewProps) {
+  const container = useRef<HTMLDivElement>(null);
+  const [preview, setPreview] = useState<{ key: string; source?: string; failed?: boolean }>();
+  useThumbnailEpoch();
+  const key = thumbnailKey(caseDatabasePath, item);
+  const cachedSource = usePreparedThumbnail(key);
 
   useEffect(() => {
-    requestGeneration.current += 1;
-    setSource(initialSource(previewKey, item));
-    setFallbackAttempted(convertedPreviewPaths.has(previewKey));
-    setFailed(failedPreviewKeys.has(previewKey));
-  }, [item, previewKey]);
-
-  async function handleLoadError() {
-    if (fallbackAttempted || !caseDatabasePath) {
-      failedPreviewKeys.add(previewKey);
-      setFailed(true);
-      return;
-    }
-
-    setFallbackAttempted(true);
-    const generation = requestGeneration.current;
-
-    try {
-      const previewPath = await getConvertedPreview(
-        previewKey,
-        caseDatabasePath,
-        item.mediaPath,
-      );
-
-      if (generation === requestGeneration.current) {
-        setSource(convertFileSrc(previewPath));
-      }
-    } catch {
-      failedPreviewKeys.add(previewKey);
-      if (generation === requestGeneration.current) {
-        setFailed(true);
-      }
-    }
-  }
-
-  if (failed) {
-    return (
-      <div
-        className={cn(
-          "flex items-center justify-center bg-muted text-muted-foreground",
-          className,
-        )}
-        aria-label={`${item.name} preview unavailable`}
-      >
-        <ImageOff className="size-5" aria-hidden="true" />
-      </div>
-    );
-  }
-
-  return (
-    <img
-      src={source}
-      alt={item.name}
-      className={className}
-      draggable={false}
-      loading="lazy"
-      onError={() => void handleLoadError()}
-    />
-  );
-}
-
-function initialSource(previewKey: string, item: MediaItem) {
-  const convertedPath = convertedPreviewPaths.get(previewKey);
-  return convertFileSrc(convertedPath ?? item.thumbnailPath ?? item.mediaPath);
-}
-
-function createPreviewKey(caseDatabasePath: string | null, item: MediaItem) {
-  return [
-    caseDatabasePath ?? "no-case",
-    item.mediaPath,
-    item.size,
-    item.modifiedMs ?? "unknown",
-  ].join("\u0000");
-}
-
-function getConvertedPreview(
-  previewKey: string,
-  caseDatabasePath: string,
-  sourcePath: string,
-) {
-  const existingPath = convertedPreviewPaths.get(previewKey);
-  if (existingPath) {
-    return Promise.resolve(existingPath);
-  }
-
-  const existingRequest = pendingPreviewRequests.get(previewKey);
-  if (existingRequest) {
-    return existingRequest;
-  }
-
-  const request = renderMediaThumbnail(caseDatabasePath, sourcePath)
-    .then((previewPath) => {
-      convertedPreviewPaths.set(previewKey, previewPath);
-      return previewPath;
-    })
-    .finally(() => {
-      pendingPreviewRequests.delete(previewKey);
+    let current = true;
+    const element = container.current;
+    if (!element || !caseDatabasePath) return;
+    const root = element.closest(".media-gallery-scroll");
+    const priorityFor = () => {
+      const bounds = element.getBoundingClientRect();
+      const viewport = root?.getBoundingClientRect() ?? { top: 0, left: 0, right: window.innerWidth, bottom: window.innerHeight };
+      return bounds.bottom > viewport.top && bounds.top < viewport.bottom && bounds.right > viewport.left && bounds.left < viewport.right
+        ? "visible" as const : "nearby" as const;
+    };
+    // Every mounted overscan tile starts loading now, even when it is several
+    // screens outside the clipped viewport. The range prefetcher goes further.
+    const request = prepareThumbnail(caseDatabasePath, item, priorityFor());
+    request.promise.then((source) => {
+      if (current && source) setPreview({ key, source });
+    }).catch(() => {
+      // Keep browser-supported images viewable if the decoder is unavailable.
+      if (current) setPreview({ key, source: convertFileSrc(item.mediaPath) });
     });
+    const visibleObserver = new IntersectionObserver(() => request.setPriority(priorityFor()), { root });
+    visibleObserver.observe(element);
+    return () => { current = false; visibleObserver.disconnect(); request.release(); };
+  }, [caseDatabasePath, key, item.id, item.mediaPath]);
 
-  pendingPreviewRequests.set(previewKey, request);
-  return request;
+  const state: { source?: string; failed?: boolean } | undefined = preview?.key === key ? preview : cachedSource ? { source: cachedSource } : undefined;
+  return (
+    <div ref={container} className={cn("flex items-center justify-center overflow-hidden bg-muted", className)}>
+      {state?.failed ? (
+        <ImageOff className="size-5 text-muted-foreground" aria-label={`${item.name} preview unavailable`} />
+      ) : state?.source ? (
+        <img src={state.source} alt={item.name} className="h-full w-full object-cover"
+          draggable={false} loading="eager" decoding="async"
+          onError={() => setPreview({ key, failed: true })} />
+      ) : <span className="sr-only">Loading {item.name}</span>}
+    </div>
+  );
 }

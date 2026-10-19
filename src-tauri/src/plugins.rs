@@ -16,7 +16,6 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
@@ -32,13 +31,15 @@ mod cancellation;
 mod execution;
 mod job_persistence;
 mod job_progress;
+mod media_queries;
 pub use execution::{
     cancel_plugin_job, get_plugin_run, pause_plugin_job, pause_plugin_run, submit_plugin_run,
     PluginRunSnapshot, SubmitPluginRunRequest, SubmittedPluginRun,
 };
 pub(crate) use job_persistence::initialize as initialize_job_manager;
+pub use media_queries::{list_media_gallery_page, load_media_details, MediaGalleryPage};
 
-pub use builtin::MediaGallery;
+pub use builtin::{MediaGallery, MediaItem};
 pub use bundle::{
     ExportPythonPluginsRequest, ImportPythonPluginsRequest, PluginBundleExportResult,
     PluginBundleImportResult,
@@ -54,8 +55,6 @@ const LEGACY_DEMO_PLUGIN_IDS: &[&str] = &[
     "sample-error",
 ];
 const LEGACY_DEMO_ARTIFACT_KINDS: &[&str] = &["file_metadata", "text_sample"];
-const MEDIA_PREVIEW_MAX_DIMENSION: u32 = 1_600;
-const MEDIA_PREVIEW_PYTHON: &str = crate::scripting::MEDIA_WORKER;
 
 static NEXT_ID_SUFFIX: AtomicU64 = AtomicU64::new(1);
 static PLUGIN_CANCELLATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
@@ -868,124 +867,97 @@ pub async fn list_media_gallery(
     })
 }
 
+static THUMBNAILS: OnceLock<Result<crate::thumbnails::ThumbnailService, String>> = OnceLock::new();
+static THUMBNAIL_MEMORY_OVERRIDE: AtomicU64 = AtomicU64::new(0);
+
+pub fn configure_thumbnail_memory(memory_mb: u64) -> Result<(), String> {
+    if !(256..=4096).contains(&memory_mb) {
+        return Err("Thumbnail memory budget must be between 256 and 4096 MiB.".into());
+    }
+    let bytes = memory_mb * 1024 * 1024;
+    THUMBNAIL_MEMORY_OVERRIDE.store(bytes, Ordering::Release);
+    if let Some(Ok(service)) = THUMBNAILS.get() {
+        service.set_memory_budget(bytes)?;
+    }
+    Ok(())
+}
+
+fn thumbnail_service(
+    app_handle: &AppHandle,
+) -> Result<&'static crate::thumbnails::ThumbnailService, String> {
+    let runtime_root = python_runtime_directory(app_handle)?;
+    let service = THUMBNAILS
+        .get_or_init(|| {
+            let fallback: crate::thumbnails::Fallback =
+                Arc::new(move |source, target, budget, cancelled| {
+                    let python = runtime::prepare_media(&runtime_root)?;
+                    crate::thumbnails::python::render_cancellable(
+                        &python.executable,
+                        source,
+                        target,
+                        crate::thumbnails::EDGE,
+                        Some(budget),
+                        Some(cancelled),
+                    )
+                });
+            let mut config = crate::thumbnails::Config::from_env();
+            let bytes = THUMBNAIL_MEMORY_OVERRIDE.load(Ordering::Acquire);
+            if bytes > 0 {
+                config.memory_bytes = bytes;
+            }
+            crate::thumbnails::ThumbnailService::new(config, Some(fallback))
+        })
+        .as_ref()
+        .map_err(Clone::clone)?;
+    // Cover an update arriving while OnceLock was constructing the workers.
+    let bytes = THUMBNAIL_MEMORY_OVERRIDE.load(Ordering::Acquire);
+    if bytes > 0 {
+        service.set_memory_budget(bytes)?;
+    }
+    Ok(service)
+}
+
 pub async fn render_media_thumbnail(
     app_handle: AppHandle,
     case_database_path: String,
     source_path: String,
-) -> Result<String, String> {
-    let root = python_runtime_directory(&app_handle)?;
-
-    tauri::async_runtime::spawn_blocking(move || {
-        let runtime = runtime::prepare_media(&root)?;
-        render_media_thumbnail_file(&runtime, &case_database_path, &source_path)
-    })
-    .await
-    .map_err(|error| format!("Media preview worker failed: {error}"))?
+    media_id: String,
+    request_id: String,
+    priority: crate::thumbnails::Priority,
+) -> Result<crate::thumbnails::Thumbnail, String> {
+    let service = thumbnail_service(&app_handle)?;
+    // Dedicated application cache, scoped by case, never beneath evidence roots.
+    use sha2::{Digest, Sha256};
+    let case = fs::canonicalize(&case_database_path).map_err(|e| e.to_string())?;
+    let case_key = format!("{:x}", Sha256::digest(case.to_string_lossy().as_bytes()));
+    let cache = app_handle
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("thumbnails")
+        .join(case_key);
+    service
+        .submit(
+            &cache,
+            &media_id,
+            Path::new(&source_path),
+            request_id,
+            priority,
+        )?
+        .await
+        .map_err(|_| "Thumbnail worker disconnected.".to_string())?
 }
 
-fn render_media_thumbnail_file(
-    python_runtime: &PythonRuntime,
-    case_database_path: &str,
-    source_path: &str,
-) -> Result<String, String> {
-    let source = fs::canonicalize(source_path)
-        .map_err(|error| format!("Media file is unavailable '{}': {error}", source_path))?;
-    let source_metadata = fs::metadata(&source).map_err(|error| {
-        format!(
-            "Failed to inspect media file '{}': {error}",
-            source.display()
-        )
-    })?;
-
-    if !source_metadata.is_file() {
-        return Err(format!("Media path is not a file: '{}'", source.display()));
+pub fn update_media_thumbnail(
+    app_handle: &AppHandle,
+    request_id: &str,
+    priority: Option<crate::thumbnails::Priority>,
+) -> Result<(), String> {
+    if request_id.is_empty() || request_id.len() > 256 {
+        return Err("Invalid thumbnail request ID.".into());
     }
-
-    let case_folder = PathBuf::from(case_database_path)
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| "Case database path has no parent folder.".to_string())?;
-    let cache_root = case_folder.join("artifacts").join("media-previews");
-    fs::create_dir_all(&cache_root).map_err(|error| {
-        format!(
-            "Failed to create media preview cache '{}': {error}",
-            cache_root.display()
-        )
-    })?;
-
-    let mut hasher = DefaultHasher::new();
-    source.to_string_lossy().hash(&mut hasher);
-    source_metadata.len().hash(&mut hasher);
-    source_metadata.modified().ok().hash(&mut hasher);
-    let cache_key = hasher.finish();
-    let cached_path = cache_root.join(format!("{cache_key:016x}.jpg"));
-
-    if cached_path.is_file() {
-        return Ok(cached_path.to_string_lossy().to_string());
-    }
-
-    let temporary_path = cache_root.join(format!(
-        ".{cache_key:016x}-{}-{}.tmp.jpg",
-        std::process::id(),
-        NEXT_ID_SUFFIX.fetch_add(1, Ordering::Relaxed)
-    ));
-    let mut command = ProcessCommand::new(&python_runtime.executable);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // Preview decoding runs in the background, including in release builds.
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    command
-        .arg("-I")
-        .arg("-B")
-        .arg("-c")
-        .arg(MEDIA_PREVIEW_PYTHON)
-        .arg(&source)
-        .arg(&temporary_path)
-        .arg(MEDIA_PREVIEW_MAX_DIMENSION.to_string());
-
-    runtime::configure_worker(&mut command);
-
-    let output = command.output().map_err(|error| {
-        format!(
-            "Failed to start media preview decoder '{}': {error}",
-            python_runtime.executable.display()
-        )
-    })?;
-
-    if !output.status.success() || !temporary_path.is_file() {
-        // A failed conversion may leave a partial JPEG. It must never be reused.
-        let _ = fs::remove_file(&temporary_path);
-        let diagnostics = String::from_utf8_lossy(&output.stderr);
-        let diagnostics = diagnostics.trim();
-        return Err(if diagnostics.is_empty() {
-            format!("Could not decode media file '{}'.", source.display())
-        } else {
-            format!(
-                "Could not decode media file '{}': {diagnostics}",
-                source.display()
-            )
-        });
-    }
-
-    match fs::rename(&temporary_path, &cached_path) {
-        Ok(()) => {}
-        Err(_) if cached_path.is_file() => {
-            // Another tile completed the same cache entry first.
-            let _ = fs::remove_file(&temporary_path);
-        }
-        Err(error) => {
-            let _ = fs::remove_file(&temporary_path);
-            return Err(format!(
-                "Failed to cache media preview '{}': {error}",
-                cached_path.display()
-            ));
-        }
-    }
-
-    Ok(cached_path.to_string_lossy().to_string())
+    thumbnail_service(app_handle)?.update(request_id, priority);
+    Ok(())
 }
 
 pub async fn remove_datasource(
@@ -3023,6 +2995,8 @@ async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
     .execute(pool)
     .await
     .map_err(|error| format!("Failed to create media_gallery_items table: {error}"))?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS media_gallery_page_idx ON media_gallery_items(datasource_id, media_type, name, path)")
+        .execute(pool).await.map_err(|error| error.to_string())?;
 
     Ok(())
 }
@@ -3300,43 +3274,50 @@ async fn replace_media_gallery_items(
 
     let updated_at = now_iso_like();
 
-    for item in gallery.photos.iter().chain(gallery.videos.iter()) {
+    // Keep statements below SQLite's conservative 999 parameter limit.
+    let mut items = gallery.photos.iter().chain(gallery.videos.iter());
+    loop {
         if is_plugin_job_cancelled(Some(job_id))? {
             return Err("Plugin job cancelled.".into());
         }
-        let media_type = match item.media_type {
-            builtin::MediaType::Image => "image",
-            builtin::MediaType::Video => "video",
-        };
-        let payload = serde_json::to_string(item)
-            .map_err(|error| format!("Failed to serialize media gallery item: {error}"))?;
-
-        sqlx::query(
-            r#"
-              INSERT INTO media_gallery_items (
-                id,
-                job_id,
-                datasource_id,
-                media_type,
-                path,
-                name,
-                payload,
-                updated_at
-              )
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            "#,
-        )
-        .bind(create_id("media-item"))
-        .bind(job_id)
-        .bind(datasource_id)
-        .bind(media_type)
-        .bind(&item.path)
-        .bind(&item.name)
-        .bind(payload)
-        .bind(&updated_at)
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| format!("Failed to insert media gallery item: {error}"))?;
+        let batch = items
+            .by_ref()
+            .take(100)
+            .map(|item| {
+                let media_type = match item.media_type {
+                    builtin::MediaType::Image => "image",
+                    builtin::MediaType::Video => "video",
+                };
+                let payload = serde_json::to_string(item).map_err(|error| error.to_string())?;
+                Ok((
+                    create_id("media-item"),
+                    media_type,
+                    &item.path,
+                    &item.name,
+                    payload,
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        if batch.is_empty() {
+            break;
+        }
+        let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "INSERT INTO media_gallery_items (id, job_id, datasource_id, media_type, path, name, payload, updated_at) ");
+        query.push_values(&batch, |mut row, (id, media_type, path, name, payload)| {
+            row.push_bind(id)
+                .push_bind(job_id)
+                .push_bind(datasource_id)
+                .push_bind(media_type)
+                .push_bind(path)
+                .push_bind(name)
+                .push_bind(payload)
+                .push_bind(&updated_at);
+        });
+        query
+            .build()
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| format!("Failed to insert media gallery batch: {error}"))?;
     }
 
     if is_plugin_job_cancelled(Some(job_id))? {

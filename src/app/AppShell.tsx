@@ -22,8 +22,11 @@ import { PluginsPage } from "@/features/plugins/pages/PluginsPage";
 import { usePluginJobMonitor } from "@/features/plugins/hooks/usePluginJobMonitor";
 import { SearchPage } from "@/features/search/pages/SearchPage";
 import { PlaceholderPage } from "@/features/workspace";
+import { SettingsPage } from "@/features/settings/SettingsPage";
+import { initializePerformanceSettings } from "@/features/settings/performanceSettings";
 
 const workspaceRoutes = [
+  { path: "/settings", element: <SettingsPage /> },
   {
     path: "/case",
     element: <CasePage />,
@@ -79,6 +82,7 @@ export function AppShell() {
 }
 
 function AppShellContent() {
+  useEffect(() => { void initializePerformanceSettings().catch((error: unknown) => console.error("Could not restore memory settings", error)); }, []);
   const [isSidebarOpen, setIsSidebarOpen] = useState(loadSidebarOpenState);
   const { activeCase } = useCases();
   usePluginJobMonitor(activeCase);

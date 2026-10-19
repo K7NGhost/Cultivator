@@ -12,6 +12,7 @@ import {
   Plug,
   Search,
   ShieldCheck,
+  Settings,
 } from "lucide-react";
 
 import {
@@ -32,6 +33,7 @@ import { useCases } from "@/features/cases";
 import { cn } from "@/lib/utils";
 
 const navGroups = [
+  { label: "Application", items: [{ label: "Settings", path: "/settings", icon: Settings }] },
   {
     label: "Workspace",
     items: [

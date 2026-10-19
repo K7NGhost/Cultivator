@@ -1,3 +1,8 @@
+import time
+_worker_started = time.perf_counter()
+import io
+import json
+import os
 import struct
 import sys
 import zlib
@@ -87,6 +92,8 @@ def decode_cgbi_png(path):
         raise ValueError("Unsupported CgBI PNG encoding")
     if width == 0 or height == 0 or width * height > 50_000_000:
         raise ValueError(f"Unsafe CgBI image dimensions: {width} x {height}")
+    if len(sys.argv) > 4 and width * height * 64 + len(data) + 4 * 1024 * 1024 > int(sys.argv[4]):
+        raise ValueError("CgBI image exceeds thumbnail memory budget")
 
     channels = 4 if color_type == 6 else 3
     row_size = width * channels
@@ -171,8 +178,32 @@ def open_media_image(path):
 
 
 source_path, output_path, max_dimension = sys.argv[1], sys.argv[2], int(sys.argv[3])
+_imports_ms = (time.perf_counter() - _worker_started) * 1000
+_decode_started = time.perf_counter()
 with open_media_image(source_path) as source:
     source.seek(0)
+    if len(sys.argv) > 4:
+        budget = int(sys.argv[4])
+        if source.width * source.height * 64 + os.path.getsize(source_path) + 4 * 1024 * 1024 > budget:
+            raise ValueError("Image exceeds thumbnail memory budget")
+    # JPEG decoders can downsample before allocating full resolution pixels.
+    source.draft("RGB", (max_dimension, max_dimension))
+    source.load()
+    _decode_ms = (time.perf_counter() - _decode_started) * 1000
+    _resize_started = time.perf_counter()
     image = ImageOps.exif_transpose(source)
     image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
-    image.convert("RGB").save(output_path, "JPEG", quality=88, optimize=True)
+    image = image.convert("RGB")
+    _resize_ms = (time.perf_counter() - _resize_started) * 1000
+    _encode_started = time.perf_counter()
+    encoded = io.BytesIO()
+    image.save(encoded, "JPEG", quality=85)
+    _encode_ms = (time.perf_counter() - _encode_started) * 1000
+    _write_started = time.perf_counter()
+    with open(output_path, "xb") as output:
+        output.write(encoded.getbuffer())
+        output.flush()
+    _write_ms = (time.perf_counter() - _write_started) * 1000
+print(json.dumps({"startupMs": _imports_ms, "decodeMs": _decode_ms,
+                  "resizeMs": _resize_ms, "encodeMs": _encode_ms,
+                  "writeMs": _write_ms, "backend": "python"}))

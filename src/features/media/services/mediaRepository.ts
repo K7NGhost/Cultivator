@@ -32,11 +32,31 @@ export async function listMediaGallery(
 export async function renderMediaThumbnail(
   caseDatabasePath: string,
   sourcePath: string,
-): Promise<string> {
-  return invoke<string>("render_media_thumbnail", {
+  mediaId: string,
+  requestId: string,
+  priority: ThumbnailPriority,
+): Promise<ThumbnailResult> {
+  return invoke<ThumbnailResult>("render_media_thumbnail", {
     caseDatabasePath,
     sourcePath,
+    mediaId,
+    requestId,
+    priority,
   });
+}
+
+export type ThumbnailPriority = "visible" | "nearby" | "background";
+export type ThumbnailResult = {
+  path: string;
+  timings: {
+    inspectMs: number;
+    queueMs: number; startupMs: number; decodeMs: number; resizeMs: number;
+    encodeMs: number; writeMs: number; totalMs: number; cacheHit: boolean; backend: string;
+  };
+};
+
+export function updateMediaThumbnail(requestId: string, priority: ThumbnailPriority | null) {
+  return invoke<void>("update_media_thumbnail", { requestId, priority });
 }
 
 export async function listFileViewMediaPage(
@@ -53,7 +73,7 @@ export async function listFileViewMediaPage(
           ? "file-types:extension:images"
           : "file-types:extension:videos",
       offset,
-      limit: 10_000,
+      limit: 500,
     },
   );
 
@@ -83,4 +103,19 @@ export async function listFileViewMediaPage(
 function fileExtension(name: string) {
   const extension = name.match(/\.([^./\\]+)$/)?.[1];
   return extension?.toUpperCase() ?? "Unknown";
+}
+
+export async function listMediaGalleryPage(
+  caseDatabasePath: string, datasourceId: string,
+  mediaType: "image" | "video", offset = 0,
+): Promise<FileViewMediaPage> {
+  return invoke<FileViewMediaPage>("list_media_gallery_page", {
+    caseDatabasePath, datasourceId, mediaType, offset, limit: 500,
+  });
+}
+
+export async function loadMediaDetails(
+  caseDatabasePath: string, datasourceId: string, sourcePath: string,
+): Promise<MediaGalleryResult["photos"][number]> {
+  return invoke("load_media_details", { caseDatabasePath, datasourceId, sourcePath });
 }

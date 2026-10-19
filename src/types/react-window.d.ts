@@ -17,6 +17,16 @@ declare module "react-window" {
     columnWidth: number;
     height: number;
     itemData?: T;
+    onItemsRendered?: (range: {
+      overscanColumnStartIndex: number;
+      overscanColumnStopIndex: number;
+      overscanRowStartIndex: number;
+      overscanRowStopIndex: number;
+      visibleColumnStartIndex: number;
+      visibleColumnStopIndex: number;
+      visibleRowStartIndex: number;
+      visibleRowStopIndex: number;
+    }) => void;
     overscanColumnCount?: number;
     overscanRowCount?: number;
     rowCount: number;

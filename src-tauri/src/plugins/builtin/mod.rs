@@ -9,6 +9,7 @@ use std::{
 };
 
 pub use archive_extractor::manifest as archive_extractor_manifest;
+pub(crate) use image_metadata::load_metadata;
 pub use image_metadata::{manifest as image_metadata_manifest, MediaGallery, MediaItem, MediaType};
 
 pub struct BuiltinArtifact {
@@ -220,9 +221,13 @@ impl BuiltinPlugin for ImageMetadataPlugin {
                     event.scanned_files,
                     event.total_files,
                     format!(
-                        "Scanned {} of {} files; found {} media file{}",
+                        "Scanned {} files{}; found {} media file{}",
                         event.scanned_files,
-                        event.total_files,
+                        if event.total_files == 0 {
+                            String::new()
+                        } else {
+                            format!(" of {}", event.total_files)
+                        },
                         event.matched_files,
                         if event.matched_files == 1 { "" } else { "s" }
                     ),

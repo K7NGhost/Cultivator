@@ -418,9 +418,9 @@ export function AppMenubar() {
               Toggle status bar
             </MenubarItem>
             <MenubarSeparator />
-            <MenubarItem className={itemClassName} disabled>
+            <MenubarItem className={itemClassName} onSelect={() => navigate("/settings")}>
               <Settings className="size-3.5" aria-hidden="true" />
-              Preferences
+              Settings
             </MenubarItem>
           </MenubarContent>
         </MenubarMenu>

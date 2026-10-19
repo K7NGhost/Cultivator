@@ -30,6 +30,7 @@ pub mod preview;
 mod scripting;
 #[path = "tauri/commands.rs"]
 mod tauri_commands;
+pub mod thumbnails;
 
 const MAX_TREE_DEPTH: usize = 12;
 const MAX_DIRECTORY_CHILDREN: usize = 500;
@@ -697,12 +698,58 @@ async fn list_media_gallery(
 }
 
 #[tauri::command]
+async fn list_media_gallery_page(
+    case_database_path: String,
+    datasource_id: String,
+    media_type: String,
+    offset: u32,
+    limit: u32,
+) -> Result<plugins::MediaGalleryPage, String> {
+    plugins::list_media_gallery_page(case_database_path, datasource_id, media_type, offset, limit)
+        .await
+}
+
+#[tauri::command]
+async fn load_media_details(
+    case_database_path: String,
+    datasource_id: String,
+    source_path: String,
+) -> Result<plugins::MediaItem, String> {
+    plugins::load_media_details(case_database_path, datasource_id, source_path).await
+}
+
+#[tauri::command]
 async fn render_media_thumbnail(
     app_handle: tauri::AppHandle,
     case_database_path: String,
     source_path: String,
-) -> Result<String, String> {
-    plugins::render_media_thumbnail(app_handle, case_database_path, source_path).await
+    media_id: String,
+    request_id: String,
+    priority: thumbnails::Priority,
+) -> Result<thumbnails::Thumbnail, String> {
+    plugins::render_media_thumbnail(
+        app_handle,
+        case_database_path,
+        source_path,
+        media_id,
+        request_id,
+        priority,
+    )
+    .await
+}
+
+#[tauri::command]
+fn update_media_thumbnail(
+    app_handle: tauri::AppHandle,
+    request_id: String,
+    priority: Option<thumbnails::Priority>,
+) -> Result<(), String> {
+    plugins::update_media_thumbnail(&app_handle, &request_id, priority)
+}
+
+#[tauri::command]
+fn configure_thumbnail_memory(memory_mb: u64) -> Result<(), String> {
+    plugins::configure_thumbnail_memory(memory_mb)
 }
 
 #[tauri::command]
@@ -2274,7 +2321,11 @@ pub fn run() {
             delete_plugin_artifact,
             delete_plugin_artifacts,
             list_media_gallery,
+            list_media_gallery_page,
+            load_media_details,
             render_media_thumbnail,
+            update_media_thumbnail,
+            configure_thumbnail_memory,
             remove_datasource,
             submit_plugin_run,
             get_plugin_run,
