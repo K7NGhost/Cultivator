@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, RwLock,
     },
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -119,7 +119,7 @@ impl Source {
         let modified = metadata.modified().map_err(|e| e.to_string())?;
         // Include media identity, file fingerprint, dimensions, encoding, and pipeline version.
         let identity = serde_json::to_vec(&(
-            "native-v1",
+            "native-v2",
             media_id,
             &path,
             metadata.len(),
@@ -174,6 +174,7 @@ struct State {
     early_updates: HashMap<String, Option<Priority>>,
 }
 struct Inner {
+    decode_gate: RwLock<()>,
     state: Mutex<State>,
     ready: Condvar,
     config: Config,
@@ -190,6 +191,7 @@ impl ThumbnailService {
             return Err("Invalid thumbnail worker or memory configuration.".into());
         }
         let inner = Arc::new(Inner {
+            decode_gate: RwLock::new(()),
             state: Mutex::new(State::default()),
             ready: Condvar::new(),
             memory_bytes: AtomicU64::new(config.memory_bytes),
@@ -381,6 +383,7 @@ fn worker(inner: Arc<Inner>) {
                 &job.cancelled,
                 &config,
                 inner.fallback.as_ref(),
+                &inner.decode_gate,
             )
         }))
         .unwrap_or_else(|_| Err("Thumbnail decoder panicked.".into()))

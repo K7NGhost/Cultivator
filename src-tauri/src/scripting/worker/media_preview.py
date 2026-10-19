@@ -11,7 +11,7 @@ from PIL import Image, ImageOps
 
 try:
     import pillow_heif
-    pillow_heif.register_heif_opener()
+    pillow_heif.register_heif_opener(depth_images=False, aux_images=False, decode_threads=1)
 except ImportError:
     pass
 
@@ -181,16 +181,23 @@ source_path, output_path, max_dimension = sys.argv[1], sys.argv[2], int(sys.argv
 _imports_ms = (time.perf_counter() - _worker_started) * 1000
 _decode_started = time.perf_counter()
 with open_media_image(source_path) as source:
-    source.seek(0)
+    # HEIF containers may store auxiliary images before the primary photograph.
+    # Image.open selects the primary frame; seeking to zero would replace it.
+    is_heif = source.format == "HEIF"
+    # Ask the decoder for a reduced image before checking its allocation size.
+    source.draft("RGB", (max_dimension, max_dimension))
     if len(sys.argv) > 4:
         budget = int(sys.argv[4])
-        if source.width * source.height * 64 + os.path.getsize(source_path) + 4 * 1024 * 1024 > budget:
+        # HEIF is decoded to 8-bit RGB(A), then resized before orientation copies.
+        # Reserve for compressed input, codec scratch, and both pixel buffers.
+        bytes_per_pixel = 16 if is_heif else 64
+        if source.width * source.height * bytes_per_pixel + os.path.getsize(source_path) + 4 * 1024 * 1024 > budget:
             raise ValueError("Image exceeds thumbnail memory budget")
-    # JPEG decoders can downsample before allocating full resolution pixels.
-    source.draft("RGB", (max_dimension, max_dimension))
     source.load()
     _decode_ms = (time.perf_counter() - _decode_started) * 1000
     _resize_started = time.perf_counter()
+    if is_heif:
+        source.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
     image = ImageOps.exif_transpose(source)
     image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
     image = image.convert("RGB")

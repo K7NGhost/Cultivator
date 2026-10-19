@@ -18,6 +18,7 @@ pub(super) fn generate(
     cancelled: &AtomicBool,
     config: &Config,
     fallback: Option<&Fallback>,
+    decode_gate: &RwLock<()>,
 ) -> Outcome {
     let started = Instant::now();
     check_cancel(cancelled)?;
@@ -40,7 +41,13 @@ pub(super) fn generate(
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
-        let mut timings = match decode_native(source, cancelled, config.worker_budget()) {
+        let native_result = {
+            let _guard = decode_gate
+                .read()
+                .map_err(|_| "Thumbnail decoder lock unavailable.")?;
+            decode_native(source, cancelled, config.worker_budget())
+        };
+        let mut timings = match native_result {
             Ok((encoded, mut timings)) => {
                 check_cancel(cancelled)?;
                 let start = Instant::now();
@@ -60,7 +67,13 @@ pub(super) fn generate(
                 check_cancel(cancelled)?;
                 let fallback =
                     fallback.ok_or("No optional Python thumbnail decoder configured.")?;
-                fallback(&source.path, &temporary, config.worker_budget(), cancelled)?
+                // Compatibility codecs need full-resolution buffers. Run one at
+                // a time, with native decoding paused, to use the entire budget.
+                let _guard = decode_gate
+                    .write()
+                    .map_err(|_| "Thumbnail decoder lock unavailable.")?;
+                check_cancel(cancelled)?;
+                fallback(&source.path, &temporary, config.memory_bytes, cancelled)?
             }
             Err(NativeError::Unsupported) => {
                 return Err("Unsupported native thumbnail format; Python fallback disabled.".into())
@@ -184,4 +197,45 @@ fn decode_native(
             ..Timings::default()
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compatibility_decoder_uses_full_budget_exclusively_and_caches_result() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("photo.heic");
+        fs::write(&path, b"\0\0\0\x18ftypheic\0\0\0\0heicmif1").unwrap();
+        let (_, source) = Source::new(&directory.path().join("cache"), "photo", &path).unwrap();
+        let gate = Arc::new(RwLock::new(()));
+        let fallback_gate = gate.clone();
+        let config = Config {
+            workers: 8,
+            ..Config::default()
+        };
+        let full_budget = config.memory_bytes;
+        let calls = Arc::new(AtomicU64::new(0));
+        let fallback_calls = calls.clone();
+        let fallback: Fallback = Arc::new(move |_, target, budget, _| {
+            assert_eq!(budget, full_budget);
+            assert!(fallback_gate.try_read().is_err());
+            fallback_calls.fetch_add(1, Ordering::Relaxed);
+            image::RgbImage::new(16, 16)
+                .save_with_format(target, image::ImageFormat::Jpeg)
+                .map_err(|error| error.to_string())?;
+            Ok(Timings {
+                backend: "python".into(),
+                ..Timings::default()
+            })
+        });
+        let cancelled = AtomicBool::new(false);
+        let result = generate(&source, &cancelled, &config, Some(&fallback), &gate).unwrap();
+        assert_eq!(result.timings.backend, "python");
+        assert!(Path::new(&result.path).is_file());
+        let cached = generate(&source, &cancelled, &config, Some(&fallback), &gate).unwrap();
+        assert!(cached.timings.cache_hit);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
 }
