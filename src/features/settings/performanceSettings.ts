@@ -2,16 +2,27 @@ import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 export type PerformanceSettings = { memoryMb: number; screensAhead: number; screensBehind: number };
-export const defaultPerformanceSettings: PerformanceSettings = { memoryMb: 512, screensAhead: 5, screensBehind: 2 };
+export const performancePresets = {
+  "Memory saver": { memoryMb: 384, screensAhead: 1, screensBehind: 0 },
+  Balanced: { memoryMb: 768, screensAhead: 3, screensBehind: 1 },
+  "High performance": { memoryMb: 2048, screensAhead: 5, screensBehind: 2 },
+} satisfies Record<string, PerformanceSettings>;
+export function automaticPerformanceSettings(deviceMemory?: number): PerformanceSettings {
+  // WebViews may omit the hardware hint. Start conservatively in that case.
+  return { ...(deviceMemory && deviceMemory >= 8 ? performancePresets.Balanced : performancePresets["Memory saver"]) };
+}
+export const defaultPerformanceSettings = automaticPerformanceSettings(
+  typeof navigator === "undefined" ? undefined : (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+);
 const storageKey = "cultivator.performance.v1";
 const listeners = new Set<() => void>();
 export function normalizePerformanceSettings(value: Partial<PerformanceSettings>): PerformanceSettings {
   const bounded = (n: unknown, fallback: number, min: number, max: number) =>
     typeof n === "number" && Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback;
   return {
-    memoryMb: bounded(value.memoryMb, 512, 512, 8192),
-    screensAhead: bounded(value.screensAhead, 5, 1, 20),
-    screensBehind: bounded(value.screensBehind, 2, 1, 10),
+    memoryMb: bounded(value.memoryMb, defaultPerformanceSettings.memoryMb, 192, 8192),
+    screensAhead: bounded(value.screensAhead, defaultPerformanceSettings.screensAhead, 0, 20),
+    screensBehind: bounded(value.screensBehind, defaultPerformanceSettings.screensBehind, 0, 10),
   };
 }
 function readSettings() {
@@ -22,11 +33,12 @@ let settings = readSettings();
 export const getPerformanceSettings = () => settings;
 export const subscribePerformanceSettings = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 export const usePerformanceSettings = () => useSyncExternalStore(subscribePerformanceSettings, getPerformanceSettings);
-// Split the managed budget between native decoding and browser caches. Reserve
-// 10% of the browser portion for gallery records; estimates exclude engine overhead.
-export const nativeMemoryMb = (value: PerformanceSettings) => Math.floor(value.memoryMb / 2);
-export const thumbnailCacheBytes = (value: PerformanceSettings) => Math.floor(value.memoryMb * 0.45 * 1024 * 1024);
-export const recordCacheBytes = (value: PerformanceSettings) => Math.floor(value.memoryMb * 0.05 * 1024 * 1024);
+// Leave headroom for WebView/GPU copies, encoded blobs, and in-flight work.
+export const nativeMemoryMb = (value: PerformanceSettings) => Math.min(4096, Math.floor(value.memoryMb * 2 / 3));
+export const thumbnailCacheBytes = (value: PerformanceSettings) => Math.floor(value.memoryMb / 12) * 1024 * 1024;
+export const recordCacheBytes = (value: PerformanceSettings) => Math.floor(value.memoryMb / 48) * 1024 * 1024;
+export const thumbnailConcurrency = (value: PerformanceSettings) => value.memoryMb <= 512 ? 2 : value.memoryMb <= 1024 ? 4 : 8;
+export const galleryOverscanScreens = (value: PerformanceSettings) => value.memoryMb <= 512 ? 0 : value.memoryMb <= 1024 ? 1 : 2;
 export async function applyPerformanceSettings(value: PerformanceSettings) {
   const next = normalizePerformanceSettings(value);
   // Persist first so a storage failure does not silently discard the preference.
@@ -42,8 +54,5 @@ export async function applyPerformanceSettings(value: PerformanceSettings) {
   listeners.forEach((listener) => listener());
 }
 export async function initializePerformanceSettings() {
-  // Preserve environment configuration until the user has saved a preference.
-  if (localStorage.getItem(storageKey) !== null) {
-    await invoke("configure_thumbnail_memory", { memoryMb: nativeMemoryMb(settings) });
-  }
+  await invoke("configure_thumbnail_memory", { memoryMb: nativeMemoryMb(settings) });
 }

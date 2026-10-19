@@ -1,23 +1,25 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { ImageOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { prepareThumbnail, thumbnailKey, usePreparedThumbnail, useThumbnailEpoch } from "../services/preparedThumbnails";
+import { preparedThumbnails, prepareThumbnail, thumbnailKey, usePreparedThumbnail, useThumbnailEpoch } from "../services/preparedThumbnails";
 import type { MediaItem } from "../model/types";
 import { cn } from "@/lib/utils";
 
 type MediaImagePreviewProps = {
   caseDatabasePath: string | null;
   className?: string;
+  fit?: "cover" | "contain";
+  retain?: boolean;
   item: MediaItem;
 };
 
-export function MediaImagePreview({ caseDatabasePath, className, item }: MediaImagePreviewProps) {
+export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", retain = false, item }: MediaImagePreviewProps) {
   const container = useRef<HTMLDivElement>(null);
-  const [preview, setPreview] = useState<{ key: string; source?: string; failed?: boolean }>();
+  const [failedKey, setFailedKey] = useState<string>();
   useThumbnailEpoch();
   const key = thumbnailKey(caseDatabasePath, item);
   const cachedSource = usePreparedThumbnail(key);
+  useEffect(() => retain ? preparedThumbnails.retain(key) : undefined, [key, retain]);
 
   useEffect(() => {
     let current = true;
@@ -30,29 +32,25 @@ export function MediaImagePreview({ caseDatabasePath, className, item }: MediaIm
       return bounds.bottom > viewport.top && bounds.top < viewport.bottom && bounds.right > viewport.left && bounds.left < viewport.right
         ? "visible" as const : "nearby" as const;
     };
-    // Every mounted overscan tile starts loading now, even when it is several
-    // screens outside the clipped viewport. The range prefetcher goes further.
+    // Visible tiles take priority over overscan in the bounded loading queue.
     const request = prepareThumbnail(caseDatabasePath, item, priorityFor());
-    request.promise.then((source) => {
-      if (current && source) setPreview({ key, source });
-    }).catch(() => {
-      // Keep browser-supported images viewable if the decoder is unavailable.
-      if (current) setPreview({ key, source: convertFileSrc(item.mediaPath) });
+    request.promise.catch(() => {
+      // Full-resolution originals can exhaust WebView RAM. Only show bounded thumbnails.
+      if (current) setFailedKey(key);
     });
     const visibleObserver = new IntersectionObserver(() => request.setPriority(priorityFor()), { root });
     visibleObserver.observe(element);
     return () => { current = false; visibleObserver.disconnect(); request.release(); };
   }, [caseDatabasePath, key, item.id, item.mediaPath]);
 
-  const state: { source?: string; failed?: boolean } | undefined = preview?.key === key ? preview : cachedSource ? { source: cachedSource } : undefined;
   return (
     <div ref={container} className={cn("flex items-center justify-center overflow-hidden bg-muted", className)}>
-      {state?.failed ? (
+      {failedKey === key ? (
         <ImageOff className="size-5 text-muted-foreground" aria-label={`${item.name} preview unavailable`} />
-      ) : state?.source ? (
-        <img src={state.source} alt={item.name} className="h-full w-full object-cover"
+      ) : cachedSource ? (
+        <img src={cachedSource} alt={item.name} className={cn("h-full w-full", fit === "contain" ? "object-contain" : "object-cover")}
           draggable={false} loading="eager" decoding="async"
-          onError={() => setPreview({ key, failed: true })} />
+          onError={() => setFailedKey(key)} />
       ) : <span className="sr-only">Loading {item.name}</span>}
     </div>
   );

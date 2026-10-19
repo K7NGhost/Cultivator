@@ -1,10 +1,13 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { getPerformanceSettings, subscribePerformanceSettings, thumbnailCacheBytes } from "../../settings/performanceSettings";
 
 const FRAME_FRACTIONS = [0.1, 0.35, 0.6, 0.85];
 const FRAME_WIDTH = 240;
 const FRAME_HEIGHT = 135;
-const MAX_CACHED_THUMBNAILS = 128;
 const thumbnails = new Map<string, string>();
+let generation = 0;
+export function clearVideoThumbnails() { generation++; thumbnails.clear(); }
+subscribePerformanceSettings(clearVideoThumbnails);
 // Two decoder lanes keep a large gallery from opening a decoder for every tile.
 const lanes: Promise<void>[] = [Promise.resolve(), Promise.resolve()];
 let nextLane = 0;
@@ -22,13 +25,17 @@ export function getVideoThumbnail(
   }
 
   const lane = nextLane++ % lanes.length;
+  const epoch = generation;
   const request = lanes[lane].then(async () => {
     signal.throwIfAborted();
     const existing = thumbnails.get(key);
     if (existing) return existing;
     const thumbnail = await captureVideoFrames(path, signal);
+    signal.throwIfAborted();
+    if (epoch !== generation) return thumbnail;
     thumbnails.set(key, thumbnail);
-    if (thumbnails.size > MAX_CACHED_THUMBNAILS) {
+    const capacity = Math.max(1, Math.min(128, Math.floor(thumbnailCacheBytes(getPerformanceSettings()) / 4 / (FRAME_WIDTH * FRAME_HEIGHT * 16 + 4096))));
+    if (thumbnails.size > capacity) {
       const oldest = thumbnails.keys().next().value;
       if (oldest !== undefined) thumbnails.delete(oldest);
     }

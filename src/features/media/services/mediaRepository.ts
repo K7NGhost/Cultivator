@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { EvidenceDirectoryEntry } from "@/features/evidence";
 import type { MediaGalleryResult } from "../model/types";
+import type { ClassificationDefinition, VicCategory, VicFilterValue } from "../model/vicClassification";
 
 export type FileViewMediaPage = {
   items: MediaGalleryResult["photos"];
@@ -9,6 +10,7 @@ export type FileViewMediaPage = {
   offset: number;
   limit: number;
   hasNextPage: boolean;
+  classificationCounts?: number[];
 };
 
 type FileViewEntriesPage = {
@@ -107,11 +109,31 @@ function fileExtension(name: string) {
 
 export async function listMediaGalleryPage(
   caseDatabasePath: string, datasourceId: string,
-  mediaType: "image" | "video", offset = 0,
+  mediaType: "image" | "video", offset = 0, categories: VicFilterValue[] = [],
 ): Promise<FileViewMediaPage> {
   return invoke<FileViewMediaPage>("list_media_gallery_page", {
-    caseDatabasePath, datasourceId, mediaType, offset, limit: 500,
+    caseDatabasePath, datasourceId, mediaType, offset, limit: 500, categories,
   });
+}
+
+export function listClassifiedFileViewMediaPage(
+  caseDatabasePath: string, roots: string[], mediaType: "image" | "video", offset = 0, categories: VicFilterValue[] = [],
+) {
+  return invoke<FileViewMediaPage>("list_file_view_media_page", { caseDatabasePath, roots, mediaType, categories, offset, limit: 500 });
+}
+
+export function setMediaClassification(caseDatabasePath: string, sourcePath: string, category: VicCategory | null) {
+  return invoke<void>("set_media_classification", { caseDatabasePath, sourcePath, category });
+}
+
+export function listCustomClassifications(caseDatabasePath: string) {
+  return invoke<ClassificationDefinition[]>("list_custom_classifications", { caseDatabasePath });
+}
+export function saveCustomClassification(caseDatabasePath: string, category: number | null, name: string, color: string) {
+  return invoke<ClassificationDefinition>("save_custom_classification", { caseDatabasePath, category, name, color });
+}
+export function deleteCustomClassification(caseDatabasePath: string, category: number) {
+  return invoke<void>("delete_custom_classification", { caseDatabasePath, category });
 }
 
 export async function loadMediaDetails(

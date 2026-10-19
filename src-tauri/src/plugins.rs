@@ -31,12 +31,17 @@ mod cancellation;
 mod execution;
 mod job_persistence;
 mod job_progress;
+mod media_classifications;
 mod media_queries;
 pub use execution::{
     cancel_plugin_job, get_plugin_run, pause_plugin_job, pause_plugin_run, submit_plugin_run,
     PluginRunSnapshot, SubmitPluginRunRequest, SubmittedPluginRun,
 };
 pub(crate) use job_persistence::initialize as initialize_job_manager;
+pub use media_classifications::{
+    delete_custom_classification, list_custom_classifications, list_file_view_media_page,
+    save_custom_classification, set_media_classification, CustomClassification,
+};
 pub use media_queries::{list_media_gallery_page, load_media_details, MediaGalleryPage};
 
 pub use builtin::{MediaGallery, MediaItem};
@@ -871,8 +876,8 @@ static THUMBNAILS: OnceLock<Result<crate::thumbnails::ThumbnailService, String>>
 static THUMBNAIL_MEMORY_OVERRIDE: AtomicU64 = AtomicU64::new(0);
 
 pub fn configure_thumbnail_memory(memory_mb: u64) -> Result<(), String> {
-    if !(256..=4096).contains(&memory_mb) {
-        return Err("Thumbnail memory budget must be between 256 and 4096 MiB.".into());
+    if !(128..=4096).contains(&memory_mb) {
+        return Err("Thumbnail memory budget must be between 128 and 4096 MiB.".into());
     }
     let bytes = memory_mb * 1024 * 1024;
     THUMBNAIL_MEMORY_OVERRIDE.store(bytes, Ordering::Release);
@@ -904,6 +909,10 @@ fn thumbnail_service(
             let bytes = THUMBNAIL_MEMORY_OVERRIDE.load(Ordering::Acquire);
             if bytes > 0 {
                 config.memory_bytes = bytes;
+                config.workers = config
+                    .workers
+                    .min((bytes / (16 * 1024 * 1024)) as usize)
+                    .max(1);
             }
             crate::thumbnails::ThumbnailService::new(config, Some(fallback))
         })
@@ -2917,6 +2926,7 @@ async fn ensure_datasource_tables(pool: &SqlitePool) -> Result<(), String> {
 }
 
 async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
+    media_classifications::ensure_table(pool).await?;
     sqlx::query(
         r#"
           CREATE TABLE IF NOT EXISTS plugin_jobs (

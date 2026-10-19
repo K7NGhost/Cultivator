@@ -704,9 +704,71 @@ async fn list_media_gallery_page(
     media_type: String,
     offset: u32,
     limit: u32,
+    categories: Option<Vec<i64>>,
 ) -> Result<plugins::MediaGalleryPage, String> {
-    plugins::list_media_gallery_page(case_database_path, datasource_id, media_type, offset, limit)
-        .await
+    plugins::list_media_gallery_page(
+        case_database_path,
+        datasource_id,
+        media_type,
+        offset,
+        limit,
+        categories,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn set_media_classification(
+    case_database_path: String,
+    source_path: String,
+    category: Option<i64>,
+) -> Result<(), String> {
+    plugins::set_media_classification(case_database_path, source_path, category).await
+}
+
+#[tauri::command]
+async fn list_custom_classifications(
+    case_database_path: String,
+) -> Result<Vec<plugins::CustomClassification>, String> {
+    plugins::list_custom_classifications(case_database_path).await
+}
+
+#[tauri::command]
+async fn save_custom_classification(
+    case_database_path: String,
+    category: Option<i64>,
+    name: String,
+    color: String,
+) -> Result<plugins::CustomClassification, String> {
+    plugins::save_custom_classification(case_database_path, category, name, color).await
+}
+
+#[tauri::command]
+async fn delete_custom_classification(
+    case_database_path: String,
+    category: i64,
+) -> Result<(), String> {
+    plugins::delete_custom_classification(case_database_path, category).await
+}
+
+#[tauri::command]
+async fn list_file_view_media_page(
+    case_database_path: String,
+    roots: Vec<String>,
+    media_type: String,
+    categories: Vec<i64>,
+    offset: u32,
+    limit: u32,
+) -> Result<plugins::MediaGalleryPage, String> {
+    plugins::list_file_view_media_page(
+        case_database_path,
+        roots,
+        media_type,
+        categories,
+        offset,
+        limit,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2322,6 +2384,11 @@ pub fn run() {
             delete_plugin_artifacts,
             list_media_gallery,
             list_media_gallery_page,
+            set_media_classification,
+            list_custom_classifications,
+            save_custom_classification,
+            delete_custom_classification,
+            list_file_view_media_page,
             load_media_details,
             render_media_thumbnail,
             update_media_thumbnail,

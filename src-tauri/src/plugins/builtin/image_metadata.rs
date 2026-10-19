@@ -54,6 +54,8 @@ pub struct MediaItem {
     pub metadata: Vec<MediaMetadataField>,
     #[serde(default = "default_metadata_loaded")]
     pub metadata_loaded: bool,
+    #[serde(default)]
+    pub vic_category: Option<i64>,
 }
 
 fn default_metadata_loaded() -> bool {
@@ -391,6 +393,7 @@ fn process_media_item(path: &Path) -> Result<Option<MediaItem>, String> {
         thumbnail_path: media_path,
         metadata: item_metadata,
         metadata_loaded: !format_supports_exif(format.format),
+        vic_category: None,
     };
 
     Ok(Some(item))

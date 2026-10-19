@@ -7,7 +7,7 @@ export function galleryPrefetchRange(start: number, stop: number, total: number,
   // Keep the lookahead working set below half the decoded cache capacity, so
   // visited thumbnails can survive direction changes instead of being churned.
   const spare = Math.max(0, Math.floor(capacity / 2) - screen);
-  const before = Math.min(screen * (direction < 0 ? ahead : behind), Math.floor(spare * (direction < 0 ? ahead : behind) / (ahead + behind)));
+  const before = Math.min(screen * (direction < 0 ? ahead : behind), Math.floor(spare * (direction < 0 ? ahead : behind) / Math.max(1, ahead + behind)));
   const after = Math.min(screen * (direction < 0 ? behind : ahead), spare - before);
   return { start: Math.max(0, start - before), stop: Math.min(total - 1, stop + after), visibleStart: start, visibleStop: stop };
 }

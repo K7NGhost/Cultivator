@@ -63,7 +63,7 @@ pub(super) fn generate(
                 timings.write_ms = millis(start);
                 timings
             }
-            Err(NativeError::Unsupported) if config.python_fallback => {
+            Err(NativeError::Unsupported | NativeError::Budget) if config.python_fallback => {
                 check_cancel(cancelled)?;
                 let fallback =
                     fallback.ok_or("No optional Python thumbnail decoder configured.")?;
@@ -77,6 +77,9 @@ pub(super) fn generate(
             }
             Err(NativeError::Unsupported) => {
                 return Err("Unsupported native thumbnail format; Python fallback disabled.".into())
+            }
+            Err(NativeError::Budget) => {
+                return Err("Image exceeds thumbnail decoded memory budget.".into())
             }
             Err(NativeError::Failed(error)) => return Err(error),
         };
@@ -112,6 +115,7 @@ pub(super) fn generate(
 
 enum NativeError {
     Unsupported,
+    Budget,
     Failed(String),
 }
 impl From<ImageError> for NativeError {
@@ -168,9 +172,9 @@ fn decode_native(
         .saturating_add(source.size)
         .saturating_add(4 * 1024 * 1024);
     if estimate > budget {
-        return Err(NativeError::Failed(
-            "Image exceeds thumbnail decoded memory budget.".into(),
-        ));
+        // The compatibility decoder can downsample JPEGs before allocating
+        // pixels, and can safely use the full budget under the exclusive gate.
+        return Err(NativeError::Budget);
     }
     let orientation = decoder.orientation()?;
     check_cancel(cancelled)?;
@@ -202,6 +206,38 @@ fn decode_native(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_jpeg_uses_bounded_compatibility_decoder_on_memory_saver() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("photo.jpg");
+        image::RgbImage::new(800, 800).save(&path).unwrap();
+        let (_, source) = Source::new(&directory.path().join("cache"), "photo", &path).unwrap();
+        let config = Config {
+            workers: 8,
+            memory_bytes: 128 * 1024 * 1024,
+            python_fallback: true,
+        };
+        let fallback: Fallback = Arc::new(|_, target, budget, _| {
+            assert_eq!(budget, 128 * 1024 * 1024);
+            image::RgbImage::new(256, 256)
+                .save_with_format(target, image::ImageFormat::Jpeg)
+                .map_err(|error| error.to_string())?;
+            Ok(Timings {
+                backend: "python".into(),
+                ..Timings::default()
+            })
+        });
+        let result = generate(
+            &source,
+            &AtomicBool::new(false),
+            &config,
+            Some(&fallback),
+            &RwLock::new(()),
+        )
+        .unwrap();
+        assert_eq!(result.timings.backend, "python");
+    }
 
     #[test]
     fn compatibility_decoder_uses_full_budget_exclusively_and_caches_result() {

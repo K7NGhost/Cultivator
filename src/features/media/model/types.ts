@@ -1,3 +1,5 @@
+import type { VicCategory } from "./vicClassification";
+
 export type MediaGalleryResult = {
   photos: MediaItem[];
   videos: MediaItem[];
@@ -5,6 +7,7 @@ export type MediaGalleryResult = {
 };
 
 export type MediaItem = {
+  vicCategory?: VicCategory | null;
   id: string;
   mediaType: "image" | "video";
   name: string;

@@ -212,8 +212,8 @@ impl ThumbnailService {
     /// Applies to jobs that start after this call. Running decoders finish with
     /// their original allocation limits rather than being interrupted mid-write.
     pub fn set_memory_budget(&self, bytes: u64) -> Result<(), String> {
-        if !(256 * 1024 * 1024..=4096 * 1024 * 1024).contains(&bytes) {
-            return Err("Thumbnail memory budget must be between 256 and 4096 MiB.".into());
+        if !(128 * 1024 * 1024..=4096 * 1024 * 1024).contains(&bytes) {
+            return Err("Thumbnail memory budget must be between 128 and 4096 MiB.".into());
         }
         self.inner.memory_bytes.store(bytes, Ordering::Release);
         Ok(())
