@@ -252,6 +252,7 @@ pub async fn list_file_view_media_page(
     categories: Vec<i64>,
     offset: u32,
     limit: u32,
+    directory: Option<String>,
 ) -> Result<media_queries::MediaGalleryPage, String> {
     static SCANS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
     let _permit = SCANS
@@ -269,13 +270,23 @@ pub async fn list_file_view_media_page(
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         runtime.block_on(async move {
-            scan_file_view(&pool, roots, &media_type, &categories, offset, limit).await
+            scan_file_view_directory(
+                &pool,
+                roots,
+                &media_type,
+                &categories,
+                offset,
+                limit,
+                directory.as_deref(),
+            )
+            .await
         })
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
+#[cfg(test)]
 async fn scan_file_view(
     pool: &SqlitePool,
     roots: Vec<String>,
@@ -283,6 +294,18 @@ async fn scan_file_view(
     categories: &[i64],
     offset: u32,
     limit: u32,
+) -> Result<media_queries::MediaGalleryPage, String> {
+    scan_file_view_directory(pool, roots, media_type, categories, offset, limit, None).await
+}
+
+async fn scan_file_view_directory(
+    pool: &SqlitePool,
+    roots: Vec<String>,
+    media_type: &str,
+    categories: &[i64],
+    offset: u32,
+    limit: u32,
+    directory: Option<&str>,
 ) -> Result<media_queries::MediaGalleryPage, String> {
     let limit = limit.clamp(1, 500);
     let view = if media_type == "image" {
@@ -307,6 +330,18 @@ async fn scan_file_view(
         })
         .cloned()
         .collect();
+    if let Some(directory) = directory {
+        let selected = PathBuf::from(crate::thumbnails::store::normalize_source_path(directory));
+        if !roots.iter().any(|root| {
+            let normalized = PathBuf::from(crate::thumbnails::store::normalize_source_path(
+                &root.to_string_lossy(),
+            ));
+            selected.starts_with(&normalized)
+                || (root.is_file() && normalized.parent() == Some(selected.as_path()))
+        }) {
+            return Err("Selected directory is outside the datasource paths.".into());
+        }
+    }
     let mut page = media_queries::MediaGalleryPage {
         items: Vec::new(),
         total_count: 0,
@@ -317,17 +352,40 @@ async fn scan_file_view(
     };
     let mut batch = Vec::with_capacity(500);
     for root in roots {
+        let selected = directory
+            .map(|path| PathBuf::from(crate::thumbnails::store::normalize_source_path(path)));
         let walker = ignore::WalkBuilder::new(root)
             .hidden(false)
             .ignore(false)
             .git_ignore(false)
             .git_global(false)
             .git_exclude(false)
+            .filter_entry(move |entry| {
+                selected.as_ref().is_none_or(|selected| {
+                    let path = PathBuf::from(crate::thumbnails::store::normalize_source_path(
+                        &entry.path().to_string_lossy(),
+                    ));
+                    if entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                        selected.starts_with(path)
+                    } else {
+                        path.parent() == Some(selected.as_path())
+                    }
+                })
+            })
             .build();
         for entry in walker.flatten() {
             let path = entry.path();
             if !entry.file_type().is_some_and(|kind| kind.is_file()) {
                 continue;
+            }
+            if let Some(directory) = directory {
+                let normalized =
+                    crate::thumbnails::store::normalize_source_path(&path.to_string_lossy());
+                let parent = Path::new(&normalized).parent();
+                let selected = crate::thumbnails::store::normalize_source_path(directory);
+                if parent != Some(Path::new(&selected)) {
+                    continue;
+                }
             }
             let Ok(metadata) = fs::metadata(path) else {
                 continue;
@@ -421,6 +479,63 @@ async fn append_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn directory_filter_keeps_file_view_paths_labels_and_direct_children() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        ensure_table(&pool).await.unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let photos = root.join("photos");
+        fs::create_dir_all(photos.join("nested")).unwrap();
+        fs::create_dir_all(root.join("photos-other")).unwrap();
+        let selected = photos.join("a.jpg");
+        fs::write(&selected, b"image").unwrap();
+        fs::write(photos.join("b.png"), b"image").unwrap();
+        fs::write(photos.join("nested/c.jpg"), b"image").unwrap();
+        fs::write(root.join("photos-other/d.jpg"), b"image").unwrap();
+        let selected = selected.to_string_lossy().to_string();
+        sqlx::query("INSERT INTO media_classifications VALUES (?, 0, 'now')")
+            .bind(&selected)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let directory = photos.to_string_lossy().replace('\\', "/");
+        let roots = vec![root.to_string_lossy().to_string()];
+        let page =
+            scan_file_view_directory(&pool, roots.clone(), "image", &[], 0, 1, Some(&directory))
+                .await
+                .unwrap();
+        assert_eq!(page.total_count, 2);
+        assert_eq!(page.items.len(), 1);
+        assert!(page.has_next_page);
+        assert_eq!(&page.classification_counts[..2], &[1, 1]);
+        let classified = scan_file_view_directory(
+            &pool,
+            roots.clone(),
+            "image",
+            &[0],
+            0,
+            500,
+            Some(&directory),
+        )
+        .await
+        .unwrap();
+        assert_eq!(classified.total_count, 1);
+        assert_eq!(classified.items[0].path, selected);
+        assert_eq!(classified.items[0].vic_category, Some(0));
+        let outside = root.parent().unwrap().to_string_lossy().to_string();
+        assert!(
+            scan_file_view_directory(&pool, roots, "image", &[], 0, 500, Some(&outside))
+                .await
+                .is_err()
+        );
+        pool.close().await;
+    }
 
     #[tokio::test]
     async fn legacy_cases_upgrade_without_losing_vic_labels_and_custom_categories_can_be_managed() {

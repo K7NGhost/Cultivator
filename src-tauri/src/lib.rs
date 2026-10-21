@@ -705,6 +705,7 @@ async fn list_media_gallery_page(
     offset: u32,
     limit: u32,
     categories: Option<Vec<i64>>,
+    directory: Option<String>,
 ) -> Result<plugins::MediaGalleryPage, String> {
     plugins::list_media_gallery_page(
         case_database_path,
@@ -713,6 +714,7 @@ async fn list_media_gallery_page(
         offset,
         limit,
         categories,
+        directory,
     )
     .await
 }
@@ -759,6 +761,7 @@ async fn list_file_view_media_page(
     categories: Vec<i64>,
     offset: u32,
     limit: u32,
+    directory: Option<String>,
 ) -> Result<plugins::MediaGalleryPage, String> {
     plugins::list_file_view_media_page(
         case_database_path,
@@ -767,8 +770,18 @@ async fn list_file_view_media_page(
         categories,
         offset,
         limit,
+        directory,
     )
     .await
+}
+
+#[tauri::command]
+async fn list_media_directories(
+    case_database_path: String,
+    datasource_id: String,
+    indexed: bool,
+) -> Result<Vec<plugins::MediaDirectory>, String> {
+    plugins::list_media_directories(case_database_path, datasource_id, indexed).await
 }
 
 #[tauri::command]
@@ -2390,6 +2403,7 @@ pub fn run() {
             delete_plugin_artifacts,
             list_media_gallery,
             list_media_gallery_page,
+            list_media_directories,
             set_media_classification,
             list_custom_classifications,
             save_custom_classification,

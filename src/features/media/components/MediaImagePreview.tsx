@@ -20,12 +20,11 @@ export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", 
   useThumbnailEpoch();
   const key = thumbnailKey(caseDatabasePath, item, edge);
   const cachedSource = usePreparedThumbnail(key);
-  useEffect(() => retain ? preparedThumbnails.retain(key) : undefined, [key, retain]);
-
   useEffect(() => {
     let current = true;
     const element = container.current;
     if (!element || !caseDatabasePath) return;
+    if (cachedSource) setFailedKey(previous => previous === key ? undefined : previous);
     const root = element.closest(".media-gallery-scroll");
     const priorityFor = () => {
       const bounds = element.getBoundingClientRect();
@@ -33,16 +32,31 @@ export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", 
       return bounds.bottom > viewport.top && bounds.top < viewport.bottom && bounds.right > viewport.left && bounds.left < viewport.right
         ? "visible" as const : "nearby" as const;
     };
-    // Visible tiles take priority over overscan in the bounded loading queue.
-    const request = prepareThumbnail(caseDatabasePath, item, priorityFor(), edge);
-    request.promise.catch(() => {
-      // Full-resolution originals can exhaust WebView RAM. Only show bounded thumbnails.
-      if (current) setFailedKey(key);
-    });
-    const visibleObserver = new IntersectionObserver(() => request.setPriority(priorityFor()), { root });
+    let request: ReturnType<typeof prepareThumbnail> | undefined;
+    let releaseRetention: (() => void) | undefined;
+    const update = () => {
+      const priority = priorityFor();
+      const visible = retain || priority === "visible";
+      // Protect displayed URLs from lookahead eviction. Offscreen tiles leave
+      // room for the next viewport and load again when they become visible.
+      if (visible) releaseRetention ??= preparedThumbnails.retain(key);
+      else { releaseRetention?.(); releaseRetention = undefined; }
+      if (!visible) { request?.release(); request = undefined; return; }
+      if (cachedSource || request) return;
+      const next = prepareThumbnail(caseDatabasePath, item, "visible", edge);
+      request = next;
+      void next.promise.then(source => {
+        if (current && request === next && source) setFailedKey(previous => previous === key ? undefined : previous);
+      }, () => {
+        // Full-resolution originals can exhaust WebView RAM. Only show bounded thumbnails.
+        if (current && request === next) setFailedKey(key);
+      });
+    };
+    update();
+    const visibleObserver = new IntersectionObserver(update, { root });
     visibleObserver.observe(element);
-    return () => { current = false; visibleObserver.disconnect(); request.release(); };
-  }, [caseDatabasePath, key, item.id, item.mediaPath]);
+    return () => { current = false; visibleObserver.disconnect(); request?.release(); releaseRetention?.(); };
+  }, [caseDatabasePath, key, item.id, item.mediaPath, cachedSource, edge, retain]);
 
   return (
     <div ref={container} className={cn("flex items-center justify-center overflow-hidden bg-muted", className)}>

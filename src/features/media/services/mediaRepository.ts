@@ -126,16 +126,23 @@ function fileExtension(name: string) {
 export async function listMediaGalleryPage(
   caseDatabasePath: string, datasourceId: string,
   mediaType: "image" | "video", offset = 0, categories: VicFilterValue[] = [],
+  directory: string | null = null,
 ): Promise<FileViewMediaPage> {
   return invoke<FileViewMediaPage>("list_media_gallery_page", {
-    caseDatabasePath, datasourceId, mediaType, offset, limit: 500, categories,
+    caseDatabasePath, datasourceId, mediaType, offset, limit: 500, categories, directory,
   });
 }
 
 export function listClassifiedFileViewMediaPage(
   caseDatabasePath: string, roots: string[], mediaType: "image" | "video", offset = 0, categories: VicFilterValue[] = [],
+  directory: string | null = null,
 ) {
-  return invoke<FileViewMediaPage>("list_file_view_media_page", { caseDatabasePath, roots, mediaType, categories, offset, limit: 500 });
+  return invoke<FileViewMediaPage>("list_file_view_media_page", { caseDatabasePath, roots, mediaType, categories, offset, limit: 500, directory });
+}
+
+export type MediaDirectory = { path: string; imageCount: number; videoCount: number };
+export function listMediaDirectories(caseDatabasePath: string, datasourceId: string, indexed: boolean) {
+  return invoke<MediaDirectory[]>("list_media_directories", { caseDatabasePath, datasourceId, indexed });
 }
 
 export function setMediaClassification(caseDatabasePath: string, sourcePath: string, category: VicCategory | null) {

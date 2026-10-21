@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
@@ -43,6 +43,7 @@ import {
 } from "@/features/datasources";
 import type { DataSourceRecord } from "@/features/datasources";
 import { MediaImagePreview } from "../components/MediaImagePreview";
+import { DirectorySearch } from "../components/DirectorySearch";
 import { ThumbnailPreparationStatus } from "../components/ThumbnailPreparationStatus";
 import { MediaVideoPreview } from "../components/MediaVideoPreview";
 import {
@@ -82,6 +83,7 @@ type MediaGalleryProps = {
   tileWidth: number;
   onTileWidthChange: (width: number) => void;
   classification?: GalleryClassification;
+  directorySearch?: ReactNode;
   caseDatabasePath: string | null;
   detailTitle: string;
   emptyText: string;
@@ -144,6 +146,8 @@ export function MediaPage() {
   const selectedItemRef = useRef(selectedItem);
   selectedItemRef.current = selectedItem;
   const classificationContext = JSON.stringify([activeCase?.databasePath, selectedDataSourceId, mediaSource]);
+  const [directorySelection, setDirectorySelection] = useState<{ context: string; path: string } | null>(null);
+  const directoryFilter = directorySelection?.context === classificationContext ? directorySelection.path : null;
   const classificationContextRef = useRef(classificationContext);
   classificationContextRef.current = classificationContext;
   const galleryScopeRef = useRef<string | undefined>(undefined);
@@ -168,7 +172,7 @@ export function MediaPage() {
     // A refresh or source change starts a new indexed-evidence snapshot. Native
     // requests will revalidate the source fingerprint before repopulating RAM.
     clearPreparedThumbnails();
-  }, [activeCase?.databasePath, selectedDataSourceId, mediaSource, refreshKey]);
+  }, [activeCase?.databasePath, selectedDataSourceId, mediaSource, refreshKey, directoryFilter]);
   const [fileViewPages, setFileViewPages] = useState<{
     image: FileViewMediaPage | null;
     video: FileViewMediaPage | null;
@@ -255,7 +259,7 @@ export function MediaPage() {
     }
 
     let isCurrent = true;
-    const scope = JSON.stringify([classificationContext, classificationFilter]);
+    const scope = JSON.stringify([classificationContext, classificationFilter, directoryFilter]);
     if (galleryScopeRef.current !== scope) {
       setGallery({ photos: [], videos: [] });
       setFileViewPages({ image: null, video: null });
@@ -270,8 +274,8 @@ export function MediaPage() {
       (dataSource) => dataSource.id === selectedDataSourceId,
     );
     const getPage = (type: "image" | "video") => mediaSource === "plugin"
-      ? listMediaGalleryPage(activeCase.databasePath, selectedDataSourceId, type, 0, type === "image" ? classificationFilter : [])
-      : listClassifiedFileViewMediaPage(activeCase.databasePath, selectedDataSource?.paths ?? [], type, 0, type === "image" ? classificationFilter : []);
+      ? listMediaGalleryPage(activeCase.databasePath, selectedDataSourceId, type, 0, type === "image" ? classificationFilter : [], directoryFilter)
+      : listClassifiedFileViewMediaPage(activeCase.databasePath, selectedDataSource?.paths ?? [], type, 0, type === "image" ? classificationFilter : [], directoryFilter);
     const galleryRequest = Promise.all([getPage("image"), getPage("video")])
       .then(([image, video]) => ({
         gallery: { photos: image.items, videos: video.items }, pages: { image, video },
@@ -328,7 +332,7 @@ export function MediaPage() {
     return () => {
       isCurrent = false;
     };
-  }, [activeCase, dataSources, mediaSource, refreshKey, selectedDataSourceId, classificationContext, classificationFilter, classificationRevision]);
+  }, [activeCase, dataSources, mediaSource, refreshKey, selectedDataSourceId, classificationContext, classificationFilter, classificationRevision, directoryFilter]);
 
   useEffect(() => {
     if (!activeCase || !selectedDataSourceId || mediaSource !== "plugin" ||
@@ -356,9 +360,9 @@ export function MediaPage() {
     const datasource = dataSources.find((source) => source.id === selectedDataSourceId);
     if (!activeCase || !datasource) return Promise.reject(new Error("No datasource selected."));
     return mediaSource === "plugin"
-      ? listMediaGalleryPage(activeCase.databasePath, datasource.id, type, offset, type === "image" ? classificationFilter : [])
-      : listClassifiedFileViewMediaPage(activeCase.databasePath, datasource.paths, type, offset, type === "image" ? classificationFilter : []);
-  }, [activeCase, dataSources, selectedDataSourceId, mediaSource, classificationFilter, classificationRevision]);
+      ? listMediaGalleryPage(activeCase.databasePath, datasource.id, type, offset, type === "image" ? classificationFilter : [], directoryFilter)
+      : listClassifiedFileViewMediaPage(activeCase.databasePath, datasource.paths, type, offset, type === "image" ? classificationFilter : [], directoryFilter);
+  }, [activeCase, dataSources, selectedDataSourceId, mediaSource, classificationFilter, classificationRevision, directoryFilter]);
 
   async function handleClassify(item: MediaItem, category: VicCategory | null, advanceFromIndex?: number) {
     if (!activeCase || item.mediaType !== "image" || classificationSaving || isLoading || customClassifications.busy || !customClassifications.ready) return;
@@ -521,6 +525,9 @@ export function MediaPage() {
 
         <TabsContent value="photos" className="m-0 min-h-0 flex-1">
           <MediaGallery
+            directorySearch={activeCase && selectedDataSource && <DirectorySearch key={classificationContext} caseDatabasePath={activeCase.databasePath}
+              datasourceId={selectedDataSource.id} roots={selectedDataSource.paths} indexed={mediaSource === "plugin"} mediaType="image"
+              selectedDirectory={directoryFilter} onSelect={path => setDirectorySelection(path ? { context: classificationContext, path } : null)} revision={refreshKey} />}
             tileWidth={tileWidth}
             onTileWidthChange={handleTileWidthChange}
             classification={{
@@ -539,7 +546,7 @@ export function MediaPage() {
             tiles={gallery.photos}
             detailTitle="Image Details"
             emptyText={
-              classificationFilter.length ? "No images match the selected classifications." : mediaSource === "plugin"
+              directoryFilter ? "No images match the filters in this directory." : classificationFilter.length ? "No images match the selected classifications." : mediaSource === "plugin"
                 ? "No byte-detected images found. Run the Image Metadata plugin from Plugins."
                 : "No files with image extensions were found in this datasource."
             }
@@ -553,6 +560,9 @@ export function MediaPage() {
         </TabsContent>
         <TabsContent value="videos" className="m-0 min-h-0 flex-1">
           <MediaGallery
+            directorySearch={activeCase && selectedDataSource && <DirectorySearch key={classificationContext} caseDatabasePath={activeCase.databasePath}
+              datasourceId={selectedDataSource.id} roots={selectedDataSource.paths} indexed={mediaSource === "plugin"} mediaType="video"
+              selectedDirectory={directoryFilter} onSelect={path => setDirectorySelection(path ? { context: classificationContext, path } : null)} revision={refreshKey} />}
             tileWidth={tileWidth}
             onTileWidthChange={handleTileWidthChange}
             caseDatabasePath={activeCase?.databasePath ?? null}
@@ -561,7 +571,7 @@ export function MediaPage() {
             tiles={gallery.videos}
             detailTitle="Video Details"
             emptyText={
-              mediaSource === "plugin"
+              directoryFilter ? "No videos directly in this directory." : mediaSource === "plugin"
                 ? "No byte-detected videos found. Run the Image Metadata plugin from Plugins."
                 : "No files with video extensions were found in this datasource."
             }
@@ -584,6 +594,7 @@ function MediaGallery({
   tileWidth,
   onTileWidthChange,
   classification,
+  directorySearch,
   caseDatabasePath,
   detailTitle,
   emptyText,
@@ -598,9 +609,12 @@ function MediaGallery({
   totalCount,
 }: MediaGalleryProps) {
   return (
-    <div className={cn("grid h-full min-h-0", classification ? "grid-cols-[12rem_minmax(0,1fr)_16rem]" : "grid-cols-[minmax(0,1fr)_16rem]")}>
+    <div className={cn("grid h-full min-h-0", classification || directorySearch ? "grid-cols-[12rem_minmax(0,1fr)_16rem]" : "grid-cols-[minmax(0,1fr)_16rem]")}>
       {classification && <VicFilterSidebar key={caseDatabasePath} filter={classification.filter} counts={classification.counts}
-        onChange={classification.onFilterChange} disabled={classification.saving} custom={classification.custom} />}
+        onChange={classification.onFilterChange} disabled={classification.saving} custom={classification.custom} directorySearch={directorySearch} />}
+      {!classification && directorySearch && <aside className="flex min-h-0 flex-col overflow-auto border-r bg-muted/20" aria-label="Video filters">
+        <div className="flex h-8 shrink-0 items-center border-b px-2 text-xs font-medium">Filters</div>{directorySearch}
+      </aside>}
       <section className="flex min-h-0 min-w-0 flex-col border-r">
         <div className="flex h-8 shrink-0 items-center gap-2 border-b px-2">
           <Icon className="size-3.5 text-muted-foreground" aria-hidden="true" />

@@ -10,6 +10,23 @@ declare module "react-window" {
     isScrolling?: boolean;
   };
 
+  export type ListChildComponentProps<T = unknown> = {
+    index: number;
+    style: CSSProperties;
+    data: T;
+    isScrolling?: boolean;
+  };
+
+  export class FixedSizeList<T = unknown> extends React.Component<{
+    children: ComponentType<ListChildComponentProps<T>>;
+    height: number;
+    width: number | string;
+    itemCount: number;
+    itemSize: number;
+    itemData: T;
+    itemKey?: (index: number, data: T) => React.Key;
+  }> {}
+
   export type FixedSizeGridProps<T = unknown> = {
     children: ComponentType<GridChildComponentProps<T>>;
     className?: string;

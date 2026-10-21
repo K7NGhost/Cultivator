@@ -18,6 +18,7 @@ pub async fn list_media_gallery_page(
     offset: u32,
     limit: u32,
     categories: Option<Vec<i64>>,
+    directory: Option<String>,
 ) -> Result<MediaGalleryPage, String> {
     if !matches!(media_type.as_str(), "image" | "video") {
         return Err("Invalid media type.".into());
@@ -33,6 +34,7 @@ pub async fn list_media_gallery_page(
         offset,
         limit,
         &categories,
+        directory.as_deref(),
     )
     .await
 }
@@ -45,7 +47,7 @@ async fn read_page(
     offset: u32,
     limit: u32,
 ) -> Result<MediaGalleryPage, String> {
-    read_filtered_page(pool, datasource_id, media_type, offset, limit, &[]).await
+    read_filtered_page(pool, datasource_id, media_type, offset, limit, &[], None).await
 }
 
 async fn read_filtered_page(
@@ -55,6 +57,7 @@ async fn read_filtered_page(
     offset: u32,
     limit: u32,
     categories: &[i64],
+    directory: Option<&str>,
 ) -> Result<MediaGalleryPage, String> {
     let limit = limit.clamp(1, 500);
     // A read transaction keeps the count and page consistent across rescans.
@@ -65,26 +68,29 @@ async fn read_filtered_page(
         Some(serde_json::to_string(categories).map_err(|error| error.to_string())?)
     };
     let mut classification_counts = vec![0u64; 257];
+    let (direct, nested) = media_directories::directory_patterns(directory);
     if media_type == "image" {
-        let counts = sqlx::query("SELECT COALESCE(c.category, -1) AS category, COUNT(*) AS count FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 GROUP BY c.category")
-            .bind(datasource_id).bind(media_type).fetch_all(&mut *transaction).await.map_err(|error| error.to_string())?;
+        let counts = sqlx::query("SELECT COALESCE(c.category, -1) AS category, COUNT(*) AS count FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR (replace(g.path, char(92), '/') LIKE $3 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $4 ESCAPE '\\')) GROUP BY c.category")
+            .bind(datasource_id).bind(media_type).bind(&direct).bind(&nested).fetch_all(&mut *transaction).await.map_err(|error| error.to_string())?;
         for row in counts {
             classification_counts[(row.get::<i64, _>("category") + 1) as usize] =
                 row.get::<i64, _>("count") as u64;
         }
     }
     let total_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3)))",
+        "SELECT COUNT(*) FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3))) AND ($4 IS NULL OR (replace(g.path, char(92), '/') LIKE $4 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $5 ESCAPE '\\'))",
     )
     .bind(&datasource_id)
     .bind(&media_type)
     .bind(&filter)
+    .bind(&direct)
+    .bind(&nested)
     .fetch_one(&mut *transaction)
     .await
     .map_err(|error| error.to_string())?;
     let rows = sqlx::query(
-        "SELECT g.payload, c.category FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3))) ORDER BY g.name, g.path LIMIT $4 OFFSET $5")
-        .bind(&datasource_id).bind(&media_type).bind(&filter).bind(limit).bind(offset)
+        "SELECT g.payload, c.category FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3))) AND ($6 IS NULL OR (replace(g.path, char(92), '/') LIKE $6 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $7 ESCAPE '\\')) ORDER BY g.name, g.path LIMIT $4 OFFSET $5")
+        .bind(&datasource_id).bind(&media_type).bind(&filter).bind(limit).bind(offset).bind(&direct).bind(&nested)
         .fetch_all(&mut *transaction).await.map_err(|error| error.to_string())?;
     let items = rows
         .into_iter()
@@ -116,6 +122,94 @@ async fn read_filtered_page(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn directory_filter_is_literal_direct_and_combines_with_classification_and_pagination() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        ensure_plugin_tables(&pool).await.unwrap();
+        sqlx::query("INSERT INTO plugin_jobs (id, case_id, datasource_id, plugin_id, status, started_at) VALUES ('directories', 'case', 'source', 'image-metadata', 'complete', 'now')")
+            .execute(&pool).await.unwrap();
+        let paths = [
+            "C:/evidence/a_%/one.jpg",
+            "C:/evidence/a_%/two.jpg",
+            "C:/evidence/a_%/nested/three.jpg",
+            "C:/evidence/a_X/other.jpg",
+            "C:\\evidence\\a_%\\four.jpg",
+        ];
+        let gallery = builtin::MediaGallery {
+            photos: paths
+                .iter()
+                .enumerate()
+                .map(|(index, path)| {
+                    serde_json::from_value(serde_json::json!({
+                        "id": format!("image-{index}"), "mediaType": "image", "path": path,
+                        "name": format!("{index}.jpg"), "format": "JPEG", "size": 1,
+                        "mediaPath": path, "thumbnailPath": path, "metadata": []
+                    }))
+                    .unwrap()
+                })
+                .collect(),
+            videos: vec![],
+            scanned_files: 5,
+        };
+        replace_media_gallery_items(&pool, "directories", "source", &gallery)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO media_classifications VALUES (?, 0, 'now')")
+            .bind(paths[0])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO media_classifications VALUES (?, 1, 'now')")
+            .bind(paths[4])
+            .execute(&pool)
+            .await
+            .unwrap();
+        let page = read_filtered_page(
+            &pool,
+            "source",
+            "image",
+            0,
+            500,
+            &[],
+            Some("C:/evidence/a_%"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.total_count, 3);
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![paths[0], paths[1], paths[4]]
+        );
+        assert_eq!(&page.classification_counts[..3], &[1, 1, 1]);
+        let filtered = read_filtered_page(
+            &pool,
+            "source",
+            "image",
+            1,
+            1,
+            &[-1, 0],
+            Some("C:/evidence/a_%/"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(filtered.total_count, 2);
+        assert_eq!(filtered.items.len(), 1);
+        assert_eq!(filtered.items[0].path, paths[1]);
+        assert!(!filtered.has_next_page);
+        let absent = read_filtered_page(&pool, "source", "image", 0, 500, &[], Some("C:/missing"))
+            .await
+            .unwrap();
+        assert_eq!(absent.total_count, 0);
+        pool.close().await;
+    }
 
     #[tokio::test]
     async fn batched_replacement_and_pagination_preserve_order_and_isolation() {
@@ -176,7 +270,7 @@ mod tests {
         );
         sqlx::query("INSERT INTO media_classifications(path, category, updated_at) SELECT path, CAST(name AS INTEGER) % 5, 'now' FROM media_gallery_items WHERE datasource_id = 'source' AND media_type = 'image' AND CAST(name AS INTEGER) % 5 IN (0, 1)")
             .execute(&pool).await.unwrap();
-        let filtered = read_filtered_page(&pool, "source", "image", 500, 500, &[-1, 0])
+        let filtered = read_filtered_page(&pool, "source", "image", 500, 500, &[-1, 0], None)
             .await
             .unwrap();
         assert_eq!(filtered.total_count, 802);
@@ -189,7 +283,7 @@ mod tests {
             .items
             .iter()
             .all(|item| item.vic_category.is_none() || item.vic_category == Some(0)));
-        let zero = read_filtered_page(&pool, "source", "image", 200, 500, &[0])
+        let zero = read_filtered_page(&pool, "source", "image", 200, 500, &[0], None)
             .await
             .unwrap();
         assert_eq!(zero.total_count, 201);
@@ -205,14 +299,14 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let custom = read_filtered_page(&pool, "source", "image", 0, 500, &[5])
+        let custom = read_filtered_page(&pool, "source", "image", 0, 500, &[5], None)
             .await
             .unwrap();
         assert_eq!(custom.total_count, 1);
         assert_eq!(custom.classification_counts[6], 1);
         assert_eq!(custom.items[0].vic_category, Some(5));
         assert_eq!(
-            read_filtered_page(&pool, "source", "image", 0, 500, &[4])
+            read_filtered_page(&pool, "source", "image", 0, 500, &[4], None)
                 .await
                 .unwrap()
                 .total_count,

@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import type { ReactNode } from "react";
 import { VIC_CATEGORIES, toggleVicFilter, type ClassificationDefinition, type VicCategory, type VicFilterValue } from "../model/vicClassification";
 import { CustomClassificationManager, type CustomClassificationActions } from "./CustomClassificationManager";
 
@@ -29,14 +30,16 @@ export function VicClassificationControls({ category, disabled, onClassify, cust
   );
 }
 
-export function VicFilterSidebar({ filter, counts, onChange, disabled, custom }: {
+export function VicFilterSidebar({ filter, counts, onChange, disabled, custom, directorySearch }: {
   filter: VicFilterValue[]; counts: number[]; onChange: (value: VicFilterValue[]) => void; disabled?: boolean;
   custom?: CustomClassificationActions;
+  directorySearch?: ReactNode;
 }) {
   const entries = [{ value: -1 as const, label: "Unclassified", color: "#94a3b8" }, ...VIC_CATEGORIES, ...(custom?.categories ?? [])];
   return (
     <aside className="flex min-h-0 flex-col border-r bg-muted/20" aria-label="Image classification filters">
       <div className="flex h-8 shrink-0 items-center border-b px-2 text-xs font-medium">Filters</div>
+      {directorySearch}
       <div className="grid content-start gap-2 overflow-auto p-2 text-xs">
         <h3 className="font-medium">Classifications</h3>
         <button type="button" disabled={disabled} aria-pressed={!filter.length} onClick={() => onChange([])}

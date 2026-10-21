@@ -206,17 +206,22 @@ async fn discover(case: &Arc<CaseCache>) -> Result<(), String> {
                 return Ok(());
             }
             let id: String = source.get("id");
-            let mut roots = vec![source.get::<String, _>("path")];
+            let mut roots = Vec::new();
             if has_paths {
                 roots.extend(
                     sqlx::query_scalar::<_, String>(
-                        "SELECT path FROM data_source_paths WHERE data_source_id = ?",
+                        "SELECT path FROM data_source_paths WHERE data_source_id = ? ORDER BY sort_order ASC",
                     )
                     .bind(&id)
                     .fetch_all(&pool)
                     .await
                     .map_err(|e| e.to_string())?,
                 );
+            }
+            // Match plugin loading: saved case paths replace the original
+            // source, which may be an archive that is no longer available.
+            if roots.is_empty() {
+                roots.push(source.get::<String, _>("path"));
             }
             roots.sort();
             let mut covered = Vec::<PathBuf>::new();
