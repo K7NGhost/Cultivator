@@ -5,6 +5,8 @@ use image::{
 };
 use std::io::{BufReader, Read, Seek, Write};
 
+mod jpeg;
+
 fn check_cancel(cancelled: &AtomicBool) -> Result<(), String> {
     if cancelled.load(Ordering::Acquire) {
         Err("Thumbnail request cancelled.".into())
@@ -162,6 +164,7 @@ fn decode_native(
     limits.max_image_width = Some(32768);
     limits.max_image_height = Some(32768);
     reader.limits(limits);
+    let is_jpeg = reader.format() == Some(image::ImageFormat::Jpeg);
     let mut decoder = reader.into_decoder()?;
     let (width, height) = decoder.dimensions();
     // Reserve conservatively for decoder scratch, 16-bit RGBA pixels, orientation
@@ -171,14 +174,29 @@ fn decode_native(
         .saturating_mul(64)
         .saturating_add(source.size)
         .saturating_add(4 * 1024 * 1024);
-    if estimate > budget {
-        // The compatibility decoder can downsample JPEGs before allocating
-        // pixels, and can safely use the full budget under the exclusive gate.
+    if estimate > budget && !is_jpeg {
+        // Compatibility formats can safely use the full budget under the
+        // exclusive gate when a single native slot is too small.
         return Err(NativeError::Budget);
     }
     let orientation = decoder.orientation()?;
     check_cancel(cancelled)?;
-    let mut image = DynamicImage::from_decoder(decoder)?;
+    let mut image = if is_jpeg {
+        // Decode JPEGs at 1/2, 1/4 or 1/8 resolution before allocating pixels.
+        // Camera photos otherwise fall into the serialized Python fallback even
+        // though the gallery only needs a 256-pixel preview.
+        match jpeg::decode(&source.path, source.size, budget) {
+            Ok(image) => image,
+            // Keep native color conversion for uncommon JPEG variants that
+            // already fit. Larger compatibility images use the exclusive gate.
+            Err(NativeError::Unsupported) if estimate <= budget => {
+                DynamicImage::from_decoder(decoder)?
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        DynamicImage::from_decoder(decoder)?
+    };
     let decode_ms = millis(start);
     check_cancel(cancelled)?;
     let start = Instant::now();
@@ -208,35 +226,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn large_jpeg_uses_bounded_compatibility_decoder_on_memory_saver() {
+    fn large_jpeg_stays_native_on_memory_saver_and_is_cached() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("photo.jpg");
-        image::RgbImage::new(800, 800).save(&path).unwrap();
+        image::RgbImage::from_pixel(4608, 3456, image::Rgb([200, 40, 20]))
+            .save(&path)
+            .unwrap();
         let (_, source) = Source::new(&directory.path().join("cache"), "photo", &path).unwrap();
         let config = Config {
             workers: 8,
-            memory_bytes: 128 * 1024 * 1024,
-            python_fallback: true,
+            memory_bytes: 256 * 1024 * 1024,
+            python_fallback: false,
         };
-        let fallback: Fallback = Arc::new(|_, target, budget, _| {
-            assert_eq!(budget, 128 * 1024 * 1024);
-            image::RgbImage::new(256, 256)
-                .save_with_format(target, image::ImageFormat::Jpeg)
-                .map_err(|error| error.to_string())?;
-            Ok(Timings {
-                backend: "python".into(),
-                ..Timings::default()
-            })
-        });
         let result = generate(
             &source,
             &AtomicBool::new(false),
             &config,
-            Some(&fallback),
+            None,
             &RwLock::new(()),
         )
         .unwrap();
-        assert_eq!(result.timings.backend, "python");
+        assert_eq!(result.timings.backend, "native");
+        let thumbnail = image::open(&result.path).unwrap().to_rgb8();
+        assert_eq!(thumbnail.dimensions(), (256, 192));
+        let pixel = thumbnail.get_pixel(100, 100);
+        assert!(pixel[0] > 190 && pixel[1] < 50 && pixel[2] < 30);
+        let cached = generate(
+            &source,
+            &AtomicBool::new(false),
+            &config,
+            None,
+            &RwLock::new(()),
+        )
+        .unwrap();
+        assert!(cached.timings.cache_hit);
     }
 
     #[test]

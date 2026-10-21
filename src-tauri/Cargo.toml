@@ -34,6 +34,7 @@ globset = "0.4.18"
 ignore = "0.4.26"
 imagesize = "0.15.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "tiff", "bmp", "ico", "pnm", "qoi"] }
+jpeg-decoder = { version = "0.3.2", default-features = false }
 kamadak-exif = "0.6.1"
 rayon = "1.12.0"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
@@ -51,6 +52,10 @@ memmap2 = "0.9.9"
 [dev-dependencies]
 criterion = { package = "codspeed-criterion-compat", version = "=5.0.2", features = ["async_tokio"] }
 tempfile = "3"
+
+# Camera JPEG entropy decoding runs on every cold gallery visit in development.
+[profile.dev.package.jpeg-decoder]
+opt-level = 3
 
 [[bench]]
 name = "text_preview"

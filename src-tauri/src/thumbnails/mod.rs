@@ -2,6 +2,7 @@
 //! caller's application cache is written. No image bytes cross the IPC boundary.
 mod native;
 pub mod python;
+pub mod store;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -100,6 +101,26 @@ pub struct Thumbnail {
 pub type Outcome = Result<Thumbnail, String>;
 pub fn millis(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
+}
+
+/// Persistent identity shared by gallery/file-view consumers. The original is
+/// only inspected, never decoded, on a cache read. Version/size/encoding changes
+/// deliberately invalidate the derived JPEG without changing evidence.
+pub fn cache_fingerprint(path: &Path) -> Result<String, String> {
+    let path = fs::canonicalize(path).map_err(|e| format!("Media file unavailable: {e}"))?;
+    let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("Media source is not a file.".into());
+    }
+    let stamp = metadata
+        .modified()
+        .map_err(|e| e.to_string())?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let identity = serde_json::to_vec(&("sqlite-jpeg-v1", path, metadata.len(), stamp, EDGE, 85))
+        .map_err(|e| e.to_string())?;
+    Ok(format!("{:x}", Sha256::digest(identity)))
 }
 
 #[derive(Clone)]

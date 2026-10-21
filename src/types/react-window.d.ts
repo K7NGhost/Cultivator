@@ -17,6 +17,13 @@ declare module "react-window" {
     columnWidth: number;
     height: number;
     itemData?: T;
+    onScroll?: (position: {
+      scrollLeft: number;
+      scrollTop: number;
+      horizontalScrollDirection: "forward" | "backward";
+      verticalScrollDirection: "forward" | "backward";
+      scrollUpdateWasRequested: boolean;
+    }) => void;
     onItemsRendered?: (range: {
       overscanColumnStartIndex: number;
       overscanColumnStopIndex: number;

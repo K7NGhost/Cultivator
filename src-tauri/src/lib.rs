@@ -788,7 +788,7 @@ async fn render_media_thumbnail(
     media_id: String,
     request_id: String,
     priority: thumbnails::Priority,
-) -> Result<thumbnails::Thumbnail, String> {
+) -> Result<plugins::thumbnail_cache::ThumbnailResponse, String> {
     plugins::render_media_thumbnail(
         app_handle,
         case_database_path,
@@ -2344,6 +2344,12 @@ pub fn run_search_worker_stdio() -> i32 {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("thumbnail", |_context, request, responder| {
+            let path = request.uri().path().to_owned();
+            tauri::async_runtime::spawn(async move {
+                responder.respond(plugins::thumbnail_cache::serve(&path).await);
+            });
+        })
         .manage(jobs::JobManager::new())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -2393,6 +2399,9 @@ pub fn run() {
             render_media_thumbnail,
             update_media_thumbnail,
             configure_thumbnail_memory,
+            tauri_commands::read_cached_media_thumbnails,
+            tauri_commands::prepare_case_thumbnails,
+            tauri_commands::get_thumbnail_preparation_status,
             remove_datasource,
             submit_plugin_run,
             get_plugin_run,

@@ -43,12 +43,14 @@ import {
 } from "@/features/datasources";
 import type { DataSourceRecord } from "@/features/datasources";
 import { MediaImagePreview } from "../components/MediaImagePreview";
+import { ThumbnailPreparationStatus } from "../components/ThumbnailPreparationStatus";
 import { MediaVideoPreview } from "../components/MediaVideoPreview";
 import {
   type FileViewMediaPage,
   listClassifiedFileViewMediaPage,
   listMediaGalleryPage,
   loadMediaDetails,
+  prepareCaseThumbnails,
   setMediaClassification,
 } from "../services/mediaRepository";
 import type { MediaGalleryResult, MediaItem } from "../model/types";
@@ -60,7 +62,8 @@ import { nextReviewImage } from "../services/nextReviewImage";
 import { GALLERY_TILE_SIZES, readGalleryTileWidth, saveGalleryTileWidth } from "../model/galleryTileSize";
 import { cn } from "@/lib/utils";
 import { VirtualMediaCache } from "../services/virtualMediaCache";
-import { usePerformanceSettings, recordCacheBytes, thumbnailCacheBytes, thumbnailConcurrency, galleryOverscanScreens } from "../../settings/performanceSettings";
+import { galleryScrollAnchor } from "../services/galleryScrollAnchor";
+import { usePerformanceSettings, recordCacheBytes, thumbnailCacheBytes, thumbnailConcurrency } from "../../settings/performanceSettings";
 import { useGalleryActive } from "../services/useGalleryActive";
 import { clearVideoThumbnails } from "../utils/videoThumbnails";
 import { GalleryPrefetch, galleryPrefetchRange } from "../services/galleryPrefetch";
@@ -99,6 +102,7 @@ type ElementSize = {
 };
 
 type VirtualizedMediaGridData = {
+  thumbnailEdge: number;
   customCategories?: ClassificationDefinition[];
   onClassify?: GalleryClassification["onClassify"];
   classificationSaving?: boolean;
@@ -460,13 +464,18 @@ export function MediaPage() {
             )}
           </div>
         </div>
+        <ThumbnailPreparationStatus caseDatabasePath={activeCase?.databasePath ?? null} />
         <Button
           type="button"
           variant="ghost"
           size="xs"
           className="ml-auto h-7 rounded-sm px-2 text-xs"
           disabled={!activeCase || isLoading}
-          onClick={() => setRefreshKey((key) => key + 1)}
+          onClick={() => {
+            if (activeCase) void prepareCaseThumbnails(activeCase.databasePath, { rescan: true })
+              .then(() => setRefreshKey(key => key + 1))
+              .catch((error: unknown) => setError(getErrorMessage(error)));
+          }}
         >
           <RefreshCw className={cn("size-3.5", isLoading && "animate-spin")} />
           Refresh
@@ -666,6 +675,8 @@ function VirtualizedMediaGrid({
 }) {
   const [containerRef, size] = useElementSize<HTMLDivElement>();
   const gridRef = useRef<FixedSizeGrid<VirtualizedMediaGridData>>(null);
+  const scrollTopRef = useRef(0);
+  const previousLayout = useRef<{ columns: number; rowHeight: number } | null>(null);
   const pendingFocus = useRef<GalleryClassification["focusTarget"]>(null);
   const [revision, setRevision] = useState(0);
   const [visibleRange, setVisibleRange] = useState({ start: 0, stop: 0, direction: 1 });
@@ -681,21 +692,22 @@ function VirtualizedMediaGrid({
     cache.activate();
     return () => cache.dispose();
   }, [cache]);
+  const thumbnailEdge = tileWidth * (window.devicePixelRatio || 1) <= 144 ? 128 : 256;
   const prefetch = useMemo(() => new GalleryPrefetch(
     (index) => cache.itemAt(index),
-    (item, priority) => prepareThumbnail(caseDatabasePath!, item, priority),
+    (item, priority) => prepareThumbnail(caseDatabasePath!, item, priority, thumbnailEdge),
     thumbnailConcurrency(settings),
-  ), [cache, caseDatabasePath, epoch, settings]);
+  ), [cache, caseDatabasePath, epoch, settings, thumbnailEdge]);
   useEffect(() => () => prefetch.dispose(), [prefetch]);
   useEffect(() => {
     cache.setBudget(recordCacheBytes(settings));
     if (size.height <= 0 || !galleryActive) { prefetch.dispose(); return; }
     const range = galleryPrefetchRange(visibleRange.start, visibleRange.stop, totalCount,
       settings.screensAhead, settings.screensBehind, visibleRange.direction,
-      Math.floor(thumbnailCacheBytes(settings) / (256 * 256 * 4 + 4096)));
+      Math.floor(thumbnailCacheBytes(settings) / (thumbnailEdge * thumbnailEdge * 4 + 8192)));
     cache.setRange(range.start, range.stop);
     if (mediaType === "image" && caseDatabasePath) prefetch.update(range);
-  }, [cache, prefetch, visibleRange, settings, size.height, galleryActive, totalCount, mediaType, caseDatabasePath, revision]);
+  }, [cache, prefetch, visibleRange, settings, size.height, galleryActive, totalCount, mediaType, caseDatabasePath, revision, thumbnailEdge]);
   const columnCount = Math.max(
     1,
     Math.floor(Math.max(size.width, tileWidth) / tileWidth),
@@ -710,6 +722,12 @@ function VirtualizedMediaGrid({
     MEDIA_TILE_GAP;
   const rowCount = Math.ceil(totalCount / columnCount);
   useLayoutEffect(() => {
+    const next = { columns: columnCount, rowHeight };
+    const top = galleryScrollAnchor(scrollTopRef.current, previousLayout.current ?? next, next, totalCount, size.height);
+    previousLayout.current = next;
+    if (top !== scrollTopRef.current) gridRef.current?.scrollTo({ scrollTop: top, scrollLeft: 0 });
+  }, [columnCount, rowHeight, totalCount, size.height]);
+  useLayoutEffect(() => {
     pendingFocus.current = focusTarget;
     if (focusTarget && galleryActive) {
       gridRef.current?.scrollToItem({ rowIndex: Math.floor(focusTarget.index / columnCount), columnIndex: focusTarget.index % columnCount, align: "smart" });
@@ -723,6 +741,7 @@ function VirtualizedMediaGrid({
     if (button) { button.focus({ preventScroll: true }); pendingFocus.current = null; }
   });
   const gridData: VirtualizedMediaGridData = {
+    thumbnailEdge,
     customCategories,
     onClassify,
     classificationSaving,
@@ -750,6 +769,7 @@ function VirtualizedMediaGrid({
           columnWidth={columnWidth}
           height={size.height}
           itemData={gridData}
+          onScroll={({ scrollTop }) => { scrollTopRef.current = scrollTop; }}
           onItemsRendered={({ visibleRowStartIndex, visibleRowStopIndex }) => {
             const start = visibleRowStartIndex * columnCount;
             const stop = Math.min(totalCount - 1, (visibleRowStopIndex + 1) * columnCount - 1);
@@ -757,7 +777,9 @@ function VirtualizedMediaGrid({
               { start, stop, direction: start === previous.start ? previous.direction : start < previous.start ? -1 : 1 });
           }}
           overscanColumnCount={1}
-          overscanRowCount={Math.max(1, Math.ceil(size.height / rowHeight) * galleryOverscanScreens(settings))}
+          // Range prefetch handles lookahead without mounting entire screens of
+          // menus, observers, and image consumers at small tile sizes.
+          overscanRowCount={1}
           rowCount={rowCount}
           rowHeight={rowHeight}
           width={size.width}
@@ -790,6 +812,7 @@ function MediaGridCell({
   return (
     <div style={style} className="p-1">
       <MediaTilePreview
+        thumbnailEdge={data.thumbnailEdge}
         customCategories={data.customCategories}
         itemIndex={itemIndex}
         onClassify={data.onClassify}
@@ -806,6 +829,7 @@ function MediaGridCell({
 }
 
 function MediaTilePreview({
+  thumbnailEdge,
   customCategories,
   itemIndex,
   onClassify,
@@ -817,6 +841,7 @@ function MediaTilePreview({
   onSelectItem,
   tile,
 }: {
+  thumbnailEdge: number;
   customCategories?: ClassificationDefinition[];
   itemIndex: number;
   onClassify?: GalleryClassification["onClassify"];
@@ -855,6 +880,8 @@ function MediaTilePreview({
         <MediaImagePreview
           caseDatabasePath={caseDatabasePath}
           item={tile}
+          retain
+          edge={thumbnailEdge}
           fit="contain"
           className="min-h-0 w-full flex-1 bg-black"
         />

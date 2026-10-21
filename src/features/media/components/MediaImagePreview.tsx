@@ -10,14 +10,15 @@ type MediaImagePreviewProps = {
   className?: string;
   fit?: "cover" | "contain";
   retain?: boolean;
+  edge?: number;
   item: MediaItem;
 };
 
-export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", retain = false, item }: MediaImagePreviewProps) {
+export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", retain = false, edge = 256, item }: MediaImagePreviewProps) {
   const container = useRef<HTMLDivElement>(null);
   const [failedKey, setFailedKey] = useState<string>();
   useThumbnailEpoch();
-  const key = thumbnailKey(caseDatabasePath, item);
+  const key = thumbnailKey(caseDatabasePath, item, edge);
   const cachedSource = usePreparedThumbnail(key);
   useEffect(() => retain ? preparedThumbnails.retain(key) : undefined, [key, retain]);
 
@@ -33,7 +34,7 @@ export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", 
         ? "visible" as const : "nearby" as const;
     };
     // Visible tiles take priority over overscan in the bounded loading queue.
-    const request = prepareThumbnail(caseDatabasePath, item, priorityFor());
+    const request = prepareThumbnail(caseDatabasePath, item, priorityFor(), edge);
     request.promise.catch(() => {
       // Full-resolution originals can exhaust WebView RAM. Only show bounded thumbnails.
       if (current) setFailedKey(key);

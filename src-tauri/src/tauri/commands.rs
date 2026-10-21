@@ -45,3 +45,35 @@ pub async fn read_file_format_preview(
 ) -> Result<Option<crate::preview::FileFormatPreview>, String> {
     crate::preview::file_format_preview(path).await
 }
+#[tauri::command]
+pub async fn read_cached_media_thumbnails(
+    app_handle: tauri::AppHandle,
+    case_database_path: String,
+    requests: Vec<crate::plugins::thumbnail_cache::CacheRequest>,
+) -> Result<Vec<crate::plugins::thumbnail_cache::CacheHit>, String> {
+    crate::plugins::thumbnail_cache::read_cached(app_handle, case_database_path, requests).await
+}
+
+#[tauri::command]
+pub async fn prepare_case_thumbnails(
+    app_handle: tauri::AppHandle,
+    case_database_path: String,
+    retry_failed: Option<bool>,
+    rescan: Option<bool>,
+) -> Result<crate::plugins::thumbnail_cache::PreparationStatus, String> {
+    crate::plugins::thumbnail_cache::prepare_case(
+        app_handle,
+        case_database_path,
+        retry_failed.unwrap_or(false),
+        rescan.unwrap_or(false),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_thumbnail_preparation_status(
+    app_handle: tauri::AppHandle,
+    case_database_path: String,
+) -> Result<crate::plugins::thumbnail_cache::PreparationStatus, String> {
+    crate::plugins::thumbnail_cache::status(app_handle, case_database_path).await
+}

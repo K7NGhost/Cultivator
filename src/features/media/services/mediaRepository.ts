@@ -61,6 +61,22 @@ export function updateMediaThumbnail(requestId: string, priority: ThumbnailPrior
   return invoke<void>("update_media_thumbnail", { requestId, priority });
 }
 
+export type CachedThumbnailRequest = { id: string; sourcePath: string };
+export type CachedThumbnailHit = { id: string; path: string };
+export function readCachedMediaThumbnails(caseDatabasePath: string, requests: CachedThumbnailRequest[]) {
+  return invoke<CachedThumbnailHit[]>("read_cached_media_thumbnails", { caseDatabasePath, requests });
+}
+
+export type ThumbnailPreparationStatus = {
+  total: number; ready: number; pending: number; failed: number; checking: number; scanning: boolean; error: string | null;
+};
+export function prepareCaseThumbnails(caseDatabasePath: string, options: { retryFailed?: boolean; rescan?: boolean } = {}) {
+  return invoke<ThumbnailPreparationStatus>("prepare_case_thumbnails", { caseDatabasePath, ...options });
+}
+export function getThumbnailPreparationStatus(caseDatabasePath: string) {
+  return invoke<ThumbnailPreparationStatus>("get_thumbnail_preparation_status", { caseDatabasePath });
+}
+
 export async function listFileViewMediaPage(
   roots: string[],
   mediaType: "image" | "video",

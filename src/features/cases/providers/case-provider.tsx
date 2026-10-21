@@ -13,6 +13,8 @@ import {
   listCases,
 } from "../services/caseRepository";
 import type { CaseRecord, CreateCaseInput } from "../model/types";
+import { prepareCaseThumbnails } from "@/features/media/services/mediaRepository";
+import { subscribeToDataSourcesChanged } from "@/features/datasources";
 
 const ACTIVE_CASE_STORAGE_KEY = "cultivator.activeCaseId";
 
@@ -119,6 +121,16 @@ export function CaseProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshCases();
   }, [refreshCases]);
+
+  useEffect(() => {
+    if (!activeCase) return;
+    const prepare = (rescan = false) => {
+      void prepareCaseThumbnails(activeCase.databasePath, { rescan })
+        .catch((error: unknown) => console.error("Preview preparation could not start", error));
+    };
+    prepare();
+    return subscribeToDataSourcesChanged(caseId => { if (caseId === activeCase.id) prepare(true); });
+  }, [activeCase?.id, activeCase?.databasePath]);
 
   const value = useMemo(
     () => ({

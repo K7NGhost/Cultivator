@@ -38,6 +38,7 @@ pub use execution::{
     PluginRunSnapshot, SubmitPluginRunRequest, SubmittedPluginRun,
 };
 pub(crate) use job_persistence::initialize as initialize_job_manager;
+pub(crate) mod thumbnail_cache;
 pub use media_classifications::{
     delete_custom_classification, list_custom_classifications, list_file_view_media_page,
     save_custom_classification, set_media_classification, CustomClassification,
@@ -933,28 +934,16 @@ pub async fn render_media_thumbnail(
     media_id: String,
     request_id: String,
     priority: crate::thumbnails::Priority,
-) -> Result<crate::thumbnails::Thumbnail, String> {
-    let service = thumbnail_service(&app_handle)?;
-    // Dedicated application cache, scoped by case, never beneath evidence roots.
-    use sha2::{Digest, Sha256};
-    let case = fs::canonicalize(&case_database_path).map_err(|e| e.to_string())?;
-    let case_key = format!("{:x}", Sha256::digest(case.to_string_lossy().as_bytes()));
-    let cache = app_handle
-        .path()
-        .app_cache_dir()
-        .map_err(|e| e.to_string())?
-        .join("thumbnails")
-        .join(case_key);
-    service
-        .submit(
-            &cache,
-            &media_id,
-            Path::new(&source_path),
-            request_id,
-            priority,
-        )?
-        .await
-        .map_err(|_| "Thumbnail worker disconnected.".to_string())?
+) -> Result<thumbnail_cache::ThumbnailResponse, String> {
+    thumbnail_cache::render(
+        app_handle,
+        case_database_path,
+        source_path,
+        media_id,
+        request_id,
+        priority,
+    )
+    .await
 }
 
 pub fn update_media_thumbnail(
@@ -1389,6 +1378,25 @@ async fn run_builtin_plugin_stage(
 
             if let Some(gallery) = effects.media {
                 replace_media_gallery_items(pool, &job.id, &datasource.id, &gallery).await?;
+                let thumbnail_app = app_handle.clone();
+                let thumbnail_database = pool
+                    .connect_options()
+                    .get_filename()
+                    .to_string_lossy()
+                    .into_owned();
+                let thumbnail_source = datasource.id.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = thumbnail_cache::register_indexed(
+                        &thumbnail_app,
+                        &thumbnail_database,
+                        &thumbnail_source,
+                        &gallery,
+                    )
+                    .await
+                    {
+                        eprintln!("Cannot register indexed thumbnail sources: {error}");
+                    }
+                });
             }
 
             for path in effects.derived_paths {

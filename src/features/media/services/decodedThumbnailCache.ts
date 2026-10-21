@@ -69,14 +69,14 @@ export class DecodedThumbnailCache {
   }
 }
 
-export async function decodeThumbnail(path: string, signal?: AbortSignal): Promise<DecodedThumbnail> {
+export async function decodeThumbnail(path: string, signal?: AbortSignal, edge = 256): Promise<DecodedThumbnail> {
   const response = await fetch(path, { signal, cache: "no-store" });
   if (!response.ok) throw new Error("Thumbnail could not be read.");
-  const blob = await response.blob();
+  let blob = await response.blob();
   signal?.throwIfAborted();
   if (blob.size > 2 * 1024 * 1024) throw new Error("Thumbnail exceeds the preview size limit.");
   // Revocable URLs let eviction release browser resources as well as JS entries.
-  const source = URL.createObjectURL(blob);
+  let source = URL.createObjectURL(blob);
   const image = new Image();
   image.decoding = "async";
   const dispose = () => { image.removeAttribute("src"); URL.revokeObjectURL(source); };
@@ -87,6 +87,22 @@ export async function decodeThumbnail(path: string, signal?: AbortSignal): Promi
     await image.decode();
     signal?.throwIfAborted();
     if (image.naturalWidth > 256 || image.naturalHeight > 256) throw new Error("Invalid thumbnail dimensions.");
+    // Dense grids retain a display-sized decode. Keeping every small tile at
+    // 256px can exhaust the RAM cache with only a single large viewport.
+    if (edge < 256 && Math.max(image.naturalWidth, image.naturalHeight) > edge) {
+      const scale = edge / Math.max(image.naturalWidth, image.naturalHeight);
+      const canvas = new OffscreenCanvas(Math.max(1, Math.round(image.naturalWidth * scale)), Math.max(1, Math.round(image.naturalHeight * scale)));
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Thumbnail resize unavailable.");
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.85 });
+      signal?.throwIfAborted();
+      dispose();
+      source = URL.createObjectURL(blob);
+      image.src = source;
+      await image.decode();
+      signal?.throwIfAborted();
+    }
   } catch (error) { dispose(); throw error; }
   finally { signal?.removeEventListener("abort", abort); }
   return { source, bytes: image.naturalWidth * image.naturalHeight * 4 + blob.size + 4096, dispose };
