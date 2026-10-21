@@ -10,7 +10,7 @@ use std::{
 
 pub use archive_extractor::manifest as archive_extractor_manifest;
 pub(crate) use image_metadata::load_metadata;
-pub use image_metadata::{manifest as image_metadata_manifest, MediaGallery, MediaItem, MediaType};
+pub use image_metadata::{manifest as image_metadata_manifest, MediaGallery, MediaItem, MediaType, MediaMetadataField};
 
 pub struct BuiltinArtifact {
     pub file_path: String,

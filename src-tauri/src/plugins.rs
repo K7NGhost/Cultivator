@@ -34,6 +34,7 @@ mod job_progress;
 mod media_classifications;
 mod media_queries;
 mod media_directories;
+pub mod media_hashsets;
 pub use media_directories::{list_media_directories, MediaDirectory};
 pub use execution::{
     cancel_plugin_job, get_plugin_run, pause_plugin_job, pause_plugin_run, submit_plugin_run,
