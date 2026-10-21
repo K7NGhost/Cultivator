@@ -32,7 +32,7 @@ export type PluginOptionDefinition = {
   id: string;
   label: string;
   description?: string;
-  type: "select";
+  type: "select" | "checkbox";
   defaultValue: string;
   choices: Array<{ value: string; label: string }>;
 };

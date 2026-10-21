@@ -215,8 +215,15 @@ impl BuiltinPlugin for ImageMetadataPlugin {
 
     fn run(&self, context: &mut BuiltinPluginContext<'_>) -> Result<(), String> {
         let cancelled = context.cancelled;
-        let gallery =
-            image_metadata::execute_with_cancellation(context.paths.clone(), cancelled, |event| {
+        let hash_media = context
+            .options
+            .get("hashMedia")
+            .is_some_and(|value| value.as_bool() == Some(true) || value.as_str() == Some("true"));
+        let gallery = image_metadata::execute_with_cancellation(
+            context.paths.clone(),
+            hash_media,
+            cancelled,
+            |event| {
                 context.progress(
                     event.scanned_files,
                     event.total_files,
@@ -232,7 +239,8 @@ impl BuiltinPlugin for ImageMetadataPlugin {
                         if event.matched_files == 1 { "" } else { "s" }
                     ),
                 );
-            })?;
+            },
+        )?;
         let matched_files = gallery.photos.len() + gallery.videos.len();
         context.log(
             "info",
@@ -323,5 +331,88 @@ mod tests {
         assert_eq!(ids.len(), manifests.len());
         assert!(ids.contains("archive-extractor"));
         assert!(ids.contains("image-metadata"));
+    }
+
+    #[test]
+    fn image_metadata_hash_option_hashes_images_and_videos_only_when_enabled() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("photo.gif"), b"GIF89a").unwrap();
+        std::fs::write(root.path().join("video.mp4"), b"abc").unwrap();
+        std::fs::write(root.path().join("ignore.txt"), b"abc").unwrap();
+        for options in [
+            serde_json::json!({}),
+            serde_json::json!({"hashMedia": "false"}),
+            serde_json::json!({"hashMedia": false}),
+            serde_json::json!({"hashMedia": "true"}),
+            serde_json::json!({"hashMedia": true}),
+        ] {
+            let enabled = options["hashMedia"] == "true" || options["hashMedia"] == true;
+            let mut progress = |_| {};
+            let cancelled = || false;
+            let mut context = BuiltinPluginContext::new(
+                vec![root.path().to_string_lossy().into_owned()],
+                None,
+                options,
+                Vec::new(),
+                &mut progress,
+                &cancelled,
+            );
+            ImageMetadataPlugin.run(&mut context).unwrap();
+            let gallery = context.into_effects().media.unwrap();
+            assert_eq!(
+                (
+                    gallery.photos.len(),
+                    gallery.videos.len(),
+                    gallery.scanned_files
+                ),
+                (1, 1, 3)
+            );
+            if !enabled {
+                assert!(gallery.photos[0].metadata.is_empty());
+                assert!(gallery.videos[0].metadata.is_empty());
+                continue;
+            }
+            for (item, values) in [
+                (
+                    &gallery.photos[0],
+                    [
+                        "610f5ae4d76e332636a17bd357fd6ce99029316a99d320280d4d77a746bf29e8",
+                        "1ac2109d47dbc72551f71df89d01ed18",
+                        "25c9b37ae36a0a08318d4dca7ca57ea98d776821",
+                    ],
+                ),
+                (
+                    &gallery.videos[0],
+                    [
+                        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                        "900150983cd24fb0d6963f7d28e17f72",
+                        "a9993e364706816aba3e25717850c26c9cd0d89d",
+                    ],
+                ),
+            ] {
+                assert_eq!(
+                    item.metadata
+                        .iter()
+                        .map(|f| f.label.as_str())
+                        .collect::<Vec<_>>(),
+                    ["SHA-256", "MD5", "SHA-1"]
+                );
+                assert_eq!(
+                    item.metadata
+                        .iter()
+                        .map(|f| f.value.as_str())
+                        .collect::<Vec<_>>(),
+                    values
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::read(root.path().join("photo.gif")).unwrap(),
+            b"GIF89a"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("video.mp4")).unwrap(),
+            b"abc"
+        );
     }
 }

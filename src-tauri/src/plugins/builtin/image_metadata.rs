@@ -3,6 +3,7 @@ use crate::plugins::PythonPluginManifest;
 use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Seek},
@@ -176,22 +177,24 @@ pub fn execute_with_progress<F>(paths: Vec<String>, progress: F) -> Result<Media
 where
     F: FnMut(MediaScanProgress),
 {
-    execute_with_cancellation(paths, &|| false, progress)
+    execute_with_cancellation(paths, false, &|| false, progress)
 }
 
 pub fn execute_with_cancellation<F>(
     paths: Vec<String>,
+    hash_media: bool,
     cancelled: Check<'_>,
     progress: F,
 ) -> Result<MediaGallery, String>
 where
     F: FnMut(MediaScanProgress),
 {
-    scan_media_gallery_with_cancellation(paths, cancelled, progress)
+    scan_media_gallery_with_cancellation(paths, hash_media, cancelled, progress)
 }
 
 fn scan_media_gallery_with_cancellation<F>(
     paths: Vec<String>,
+    hash_media: bool,
     cancelled: Check<'_>,
     mut progress: F,
 ) -> Result<MediaGallery, String>
@@ -225,7 +228,7 @@ where
                 .par_iter()
                 .map(|path| {
                     cancellation::checkpoint(cancelled)?;
-                    process_media_item(path)
+                    process_media_item(path, hash_media, cancelled)
                 })
                 .collect::<Vec<_>>()
         });
@@ -350,7 +353,11 @@ fn maybe_report_progress<F>(
     });
 }
 
-fn process_media_item(path: &Path) -> Result<Option<MediaItem>, String> {
+fn process_media_item(
+    path: &Path,
+    hash_media: bool,
+    cancelled: Check<'_>,
+) -> Result<Option<MediaItem>, String> {
     let file = fs::File::open(path)
         .map_err(|error| format!("Failed to open '{}': {error}", path.display()))?;
     let mut reader = BufReader::with_capacity(4096, file);
@@ -378,6 +385,24 @@ fn process_media_item(path: &Path) -> Result<Option<MediaItem>, String> {
     if let Some(png_header) = parse_png_header(header) {
         item_metadata.splice(0..0, png_signature_metadata(png_header));
     }
+    if hash_media {
+        item_metadata.extend(
+            hash_media_reader(&mut reader, cancelled)
+                .map_err(|error| format!("Failed to hash '{}': {error}", path.display()))?,
+        );
+        let after = reader
+            .get_ref()
+            .metadata()
+            .map_err(|error| error.to_string())?;
+        if after.len() != file_metadata.len()
+            || after.modified().ok() != file_metadata.modified().ok()
+        {
+            return Err(format!(
+                "Media file changed while hashing '{}'.",
+                path.display()
+            ));
+        }
+    }
     let item = MediaItem {
         id: media_path.clone(),
         media_type: format.media_type,
@@ -397,6 +422,45 @@ fn process_media_item(path: &Path) -> Result<Option<MediaItem>, String> {
     };
 
     Ok(Some(item))
+}
+
+fn hash_media_reader(
+    reader: &mut (impl Read + Seek),
+    cancelled: Check<'_>,
+) -> Result<Vec<MediaMetadataField>, String> {
+    reader.rewind().map_err(|error| error.to_string())?;
+    let mut sha256 = Sha256::new();
+    let mut md5 = md5::Md5::new();
+    let mut sha1 = sha1::Sha1::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        cancellation::checkpoint(cancelled)?;
+        let read = match reader.read(&mut buffer) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result.map_err(|error| error.to_string())?,
+        };
+        if read == 0 {
+            break;
+        }
+        sha256.update(&buffer[..read]);
+        md5.update(&buffer[..read]);
+        sha1.update(&buffer[..read]);
+    }
+    cancellation::checkpoint(cancelled)?;
+    Ok(vec![
+        MediaMetadataField {
+            label: "SHA-256".into(),
+            value: format!("{:x}", sha256.finalize()),
+        },
+        MediaMetadataField {
+            label: "MD5".into(),
+            value: format!("{:x}", md5.finalize()),
+        },
+        MediaMetadataField {
+            label: "SHA-1".into(),
+            value: format!("{:x}", sha1.finalize()),
+        },
+    ])
 }
 
 fn detect_media_format(path: &Path, bytes: &[u8]) -> Option<MediaFormat> {
@@ -789,7 +853,9 @@ mod tests {
         jpeg.extend_from_slice(&jpeg_with_fill_byte_marker(640, 480)[2..]);
         fs::write(&path, &jpeg).unwrap();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
-        let item = process_media_item(&path).unwrap().unwrap();
+        let item = process_media_item(&path, false, &|| false)
+            .unwrap()
+            .unwrap();
         assert_eq!((item.width, item.height), (Some(640), Some(480)));
         assert!(item.metadata.is_empty());
         assert!(!item.metadata_loaded);
@@ -815,6 +881,7 @@ mod tests {
         let cancelled = AtomicBool::new(false);
         let result = execute_with_cancellation(
             vec![root.path().to_string_lossy().into_owned()],
+            false,
             &|| cancelled.load(Ordering::Relaxed),
             |event| {
                 assert_eq!(event.total_files, 0);

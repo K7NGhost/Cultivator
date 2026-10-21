@@ -1560,6 +1560,24 @@ export function FilesPage() {
                     <div className="mt-auto grid gap-2 rounded-sm border p-2">
                       {activeRunPlugin.options?.map((option) => (
                         <label key={option.id} className="grid gap-1">
+                          {option.type === "checkbox" ? (
+                            <span className="flex items-center gap-2">
+                              <Checkbox
+                                aria-label={option.label}
+                                checked={(pluginOptionValues[activeRunPlugin.id]?.[option.id] ?? option.defaultValue) === "true"}
+                                onCheckedChange={(checked) => {
+                                  setPluginOptionValues((current) => ({
+                                    ...current,
+                                    [activeRunPlugin.id]: {
+                                      ...current[activeRunPlugin.id],
+                                      [option.id]: String(checked === true),
+                                    },
+                                  }));
+                                }}
+                              />
+                              <span className="font-medium">{option.label}</span>
+                            </span>
+                          ) : <>
                           <span className="font-medium">{option.label}</span>
                           <select
                             className="h-7 rounded-sm border bg-background px-2 text-xs"
@@ -1585,6 +1603,7 @@ export function FilesPage() {
                               </option>
                             ))}
                           </select>
+                          </>}
                           {option.description && (
                             <span className="text-[10px] text-muted-foreground">
                               {option.description}

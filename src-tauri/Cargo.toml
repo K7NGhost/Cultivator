@@ -41,6 +41,8 @@ tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 regex = "1.12.4"
 serde_json = "1.0.150"
 sha2 = "0.10.9"
+sha1 = "0.10.6"
+md-5 = "0.10.6"
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio"] }
 toml = "0.9.12"
 zip = { version = "8.6.0", features = ["deflate"] }
