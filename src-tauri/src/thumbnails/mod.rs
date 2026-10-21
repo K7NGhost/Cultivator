@@ -1,6 +1,8 @@
 //! Persistent, bounded thumbnail workers. Evidence is opened read-only; only the
 //! caller's application cache is written. No image bytes cross the IPC boundary.
 mod native;
+#[cfg(windows)]
+pub(crate) use native::render_heif_with_runtime;
 pub mod python;
 pub mod store;
 

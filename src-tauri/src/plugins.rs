@@ -900,6 +900,12 @@ fn thumbnail_service(
             let fallback: crate::thumbnails::Fallback =
                 Arc::new(move |source, target, budget, cancelled| {
                     let python = runtime::prepare_media(&runtime_root)?;
+                    #[cfg(windows)]
+                    if let Some(result) = crate::thumbnails::render_heif_with_runtime(
+                        &python.executable, source, target, budget, cancelled,
+                    ) {
+                        return result;
+                    }
                     crate::thumbnails::python::render_cancellable(
                         &python.executable,
                         source,

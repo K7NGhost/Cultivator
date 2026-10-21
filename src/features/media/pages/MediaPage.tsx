@@ -44,6 +44,8 @@ import {
 import type { DataSourceRecord } from "@/features/datasources";
 import { MediaImagePreview } from "../components/MediaImagePreview";
 import { DirectorySearch } from "../components/DirectorySearch";
+import { HashsetPanel } from "../components/HashsetPanel";
+import { listHashsetHitMediaPage, type HashsetFilter } from "../services/hashsetRepository";
 import { ThumbnailPreparationStatus } from "../components/ThumbnailPreparationStatus";
 import { MediaVideoPreview } from "../components/MediaVideoPreview";
 import {
@@ -148,10 +150,12 @@ export function MediaPage() {
   const classificationContext = JSON.stringify([activeCase?.databasePath, selectedDataSourceId, mediaSource]);
   const [directorySelection, setDirectorySelection] = useState<{ context: string; path: string } | null>(null);
   const directoryFilter = directorySelection?.context === classificationContext ? directorySelection.path : null;
+  const [hashsetSelection, setHashsetSelection] = useState<{ context: string; filter: HashsetFilter } | null>(null);
+  const hashsetFilter = hashsetSelection?.context === classificationContext ? hashsetSelection.filter : null;
   const classificationContextRef = useRef(classificationContext);
   classificationContextRef.current = classificationContext;
   const galleryScopeRef = useRef<string | undefined>(undefined);
-  useEffect(() => { setClassificationSaving(false); setReviewFocusTarget(null); }, [classificationContext, classificationFilter]);
+  useEffect(() => { setClassificationSaving(false); setReviewFocusTarget(null); }, [classificationContext, classificationFilter, directoryFilter, hashsetFilter?.runId]);
   const [isLoading, setIsLoading] = useState(false);
   const [isDataSourcesLoading, setIsDataSourcesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -172,7 +176,7 @@ export function MediaPage() {
     // A refresh or source change starts a new indexed-evidence snapshot. Native
     // requests will revalidate the source fingerprint before repopulating RAM.
     clearPreparedThumbnails();
-  }, [activeCase?.databasePath, selectedDataSourceId, mediaSource, refreshKey, directoryFilter]);
+  }, [activeCase?.databasePath, selectedDataSourceId, mediaSource, refreshKey, directoryFilter, hashsetFilter?.runId]);
   const [fileViewPages, setFileViewPages] = useState<{
     image: FileViewMediaPage | null;
     video: FileViewMediaPage | null;
@@ -259,7 +263,7 @@ export function MediaPage() {
     }
 
     let isCurrent = true;
-    const scope = JSON.stringify([classificationContext, classificationFilter, directoryFilter]);
+    const scope = JSON.stringify([classificationContext, classificationFilter, directoryFilter, hashsetFilter?.runId]);
     if (galleryScopeRef.current !== scope) {
       setGallery({ photos: [], videos: [] });
       setFileViewPages({ image: null, video: null });
@@ -273,7 +277,9 @@ export function MediaPage() {
     const selectedDataSource = dataSources.find(
       (dataSource) => dataSource.id === selectedDataSourceId,
     );
-    const getPage = (type: "image" | "video") => mediaSource === "plugin"
+    const getPage = (type: "image" | "video") => hashsetFilter
+      ? listHashsetHitMediaPage(activeCase.databasePath, hashsetFilter.runId, type, 0, type === "image" ? classificationFilter : [], directoryFilter)
+      : mediaSource === "plugin"
       ? listMediaGalleryPage(activeCase.databasePath, selectedDataSourceId, type, 0, type === "image" ? classificationFilter : [], directoryFilter)
       : listClassifiedFileViewMediaPage(activeCase.databasePath, selectedDataSource?.paths ?? [], type, 0, type === "image" ? classificationFilter : [], directoryFilter);
     const galleryRequest = Promise.all([getPage("image"), getPage("video")])
@@ -332,14 +338,15 @@ export function MediaPage() {
     return () => {
       isCurrent = false;
     };
-  }, [activeCase, dataSources, mediaSource, refreshKey, selectedDataSourceId, classificationContext, classificationFilter, classificationRevision, directoryFilter]);
+  }, [activeCase, dataSources, mediaSource, refreshKey, selectedDataSourceId, classificationContext, classificationFilter, classificationRevision, directoryFilter, hashsetFilter]);
 
   useEffect(() => {
     if (!activeCase || !selectedDataSourceId || mediaSource !== "plugin" ||
         !selectedItem || selectedItem.metadataLoaded) return;
     let current = true;
     loadMediaDetails(activeCase.databasePath, selectedDataSourceId, selectedItem.path)
-      .then((item) => { if (current) setSelectedItem(item); })
+      .then((item) => { if (current) setSelectedItem(previous => previous?.path === item.path
+        ? { ...item, metadata: [...item.metadata, ...previous.metadata.filter(field => field.label === "Hashset hit")] } : previous); })
       .catch((error) => { if (current) setError(getErrorMessage(error)); });
     return () => { current = false; };
   }, [activeCase, selectedDataSourceId, mediaSource, selectedItem]);
@@ -359,10 +366,12 @@ export function MediaPage() {
   const fetchPage = useCallback((type: "image" | "video", offset: number) => {
     const datasource = dataSources.find((source) => source.id === selectedDataSourceId);
     if (!activeCase || !datasource) return Promise.reject(new Error("No datasource selected."));
-    return mediaSource === "plugin"
+    return hashsetFilter
+      ? listHashsetHitMediaPage(activeCase.databasePath, hashsetFilter.runId, type, offset, type === "image" ? classificationFilter : [], directoryFilter)
+      : mediaSource === "plugin"
       ? listMediaGalleryPage(activeCase.databasePath, datasource.id, type, offset, type === "image" ? classificationFilter : [], directoryFilter)
       : listClassifiedFileViewMediaPage(activeCase.databasePath, datasource.paths, type, offset, type === "image" ? classificationFilter : [], directoryFilter);
-  }, [activeCase, dataSources, selectedDataSourceId, mediaSource, classificationFilter, classificationRevision, directoryFilter]);
+  }, [activeCase, dataSources, selectedDataSourceId, mediaSource, classificationFilter, classificationRevision, directoryFilter, hashsetFilter]);
 
   async function handleClassify(item: MediaItem, category: VicCategory | null, advanceFromIndex?: number) {
     if (!activeCase || item.mediaType !== "image" || classificationSaving || isLoading || customClassifications.busy || !customClassifications.ready) return;
@@ -398,6 +407,15 @@ export function MediaPage() {
       null
     );
   }, [dataSources, selectedDataSourceId]);
+
+  const mediaFilters = (type: "image" | "video") => activeCase && selectedDataSource && <>
+    <DirectorySearch key={`directories:${classificationContext}`} caseDatabasePath={activeCase.databasePath}
+      datasourceId={selectedDataSource.id} roots={selectedDataSource.paths} indexed={mediaSource === "plugin"} mediaType={type}
+      selectedDirectory={directoryFilter} onSelect={path => setDirectorySelection(path ? { context: classificationContext, path } : null)} revision={refreshKey} />
+    <HashsetPanel key={`hashsets:${classificationContext}`} caseDatabasePath={activeCase.databasePath}
+      datasourceId={selectedDataSource.id} indexed={mediaSource === "plugin"} selected={hashsetFilter}
+      onSelect={filter => setHashsetSelection(filter ? { context: classificationContext, filter } : null)} />
+  </>;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -525,9 +543,7 @@ export function MediaPage() {
 
         <TabsContent value="photos" className="m-0 min-h-0 flex-1">
           <MediaGallery
-            directorySearch={activeCase && selectedDataSource && <DirectorySearch key={classificationContext} caseDatabasePath={activeCase.databasePath}
-              datasourceId={selectedDataSource.id} roots={selectedDataSource.paths} indexed={mediaSource === "plugin"} mediaType="image"
-              selectedDirectory={directoryFilter} onSelect={path => setDirectorySelection(path ? { context: classificationContext, path } : null)} revision={refreshKey} />}
+            directorySearch={mediaFilters("image")}
             tileWidth={tileWidth}
             onTileWidthChange={handleTileWidthChange}
             classification={{
@@ -546,7 +562,7 @@ export function MediaPage() {
             tiles={gallery.photos}
             detailTitle="Image Details"
             emptyText={
-              directoryFilter ? "No images match the filters in this directory." : classificationFilter.length ? "No images match the selected classifications." : mediaSource === "plugin"
+              hashsetFilter ? "No hashset image hits match the current filters." : directoryFilter ? "No images match the filters in this directory." : classificationFilter.length ? "No images match the selected classifications." : mediaSource === "plugin"
                 ? "No byte-detected images found. Run the Image Metadata plugin from Plugins."
                 : "No files with image extensions were found in this datasource."
             }
@@ -560,9 +576,7 @@ export function MediaPage() {
         </TabsContent>
         <TabsContent value="videos" className="m-0 min-h-0 flex-1">
           <MediaGallery
-            directorySearch={activeCase && selectedDataSource && <DirectorySearch key={classificationContext} caseDatabasePath={activeCase.databasePath}
-              datasourceId={selectedDataSource.id} roots={selectedDataSource.paths} indexed={mediaSource === "plugin"} mediaType="video"
-              selectedDirectory={directoryFilter} onSelect={path => setDirectorySelection(path ? { context: classificationContext, path } : null)} revision={refreshKey} />}
+            directorySearch={mediaFilters("video")}
             tileWidth={tileWidth}
             onTileWidthChange={handleTileWidthChange}
             caseDatabasePath={activeCase?.databasePath ?? null}
@@ -571,7 +585,7 @@ export function MediaPage() {
             tiles={gallery.videos}
             detailTitle="Video Details"
             emptyText={
-              directoryFilter ? "No videos directly in this directory." : mediaSource === "plugin"
+              hashsetFilter ? "No hashset video hits match the current filters." : directoryFilter ? "No videos directly in this directory." : mediaSource === "plugin"
                 ? "No byte-detected videos found. Run the Image Metadata plugin from Plugins."
                 : "No files with video extensions were found in this datasource."
             }

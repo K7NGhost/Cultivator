@@ -5,7 +5,54 @@ use image::{
 };
 use std::io::{BufReader, Read, Seek, Write};
 
+mod cgbi;
+#[cfg(windows)]
+mod heif;
 mod jpeg;
+#[cfg(windows)]
+mod wic;
+
+#[cfg(windows)]
+pub(crate) fn render_heif_with_runtime(
+    executable: &Path,
+    source_path: &Path,
+    target: &Path,
+    budget: u64,
+    cancelled: &AtomicBool,
+) -> Option<Result<Timings, String>> {
+    let started = Instant::now();
+    let mut file = fs::File::open(source_path).ok()?;
+    let mut header = [0u8; 16];
+    if file.read(&mut header).ok()? != 16 || &header[4..8] != b"ftyp" {
+        return None;
+    }
+    let size = file.metadata().ok()?.len();
+    let image = heif::decode(executable, source_path, size, budget, cancelled).ok()?;
+    Some((|| {
+        let (encoded, mut timings) = encode_preview(
+            image,
+            image::metadata::Orientation::NoTransforms,
+            started,
+            cancelled,
+        )
+        .map_err(|error| match error {
+            NativeError::Failed(error) => error,
+            _ => "Native HEIF preview failed.".into(),
+        })?;
+        check_cancel(cancelled)?;
+        let write = Instant::now();
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(target)
+            .map_err(|e| e.to_string())?;
+        file.write_all(&encoded).map_err(|e| e.to_string())?;
+        timings.write_ms = millis(write);
+        timings.total_ms = millis(started);
+        timings.backend = "native-libheif".into();
+        Ok(timings)
+    })())
+}
 
 fn check_cancel(cancelled: &AtomicBool) -> Result<(), String> {
     if cancelled.load(Ordering::Acquire) {
@@ -43,12 +90,24 @@ pub(super) fn generate(
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
-        let native_result = {
+        let mut native_result = {
             let _guard = decode_gate
                 .read()
                 .map_err(|_| "Thumbnail decoder lock unavailable.")?;
             decode_native(source, cancelled, config.worker_budget())
         };
+        // A large image may exceed one worker's share while fitting safely in
+        // the overall budget. Retry Rust exclusively before starting Python.
+        let mut exclusive = None;
+        if matches!(native_result, Err(NativeError::Budget)) {
+            exclusive = Some(
+                decode_gate
+                    .write()
+                    .map_err(|_| "Thumbnail decoder lock unavailable.")?,
+            );
+            check_cancel(cancelled)?;
+            native_result = decode_native(source, cancelled, config.memory_bytes);
+        }
         let mut timings = match native_result {
             Ok((encoded, mut timings)) => {
                 check_cancel(cancelled)?;
@@ -71,9 +130,13 @@ pub(super) fn generate(
                     fallback.ok_or("No optional Python thumbnail decoder configured.")?;
                 // Compatibility codecs need full-resolution buffers. Run one at
                 // a time, with native decoding paused, to use the entire budget.
-                let _guard = decode_gate
-                    .write()
-                    .map_err(|_| "Thumbnail decoder lock unavailable.")?;
+                if exclusive.is_none() {
+                    exclusive = Some(
+                        decode_gate
+                            .write()
+                            .map_err(|_| "Thumbnail decoder lock unavailable.")?,
+                    );
+                }
                 check_cancel(cancelled)?;
                 fallback(&source.path, &temporary, config.memory_bytes, cancelled)?
             }
@@ -85,6 +148,7 @@ pub(super) fn generate(
             }
             Err(NativeError::Failed(error)) => return Err(error),
         };
+        drop(exclusive);
         check_cancel(cancelled)?;
         if !source.unchanged() {
             return Err("Media source changed during thumbnail generation.".into());
@@ -124,6 +188,7 @@ impl From<ImageError> for NativeError {
     fn from(error: ImageError) -> Self {
         match error {
             ImageError::Unsupported(_) => Self::Unsupported,
+            ImageError::Limits(_) => Self::Budget,
             other => Self::Failed(other.to_string()),
         }
     }
@@ -147,41 +212,44 @@ fn decode_native(
     let start = Instant::now();
     // Bound compressed input too; header/metadata parsing is work before pixel allocation.
     if source.size > budget / 4 {
-        return Err(NativeError::Failed(
-            "Image exceeds thumbnail input memory budget.".into(),
-        ));
+        return Err(NativeError::Budget);
     }
     let mut header = [0u8; 16];
     let mut file = fs::File::open(&source.path)?;
     let n = file.read(&mut header)?;
     if n == 16 && &header[12..16] == b"CgBI" {
-        return Err(NativeError::Unsupported);
+        let image = cgbi::decode(source, cancelled, budget)?;
+        return encode_preview(
+            image,
+            image::metadata::Orientation::NoTransforms,
+            start,
+            cancelled,
+        );
+    }
+    #[cfg(windows)]
+    if n == 16 && &header[4..8] == b"ftyp" {
+        let (image, orientation) = wic::decode(source, cancelled, budget)?;
+        return encode_preview(image, orientation, start, cancelled);
     }
     file.rewind()?;
     let mut reader = ImageReader::new(BufReader::new(file)).with_guessed_format()?;
     let mut limits = Limits::default();
-    limits.max_alloc = Some(budget / 4);
+    limits.max_alloc = Some(budget);
     limits.max_image_width = Some(32768);
     limits.max_image_height = Some(32768);
     reader.limits(limits);
     let is_jpeg = reader.format() == Some(image::ImageFormat::Jpeg);
     let mut decoder = reader.into_decoder()?;
     let (width, height) = decoder.dimensions();
-    // Reserve conservatively for decoder scratch, 16-bit RGBA pixels, orientation
-    // copies, resampling and encoder buffers. Fixed worker slots bound aggregate work.
-    let estimate = u64::from(width)
-        .saturating_mul(u64::from(height))
-        .saturating_mul(64)
-        .saturating_add(source.size)
-        .saturating_add(4 * 1024 * 1024);
-    if estimate > budget && !is_jpeg {
+    if !is_jpeg && check_budget(width, height, decoder.total_bytes(), source.size, budget).is_err()
+    {
         // Compatibility formats can safely use the full budget under the
         // exclusive gate when a single native slot is too small.
         return Err(NativeError::Budget);
     }
     let orientation = decoder.orientation()?;
     check_cancel(cancelled)?;
-    let mut image = if is_jpeg {
+    let image = if is_jpeg {
         // Decode JPEGs at 1/2, 1/4 or 1/8 resolution before allocating pixels.
         // Camera photos otherwise fall into the serialized Python fallback even
         // though the gallery only needs a 256-pixel preview.
@@ -189,7 +257,8 @@ fn decode_native(
             Ok(image) => image,
             // Keep native color conversion for uncommon JPEG variants that
             // already fit. Larger compatibility images use the exclusive gate.
-            Err(NativeError::Unsupported) if estimate <= budget => {
+            Err(NativeError::Unsupported) => {
+                check_budget(width, height, decoder.total_bytes(), source.size, budget)?;
                 DynamicImage::from_decoder(decoder)?
             }
             Err(error) => return Err(error),
@@ -197,6 +266,40 @@ fn decode_native(
     } else {
         DynamicImage::from_decoder(decoder)?
     };
+    encode_preview(image, orientation, start, cancelled)
+}
+
+fn check_budget(
+    width: u32,
+    height: u32,
+    pixels: u64,
+    input: u64,
+    budget: u64,
+) -> Result<(), NativeError> {
+    // Full-size pixels, decoder scratch/orientation copies, the float resize
+    // intermediate, bounded input and encoder buffers all count toward a job.
+    let estimate = pixels
+        .saturating_mul(3)
+        .saturating_add(
+            u64::from(width.max(height))
+                .saturating_mul(EDGE as u64)
+                .saturating_mul(16),
+        )
+        .saturating_add(input.saturating_mul(3))
+        .saturating_add(4 * 1024 * 1024);
+    if width == 0 || height == 0 || width > 32768 || height > 32768 || estimate > budget {
+        Err(NativeError::Budget)
+    } else {
+        Ok(())
+    }
+}
+
+fn encode_preview(
+    mut image: DynamicImage,
+    orientation: image::metadata::Orientation,
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<(Vec<u8>, Timings), NativeError> {
     let decode_ms = millis(start);
     check_cancel(cancelled)?;
     let start = Instant::now();
@@ -224,6 +327,36 @@ fn decode_native(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_png_retries_natively_with_the_shared_budget_without_python() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.png");
+        image::RgbaImage::from_pixel(4096, 3072, image::Rgba([190, 50, 30, 255]))
+            .save(&path)
+            .unwrap();
+        let (_, source) = Source::new(&directory.path().join("cache"), "large", &path).unwrap();
+        let config = Config {
+            workers: 8,
+            memory_bytes: 256 * 1024 * 1024,
+            python_fallback: true,
+        };
+        let fallback: Fallback =
+            Arc::new(|_, _, _, _| panic!("Large supported PNG must not launch Python"));
+        let result = generate(
+            &source,
+            &AtomicBool::new(false),
+            &config,
+            Some(&fallback),
+            &RwLock::new(()),
+        )
+        .unwrap();
+        assert_eq!(result.timings.backend, "native");
+        let image = image::open(&result.path).unwrap().to_rgb8();
+        assert_eq!(image.dimensions(), (256, 192));
+        let pixel = image.get_pixel(80, 80);
+        assert!(pixel[0] > 180 && pixel[1] < 60 && pixel[2] < 40);
+    }
 
     #[test]
     fn large_jpeg_stays_native_on_memory_saver_and_is_cached() {

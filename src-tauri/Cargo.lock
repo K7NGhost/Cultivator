@@ -1055,6 +1055,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "codspeed-criterion-compat",
+ "crc32fast",
  "ctor",
  "flate2",
  "globset",
@@ -1064,6 +1065,7 @@ dependencies = [
  "imagesize",
  "jpeg-decoder",
  "kamadak-exif",
+ "libloading",
  "md-5",
  "memmap2",
  "rayon",
@@ -1082,6 +1084,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
+ "windows",
  "zip",
 ]
 
