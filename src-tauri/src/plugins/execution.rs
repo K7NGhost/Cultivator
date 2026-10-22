@@ -457,6 +457,7 @@ async fn execute_plugin(
                     case_database_path: &database,
                     case_folder_path: &folder,
                     python_runtime: &runtime,
+                    model_root: &root.join("models"),
                     run_id: Some(&run_id),
                     cancel_id: &cancel_id,
                     plugin_options: &options,

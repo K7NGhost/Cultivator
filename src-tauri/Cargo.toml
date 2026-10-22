@@ -48,8 +48,13 @@ toml = "0.9.12"
 zip = { version = "8.6.0", features = ["deflate"] }
 tar = "0.4.44"
 flate2 = "1.1.5"
+crc32fast = "1.5"
 tokio = { version = "1.52.3", features = ["full"] }
 memmap2 = "0.9.9"
+
+[target.'cfg(windows)'.dependencies]
+libloading = "0.7.4"
+windows = { version = "0.61.3", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
 
 [dev-dependencies]
 criterion = { package = "codspeed-criterion-compat", version = "=5.0.2", features = ["async_tokio"] }
@@ -57,6 +62,15 @@ tempfile = "3"
 
 # Camera JPEG entropy decoding runs on every cold gallery visit in development.
 [profile.dev.package.jpeg-decoder]
+opt-level = 3
+
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.flate2]
 opt-level = 3
 
 [[bench]]

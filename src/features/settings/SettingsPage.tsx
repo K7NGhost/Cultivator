@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { applyPerformanceSettings, defaultPerformanceSettings, nativeMemoryMb, recordCacheBytes, thumbnailCacheBytes, usePerformanceSettings, performancePresets, thumbnailConcurrency } from "./performanceSettings";
 import { clearPreparedThumbnails, preparedThumbnails } from "../media/services/preparedThumbnails";
+import { PluginModels } from "./PluginModels";
 
 export function SettingsPage() {
   const applied = usePerformanceSettings();
@@ -20,7 +21,8 @@ export function SettingsPage() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-8 shrink-0 items-center gap-2 border-b px-2"><Settings className="size-3.5" /><h1 className="text-xs font-medium">Settings</h1></div>
-      <form onSubmit={(event) => void save(event)} className="grid max-w-2xl gap-3 overflow-auto p-2 text-xs">
+      <div className="min-h-0 overflow-auto p-2"><div className="grid max-w-2xl gap-5">
+      <form onSubmit={(event) => void save(event)} className="grid gap-3 text-xs">
         <h2 className="border-b pb-1 font-medium">Media gallery performance</h2>
         <p className="text-muted-foreground">Choose Memory saver for a low-memory laptop, or increase caching and loading speed on a more powerful system. Automatic defaults use Memory saver when system memory cannot be detected.</p>
         <div className="flex flex-wrap gap-2" aria-label="Performance presets">
@@ -47,6 +49,8 @@ export function SettingsPage() {
         </div>
         <p role="status" className="min-h-4 text-muted-foreground">{message}</p>
       </form>
+      <PluginModels />
+      </div></div>
     </div>
   );
 }

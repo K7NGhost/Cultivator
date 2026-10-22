@@ -571,6 +571,22 @@ async fn prepare_python_runtime(
 }
 
 #[tauri::command]
+async fn plugin_model_settings(app_handle: tauri::AppHandle) -> Result<scripting::models::ModelSettings, String> {
+    let root = plugins::python_runtime_directory(&app_handle)?.join("models");
+    tauri::async_runtime::spawn_blocking(move || scripting::models::status(&root)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn download_plugin_model(app_handle: tauri::AppHandle, model_id: String) -> Result<(), String> {
+    scripting::models::start(plugins::python_runtime_directory(&app_handle)?, model_id)
+}
+
+#[tauri::command]
+fn cancel_plugin_model_download() -> Result<(), String> {
+    scripting::models::cancel()
+}
+
+#[tauri::command]
 fn list_python_plugins(
     app_handle: tauri::AppHandle,
 ) -> Result<Vec<plugins::PythonPluginManifest>, String> {
@@ -2386,6 +2402,9 @@ pub fn run() {
             list_python_plugins,
             python_runtime_status,
             prepare_python_runtime,
+            plugin_model_settings,
+            download_plugin_model,
+            cancel_plugin_model_download,
             list_python_plugin_folders,
             open_python_plugin_directory,
             open_python_plugin_directory_in_vscode,
@@ -2404,6 +2423,12 @@ pub fn run() {
             list_media_gallery,
             list_media_gallery_page,
             list_media_directories,
+            plugins::media_hashsets::list_media_hashsets,
+            plugins::media_hashsets::import_media_hashset,
+            plugins::media_hashsets::list_media_hashset_runs,
+            plugins::media_hashsets::start_media_hashset_scan,
+            plugins::media_hashsets::cancel_media_hashset_scan,
+            plugins::media_hashsets::list_hashset_hit_media_page,
             set_media_classification,
             list_custom_classifications,
             save_custom_classification,

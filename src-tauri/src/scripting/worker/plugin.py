@@ -371,6 +371,7 @@ def build_context(input_data, task, matched_files):
             "matched_files": matched_files,
         },
         "options": input_data.get("options", {}),
+        "models": input_data.get("models", {}),
         "file": {
             "path": target_file["path"],
             "name": target_file["name"],

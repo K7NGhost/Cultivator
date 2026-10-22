@@ -1,5 +1,8 @@
 mod archive_extractor;
 mod image_metadata;
+mod face_detection;
+mod clip_classification;
+mod python_worker;
 
 use crate::plugins::PythonPluginManifest;
 use serde_json::Value as JsonValue;
@@ -10,7 +13,7 @@ use std::{
 
 pub use archive_extractor::manifest as archive_extractor_manifest;
 pub(crate) use image_metadata::load_metadata;
-pub use image_metadata::{manifest as image_metadata_manifest, MediaGallery, MediaItem, MediaType};
+pub use image_metadata::{manifest as image_metadata_manifest, MediaGallery, MediaItem, MediaType, MediaMetadataField};
 
 pub struct BuiltinArtifact {
     pub file_path: String,
@@ -31,6 +34,7 @@ pub struct BuiltinPluginContext<'a> {
     pub output_root: Option<PathBuf>,
     pub options: JsonValue,
     pub related_manifests: Vec<PythonPluginManifest>,
+    pub(crate) python_root: Option<PathBuf>,
     progress: &'a mut dyn FnMut(BuiltinPluginProgress),
     #[allow(dead_code)]
     cancelled: &'a (dyn Fn() -> bool + Sync),
@@ -57,6 +61,7 @@ impl<'a> BuiltinPluginContext<'a> {
             output_root,
             options,
             related_manifests,
+            python_root: None,
             progress,
             cancelled,
             effects: BuiltinPluginEffects {
@@ -219,7 +224,7 @@ impl BuiltinPlugin for ImageMetadataPlugin {
             .options
             .get("hashMedia")
             .is_some_and(|value| value.as_bool() == Some(true) || value.as_str() == Some("true"));
-        let gallery = image_metadata::execute_with_cancellation(
+        let mut gallery = image_metadata::execute_with_cancellation(
             context.paths.clone(),
             hash_media,
             cancelled,
@@ -249,6 +254,12 @@ impl BuiltinPlugin for ImageMetadataPlugin {
                 gallery.scanned_files, matched_files
             ),
         );
+        if context.options.get("detectFaces").is_some_and(|value| value.as_bool() == Some(true) || value.as_str() == Some("true")) {
+            face_detection::classify(&mut gallery, context)?;
+        }
+        if context.options.get("classifyClip").is_some_and(|value| value.as_bool() == Some(true) || value.as_str() == Some("true")) {
+            clip_classification::classify(&mut gallery, context)?;
+        }
         context.replace_media(gallery);
 
         Ok(())
@@ -341,6 +352,10 @@ mod tests {
         std::fs::write(root.path().join("ignore.txt"), b"abc").unwrap();
         for options in [
             serde_json::json!({}),
+            serde_json::json!({"detectFaces": "false"}),
+            serde_json::json!({"detectFaces": false}),
+            serde_json::json!({"classifyClip": false}),
+            serde_json::json!({"classifyClip": "false"}),
             serde_json::json!({"hashMedia": "false"}),
             serde_json::json!({"hashMedia": false}),
             serde_json::json!({"hashMedia": "true"}),

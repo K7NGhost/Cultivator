@@ -1,7 +1,7 @@
 id = "image-metadata"
 name = "Image Metadata"
 author = "Cultivator Team"
-version = "1.4.0"
+version = "1.6.0"
 description = "Streaming parallel media discovery with fast header parsing and deferred EXIF details."
 type = "other"
 target = "other"
@@ -16,3 +16,32 @@ label = "Hash media (SHA-256, MD5, SHA-1)"
 description = "Calculate all three hashes for every image and video found."
 type = "checkbox"
 defaultValue = "false"
+
+[[options]]
+id = "detectFaces"
+label = "Detect images with faces (YuNet)"
+description = "Use Python OpenCV and YuNet to classify images with faces. Download YuNet in Settings > Plugin models first. Saves face counts without changing manual classifications. Images stay local; videos are skipped."
+type = "checkbox"
+defaultValue = "false"
+
+[[options]]
+id = "classifyClip"
+label = "Classify images with OpenCLIP (15 categories)"
+description = "Suggest multiple content categories using local OpenCLIP. Download the selected model in Settings > Plugin models first. Saves labels and similarity scores for gallery filters without changing manual classifications. Images only."
+type = "checkbox"
+defaultValue = "false"
+
+[[options]]
+id = "clipModel"
+label = "OpenCLIP classification model"
+type = "select"
+defaultValue = "openclip-vit-b-32"
+choices = [{ value = "openclip-vit-b-32", label = "ViT-B/32 (faster)" }, { value = "openclip-vit-l-14", label = "ViT-L/14 (larger)" }]
+
+[[options]]
+id = "clipThreshold"
+label = "OpenCLIP similarity threshold"
+description = "Higher values produce fewer suggested matches. Cosine similarity is not a probability; review suggested labels."
+type = "select"
+defaultValue = "0.22"
+choices = [{ value = "0.18", label = "0.18 - More matches" }, { value = "0.22", label = "0.22 - Default" }, { value = "0.26", label = "0.26 - Fewer matches" }]

@@ -1,5 +1,5 @@
 import { ImageOff } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { preparedThumbnails, prepareThumbnail, thumbnailKey, usePreparedThumbnail, useThumbnailEpoch } from "../services/preparedThumbnails";
 import type { MediaItem } from "../model/types";
@@ -16,10 +16,20 @@ type MediaImagePreviewProps = {
 
 export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", retain = false, edge = 256, item }: MediaImagePreviewProps) {
   const container = useRef<HTMLDivElement>(null);
+  const image = useRef<HTMLImageElement>(null);
+  const [imageSize, setImageSize] = useState<{ key: string; width: number; height: number }>();
   const [failedKey, setFailedKey] = useState<string>();
   useThumbnailEpoch();
   const key = thumbnailKey(caseDatabasePath, item, edge);
   const cachedSource = usePreparedThumbnail(key);
+  const recordImageSize = useCallback(() => {
+    const element = image.current;
+    if (!item.faceBoxes?.length || !element?.naturalWidth || !element.naturalHeight) return;
+    const width = element.naturalWidth, height = element.naturalHeight;
+    setImageSize(previous => previous?.key === key && previous.width === width && previous.height === height
+      ? previous : { key, width, height });
+  }, [key, item.faceBoxes?.length]);
+  useEffect(recordImageSize, [recordImageSize, cachedSource]);
   useEffect(() => {
     let current = true;
     const element = container.current;
@@ -59,14 +69,28 @@ export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", 
   }, [caseDatabasePath, key, item.id, item.mediaPath, cachedSource, edge, retain]);
 
   return (
-    <div ref={container} className={cn("flex items-center justify-center overflow-hidden bg-muted", className)}>
+    <div ref={container} className={cn("relative flex items-center justify-center overflow-hidden bg-muted", className)}>
       {failedKey === key ? (
         <ImageOff className="size-5 text-muted-foreground" aria-label={`${item.name} preview unavailable`} />
       ) : cachedSource ? (
-        <img src={cachedSource} alt={item.name} className={cn("h-full w-full", fit === "contain" ? "object-contain" : "object-cover")}
+        <><img ref={image} src={cachedSource} alt={item.name} className={cn("h-full w-full", fit === "contain" ? "object-contain" : "object-cover")}
           draggable={false} loading="eager" decoding="async"
-          onError={() => setFailedKey(key)} />
+          onLoad={recordImageSize} onError={() => setFailedKey(key)} />
+          {!!item.faceBoxes?.length && imageSize?.key === key && <svg className="pointer-events-none absolute inset-0 h-full w-full"
+            viewBox={`0 0 ${imageSize.width} ${imageSize.height}`} preserveAspectRatio={fit === "contain" ? "xMidYMid meet" : "xMidYMid slice"} aria-hidden="true">
+            {item.faceBoxes.map((face, index) => {
+              const width = face.width * imageSize.width, height = face.height * imageSize.height;
+              const side = Math.max(width, height);
+              return <rect key={index}
+                x={face.x * imageSize.width + (width - side) / 2} y={face.y * imageSize.height + (height - side) / 2}
+                width={side} height={side}
+                fill="none" stroke="#22d3ee" strokeWidth={2} vectorEffect="non-scaling-stroke" />;
+            })}
+          </svg>}
+        </>
       ) : <span className="sr-only">Loading {item.name}</span>}
+      {item.faceCount != null && <span className="pointer-events-none absolute right-1 top-1 rounded bg-black/80 px-1 py-0.5 text-[9px] text-cyan-300"
+        title="Detected faces (YuNet)" aria-label={`${item.faceCount} faces detected by YuNet`}>Faces: {item.faceCount}</span>}
     </div>
   );
 }

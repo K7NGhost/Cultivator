@@ -34,6 +34,7 @@ mod job_progress;
 mod media_classifications;
 mod media_queries;
 mod media_directories;
+pub mod media_hashsets;
 pub use media_directories::{list_media_directories, MediaDirectory};
 pub use execution::{
     cancel_plugin_job, get_plugin_run, pause_plugin_job, pause_plugin_run, submit_plugin_run,
@@ -324,6 +325,7 @@ struct PythonPluginProcessInput<'a> {
     tasks: &'a [PluginExecutionTask],
     scanned_files: u64,
     options: &'a JsonValue,
+    models: JsonValue,
 }
 
 #[derive(Deserialize)]
@@ -899,6 +901,12 @@ fn thumbnail_service(
             let fallback: crate::thumbnails::Fallback =
                 Arc::new(move |source, target, budget, cancelled| {
                     let python = runtime::prepare_media(&runtime_root)?;
+                    #[cfg(windows)]
+                    if let Some(result) = crate::thumbnails::render_heif_with_runtime(
+                        &python.executable, source, target, budget, cancelled,
+                    ) {
+                        return result;
+                    }
                     crate::thumbnails::python::render_cancellable(
                         &python.executable,
                         source,
@@ -1320,6 +1328,7 @@ async fn run_builtin_plugin_stage(
         .cloned()
         .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let progress_plugin_id = plugin_id.clone();
+    let python_root = python_runtime_directory(app_handle)?;
     let output = tauri::async_runtime::spawn_blocking(move || {
         let mut reporter = |progress: builtin::BuiltinPluginProgress| {
             if progress.total == 0 && progress.completed == 0 && progress.message.is_none() {
@@ -1344,6 +1353,7 @@ async fn run_builtin_plugin_stage(
             &cancellation,
         );
 
+        context.python_root = Some(python_root);
         plugin.run(&mut context)?;
         Ok::<_, String>(context.into_effects())
     })
@@ -1459,6 +1469,7 @@ struct PythonPluginExecutionContext<'a> {
     case_database_path: &'a str,
     case_folder_path: &'a str,
     python_runtime: &'a PythonRuntime,
+    model_root: &'a Path,
     run_id: Option<&'a str>,
     cancel_id: &'a str,
     plugin_options: &'a JsonValue,
@@ -1476,6 +1487,7 @@ fn execute_python_plugin_process(
         case_database_path,
         case_folder_path,
         python_runtime,
+        model_root,
         run_id,
         plugin_options,
         reporter,
@@ -1495,6 +1507,7 @@ fn execute_python_plugin_process(
         tasks: &plan.tasks,
         scanned_files: plan.scanned_files,
         options: plugin_options,
+        models: crate::scripting::models::available(model_root),
     };
     let input_json = serde_json::to_vec(&input)
         .map_err(|error| format!("Failed to serialize plugin input: {error}"))?;
@@ -2562,6 +2575,7 @@ function = "run"</code></pre>
       </table>
 
       <h2>Context</h2>
+      <p><code>context["models"]</code> contains models downloaded and verified in Settings &gt; Plugin models, keyed by model ID. Each entry provides <code>directory</code>, a <code>files</code> map of filenames to local paths, <code>architecture</code>, and <code>dependencies</code>. For example, load OpenCLIP using <code>context["models"]["openclip-vit-b-32"]["architecture"]</code> and the entry's <code>files["open_clip_model.safetensors"]</code> as the local pretrained checkpoint. Install inference libraries through the plugin's dependencies; missing models must be downloaded in Settings.</p>
       <p>
         Cultivator indexes case files, matches plugins by <code>path_glob</code>
         or <code>path_regex</code>, creates one task per matched file, and calls
@@ -3017,6 +3031,13 @@ async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
     .map_err(|error| format!("Failed to create media_gallery_items table: {error}"))?;
     sqlx::query("CREATE INDEX IF NOT EXISTS media_gallery_page_idx ON media_gallery_items(datasource_id, media_type, name, path)")
         .execute(pool).await.map_err(|error| error.to_string())?;
+    // Keep face counts cheap on large galleries without parsing every payload on scroll.
+    sqlx::query("CREATE INDEX IF NOT EXISTS media_gallery_faces_idx ON media_gallery_items(datasource_id, media_type) WHERE json_extract(payload, '$.faceCount') > 0")
+        .execute(pool).await.map_err(|error| error.to_string())?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS media_clip_classifications (item_id TEXT NOT NULL REFERENCES media_gallery_items(id) ON DELETE CASCADE, category INTEGER NOT NULL CHECK(category BETWEEN 1 AND 15), score REAL NOT NULL, matched_label TEXT NOT NULL, PRIMARY KEY(item_id, category)) WITHOUT ROWID")
+        .execute(pool).await.map_err(|error| error.to_string())?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS media_clip_category_idx ON media_clip_classifications(category, item_id)")
+        .execute(pool).await.map_err(|error| error.to_string())?;
 
     Ok(())
 }
@@ -3315,6 +3336,7 @@ async fn replace_media_gallery_items(
                     &item.path,
                     &item.name,
                     payload,
+                    &item.clip_classifications,
                 ))
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -3323,7 +3345,7 @@ async fn replace_media_gallery_items(
         }
         let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
             "INSERT INTO media_gallery_items (id, job_id, datasource_id, media_type, path, name, payload, updated_at) ");
-        query.push_values(&batch, |mut row, (id, media_type, path, name, payload)| {
+        query.push_values(&batch, |mut row, (id, media_type, path, name, payload, _)| {
             row.push_bind(id)
                 .push_bind(job_id)
                 .push_bind(datasource_id)
@@ -3338,6 +3360,16 @@ async fn replace_media_gallery_items(
             .execute(&mut *transaction)
             .await
             .map_err(|error| format!("Failed to insert media gallery batch: {error}"))?;
+        let classifications: Vec<_> = batch.iter().flat_map(|(id, _, _, _, _, labels)| {
+            labels.iter().map(move |label| (id, label))
+        }).collect();
+        for labels in classifications.chunks(200) {
+            let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new("INSERT INTO media_clip_classifications(item_id, category, score, matched_label) ");
+            query.push_values(labels, |mut row, (id, label)| {
+                row.push_bind(id).push_bind(label.category).push_bind(label.score).push_bind(&label.matched_label);
+            });
+            query.build().execute(&mut *transaction).await.map_err(|error| format!("Failed to save CLIP classifications: {error}"))?;
+        }
     }
 
     if is_plugin_job_cancelled(Some(job_id))? {

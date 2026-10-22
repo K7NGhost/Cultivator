@@ -21,8 +21,9 @@ export function classificationTextColor(color: string) {
   });
   return red * 0.2126 + green * 0.7152 + blue * 0.0722 > 0.179 ? "#000000" : "#ffffff";
 }
-export function matchesVicFilter(category: VicCategory | null | undefined, filter: VicFilterValue[]) {
-  return !filter.length || filter.includes(category ?? -1);
+export function matchesVicFilter(category: VicCategory | null | undefined, filter: VicFilterValue[], faceCount?: number | null, clipClassifications?: Array<{ category: number }>) {
+  return !filter.length || filter.includes(category ?? -1) || (filter.includes(256) && (faceCount ?? 0) > 0)
+    || !!clipClassifications?.some(match => filter.includes(256 + match.category));
 }
 export function toggleVicFilter(filter: VicFilterValue[], category: VicFilterValue) {
   return filter.includes(category) ? filter.filter((value) => value !== category) : [...filter, category];

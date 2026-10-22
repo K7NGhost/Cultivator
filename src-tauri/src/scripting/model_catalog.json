@@ -1,0 +1,109 @@
+[
+  {
+    "id": "yunet",
+    "name": "YuNet face detection",
+    "description": "Face detection for Image Metadata. Runs locally using Python OpenCV.",
+    "source": "https://github.com/opencv/opencv_zoo/tree/f12e12798e8314f7c074a6656816c048dcc95b7a/models/face_detection_yunet",
+    "license": "MIT",
+    "dependencies": [],
+    "files": [
+      {
+        "path": "face_detection_yunet_2023mar.onnx",
+        "url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/f12e12798e8314f7c074a6656816c048dcc95b7a/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+        "size": 232589,
+        "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+      },
+      {
+        "path": "LICENSE-YuNet.txt",
+        "url": "https://raw.githubusercontent.com/opencv/opencv_zoo/f12e12798e8314f7c074a6656816c048dcc95b7a/models/face_detection_yunet/LICENSE",
+        "size": 1085,
+        "sha256": "c83b8120c50ccbd4c4f96edf53141bdd566ebb8f8e9227e415326aa1b1aba958"
+      }
+    ]
+  },
+  {
+    "id": "openclip-vit-b-32",
+    "name": "OpenCLIP ViT-B/32",
+    "description": "General image/text embeddings and zero-shot classification (LAION-2B weights).",
+    "source": "https://huggingface.co/laion/CLIP-ViT-B-32-laion2B-s34B-b79K",
+    "license": "mit",
+    "architecture": "ViT-B-32",
+    "dependencies": [],
+    "files": [
+      {
+        "path": "open_clip_model.safetensors",
+        "url": "https://huggingface.co/laion/CLIP-ViT-B-32-laion2B-s34B-b79K/resolve/1a25a446712ba5ee05982a381eed697ef9b435cf/open_clip_model.safetensors",
+        "size": 605143316,
+        "sha256": "ac4f8c4b88af6d963118cbf40ad93176d092abbedfcb752601ae1866352656e6"
+      },
+      {
+        "path": "open_clip_config.json",
+        "url": "https://huggingface.co/laion/CLIP-ViT-B-32-laion2B-s34B-b79K/resolve/1a25a446712ba5ee05982a381eed697ef9b435cf/open_clip_config.json",
+        "size": 604,
+        "sha256": "4302a891b495ad0966d1e7eeff102b5f34a3f1e647e57a9198933f862d5f8ba7"
+      },
+      {
+        "path": "README.md",
+        "url": "https://huggingface.co/laion/CLIP-ViT-B-32-laion2B-s34B-b79K/resolve/1a25a446712ba5ee05982a381eed697ef9b435cf/README.md",
+        "size": 7464,
+        "sha256": "d0600101ba66849bd84eeae14e0b1ccd56cd962ea94aec5d60c415d9ce4e5f28"
+      }
+    ]
+  },
+  {
+    "id": "openclip-vit-l-14",
+    "name": "OpenCLIP ViT-L/14 (OpenAI)",
+    "description": "General image/text embeddings; required backbone for the NeMo Curator NSFW classifier.",
+    "source": "https://huggingface.co/timm/vit_large_patch14_clip_224.openai",
+    "license": "apache-2.0",
+    "architecture": "ViT-L-14-quickgelu",
+    "dependencies": [],
+    "files": [
+      {
+        "path": "open_clip_model.safetensors",
+        "url": "https://huggingface.co/timm/vit_large_patch14_clip_224.openai/resolve/18d0535469bb561bf468d76c1d73aa35156c922b/open_clip_model.safetensors",
+        "size": 1710517724,
+        "sha256": "9ce2e8a8ebfff3793d7d375ad6d3c35cb9aebf3de7ace0fc7308accab7cd207e"
+      },
+      {
+        "path": "open_clip_config.json",
+        "url": "https://huggingface.co/timm/vit_large_patch14_clip_224.openai/resolve/18d0535469bb561bf468d76c1d73aa35156c922b/open_clip_config.json",
+        "size": 558,
+        "sha256": "226d0493cefd57fb28eec2b9c5c19e0e9a1899cebab80998646b5c3076ecabf5"
+      },
+      {
+        "path": "README.md",
+        "url": "https://huggingface.co/timm/vit_large_patch14_clip_224.openai/resolve/18d0535469bb561bf468d76c1d73aa35156c922b/README.md",
+        "size": 6356,
+        "sha256": "9f8ff885fcfce593f31288f7fbd549336745bcffb9532e9c734a7d69e57efe06"
+      }
+    ]
+  },
+  {
+    "id": "nsfw-clip",
+    "name": "NSFW classifier (NVIDIA NeMo Curator)",
+    "description": "LAION NSFW classifier used by NVIDIA NeMo Curator. Includes its compatible OpenCLIP ViT-L/14 backbone; does not use ViT-B/32 embeddings.",
+    "source": "https://github.com/NVIDIA/NeMo-Curator/blob/87d4a1740d8a1e8185fa0c49c28e9ebb2d54c412/nemo_curator/models/nsfw.py",
+    "license": "MIT (LAION weights)",
+    "dependencies": [
+      "openclip-vit-l-14"
+    ],
+    "files": [
+      {
+        "path": "clip_autokeras_binary_nsfw.pth",
+        "url": "https://github.com/LAION-AI/CLIP-based-NSFW-Detector/files/10250461/clip_autokeras_binary_nsfw.zip",
+        "size": 866091,
+        "sha256": "c0b8d7905cc1a315af2f3505222c8d81d339e64eb4cd4011912b645ab8bee4f1",
+        "downloadSize": 795172,
+        "downloadSha256": "4b88065361ee413e7aa0482b6f4fa75ef5a8ac0683552a25bfa52490bcbb36c9",
+        "archiveMember": "clip_autokeras_binary_nsfw.pth"
+      },
+      {
+        "path": "LICENSE.md",
+        "url": "https://raw.githubusercontent.com/LAION-AI/CLIP-based-NSFW-Detector/d6bb8fe31fd4aecbfed7dfb62df4fe5858bfc014/license.md",
+        "size": 1116,
+        "sha256": "086f886fa1e16abaa2eef844a20efb522c3ffc144f9fbc031422acc4f70411e3"
+      }
+    ]
+  }
+]
