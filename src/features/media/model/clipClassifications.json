@@ -1,0 +1,17 @@
+[
+  { "id": 1, "label": "Weapons & firearms", "examples": ["Handguns", "rifles", "shotguns", "knives", "ammunition", "magazines", "explosives", "tactical equipment"] },
+  { "id": 2, "label": "Nudity & sexual content", "examples": ["Non-explicit nudity", "partial nudity", "explicit sexual imagery", "underwear", "swimwear", "non-sexual exposed skin"] },
+  { "id": 3, "label": "Drugs & paraphernalia", "examples": ["Pills", "powders", "cannabis", "syringes", "smoking equipment", "packaging", "scales"] },
+  { "id": 4, "label": "Violence & injuries", "examples": ["Blood", "visible injuries", "physical altercations", "damaged property", "graphic injury scenes"] },
+  { "id": 5, "label": "Vehicles & transportation", "examples": ["Cars", "trucks", "motorcycles", "boats", "aircraft", "license plates", "vehicle interiors"] },
+  { "id": 6, "label": "Locations & environments", "examples": ["Homes", "offices", "roads", "forests", "beaches", "parking lots", "hotels", "industrial areas"] },
+  { "id": 7, "label": "People & appearance", "examples": ["Single person", "groups", "faces", "clothing", "uniforms", "masks", "tattoos", "accessories"] },
+  { "id": 8, "label": "Documents & identification", "examples": ["Passports", "driver's licenses", "credit cards", "currency", "checks", "receipts", "handwritten notes"] },
+  { "id": 9, "label": "Electronics & technology", "examples": ["Phones", "computers", "storage devices", "cameras", "networking equipment", "drones"] },
+  { "id": 10, "label": "Digital screenshots & interfaces", "examples": ["Messages", "social media", "maps", "banking screens", "web browsers", "application screenshots"] },
+  { "id": 11, "label": "Financial objects", "examples": ["Cash", "coins", "jewelry", "precious metals", "payment cards", "financial records"] },
+  { "id": 12, "label": "Properties & structures", "examples": ["Doors", "windows", "garages", "bedrooms", "safes", "fences", "surveillance cameras"] },
+  { "id": 13, "label": "Travel & recreation", "examples": ["Camping", "fishing", "hiking", "airports", "luggage", "hotels", "outdoor activities"] },
+  { "id": 14, "label": "Animals & wildlife", "examples": ["Dogs", "cats", "livestock", "wild animals", "animal injuries", "veterinary settings"] },
+  { "id": 15, "label": "Media characteristics", "examples": ["Photographs", "screenshots", "memes", "illustrations", "scanned documents", "diagrams", "synthetic-looking imagery"] }
+]

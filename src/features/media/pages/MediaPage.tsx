@@ -152,10 +152,19 @@ export function MediaPage() {
   const directoryFilter = directorySelection?.context === classificationContext ? directorySelection.path : null;
   const [hashsetSelection, setHashsetSelection] = useState<{ context: string; filter: HashsetFilter } | null>(null);
   const hashsetFilter = hashsetSelection?.context === classificationContext ? hashsetSelection.filter : null;
+  const sidebarContext = JSON.stringify([classificationContext, hashsetFilter?.runId]);
+  const emptySidebarCounts = useMemo(() => Array(mediaSource === "plugin" && !hashsetFilter ? 273 : 257).fill(0) as number[], [mediaSource, !!hashsetFilter]);
+  const [sidebarCounts, setSidebarCounts] = useState<{ context: string; counts: number[] } | null>(null);
+  useEffect(() => {
+    if (mediaSource !== "plugin" || hashsetFilter) {
+      setClassificationFilter(current => current.some(value => value >= 256) ? current.filter(value => value < 256) : current);
+    }
+  }, [mediaSource, hashsetFilter]);
   const classificationContextRef = useRef(classificationContext);
   classificationContextRef.current = classificationContext;
   const galleryScopeRef = useRef<string | undefined>(undefined);
-  useEffect(() => { setClassificationSaving(false); setReviewFocusTarget(null); }, [classificationContext, classificationFilter, directoryFilter, hashsetFilter?.runId]);
+  useEffect(() => { setClassificationSaving(false); }, [classificationContext]);
+  useEffect(() => { setReviewFocusTarget(null); }, [classificationContext, classificationFilter, directoryFilter, hashsetFilter?.runId]);
   const [isLoading, setIsLoading] = useState(false);
   const [isDataSourcesLoading, setIsDataSourcesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -297,10 +306,16 @@ export function MediaPage() {
 
         setGallery(mediaGallery);
         setFileViewPages(pages);
+        // Page resets belong to the gallery. Keep sidebar groups, counts and
+        // native dropdown DOM intact until fresh counts arrive.
+        const counts = pages.image.classificationCounts ?? emptySidebarCounts;
+        setSidebarCounts(current => current?.context === sidebarContext
+          && current.counts.length === counts.length && current.counts.every((count, index) => count === counts[index])
+          ? current : { context: sidebarContext, counts });
         setSelectedItem((currentItem) => {
           if (
             currentItem &&
-            (currentItem.mediaType === "video" || matchesVicFilter(currentItem.vicCategory, classificationFilter))
+            (currentItem.mediaType === "video" || matchesVicFilter(currentItem.vicCategory, classificationFilter, currentItem.faceCount, currentItem.clipClassifications))
           ) {
             return currentItem;
           }
@@ -338,7 +353,7 @@ export function MediaPage() {
     return () => {
       isCurrent = false;
     };
-  }, [activeCase, dataSources, mediaSource, refreshKey, selectedDataSourceId, classificationContext, classificationFilter, classificationRevision, directoryFilter, hashsetFilter]);
+  }, [activeCase, dataSources, mediaSource, refreshKey, selectedDataSourceId, classificationContext, classificationFilter, classificationRevision, directoryFilter, hashsetFilter, sidebarContext, emptySidebarCounts]);
 
   useEffect(() => {
     if (!activeCase || !selectedDataSourceId || mediaSource !== "plugin" ||
@@ -376,6 +391,7 @@ export function MediaPage() {
   async function handleClassify(item: MediaItem, category: VicCategory | null, advanceFromIndex?: number) {
     if (!activeCase || item.mediaType !== "image" || classificationSaving || isLoading || customClassifications.busy || !customClassifications.ready) return;
     const context = classificationContext;
+    const reviewScope = galleryScopeRef.current;
     setClassificationSaving(true);
     setError(null);
     try {
@@ -384,10 +400,10 @@ export function MediaPage() {
       setSelectedItem((current) => current?.path === item.path ? { ...current, vicCategory: category } : current);
       setGallery((current) => ({ ...current, photos: current.photos.map((photo) => photo.path === item.path ? { ...photo, vicCategory: category } : photo) }));
       try {
-        if (advanceFromIndex !== undefined) {
-          const next = await nextReviewImage(advanceFromIndex, matchesVicFilter(category, classificationFilter),
+        if (advanceFromIndex !== undefined && galleryScopeRef.current === reviewScope && selectedItemRef.current?.path === item.path) {
+          const next = await nextReviewImage(advanceFromIndex, matchesVicFilter(category, classificationFilter, item.faceCount, item.clipClassifications),
             (offset) => fetchPage("image", offset));
-          if (classificationContextRef.current !== context || selectedItemRef.current?.path !== item.path) return;
+          if (classificationContextRef.current !== context || galleryScopeRef.current !== reviewScope || selectedItemRef.current?.path !== item.path) return;
           setSelectedItem(next?.item ?? null);
           setReviewFocusTarget(next ? { path: next.item.path, index: next.index } : null);
         }
@@ -551,7 +567,7 @@ export function MediaPage() {
                 onSave: customClassifications.onSave, onDelete: customClassifications.onDelete },
               focusTarget: reviewFocusTarget,
               filter: classificationFilter,
-              counts: fileViewPages.image?.classificationCounts ?? [0, 0, 0, 0, 0, 0],
+              counts: sidebarCounts?.context === sidebarContext ? sidebarCounts.counts : emptySidebarCounts,
               onFilterChange: setClassificationFilter,
               onClassify: (item, category, advanceFromIndex) => { void handleClassify(item, category, advanceFromIndex); },
               saving: classificationSaving || isLoading || customClassifications.busy || !customClassifications.ready,
@@ -625,7 +641,7 @@ function MediaGallery({
   return (
     <div className={cn("grid h-full min-h-0", classification || directorySearch ? "grid-cols-[12rem_minmax(0,1fr)_16rem]" : "grid-cols-[minmax(0,1fr)_16rem]")}>
       {classification && <VicFilterSidebar key={caseDatabasePath} filter={classification.filter} counts={classification.counts}
-        onChange={classification.onFilterChange} disabled={classification.saving} custom={classification.custom} directorySearch={directorySearch} />}
+        onChange={classification.onFilterChange} disabled={classification.custom.disabled} custom={classification.custom} directorySearch={directorySearch} />}
       {!classification && directorySearch && <aside className="flex min-h-0 flex-col overflow-auto border-r bg-muted/20" aria-label="Video filters">
         <div className="flex h-8 shrink-0 items-center border-b px-2 text-xs font-medium">Filters</div>{directorySearch}
       </aside>}

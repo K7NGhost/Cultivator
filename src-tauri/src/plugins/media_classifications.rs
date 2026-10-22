@@ -188,10 +188,10 @@ async fn delete_definition(pool: &SqlitePool, category: i64) -> Result<(), Strin
 }
 
 pub(super) fn validate_filter(categories: &[i64]) -> Result<(), String> {
-    if categories.len() > 257
+    if categories.len() > 273
         || categories
             .iter()
-            .any(|category| !(-1..=255).contains(category))
+            .any(|category| !(-1..=271).contains(category))
     {
         return Err("Invalid Project VIC category filter.".into());
     }
@@ -452,6 +452,9 @@ async fn append_batch(
             .map(|extension| extension.to_string_lossy().to_uppercase())
             .unwrap_or_default();
         page.items.push(builtin::MediaItem {
+            clip_classifications: Vec::new(),
+            face_count: None,
+            face_boxes: Vec::new(),
             id: format!("file-view:{media_type}:{}", entry.path),
             media_type: if media_type == "image" {
                 builtin::MediaType::Image
@@ -738,6 +741,8 @@ mod tests {
         write_category(&pool, "/image", None).await.unwrap();
         assert_eq!(category_for(&pool, "/image").await.unwrap(), None);
         assert!(validate_filter(&[-1, 0, 4]).is_ok());
-        assert!(validate_filter(&[256]).is_err());
+        assert!(validate_filter(&[256]).is_ok());
+        assert!(validate_filter(&[257, 271]).is_ok());
+        assert!(validate_filter(&[272]).is_err());
     }
 }

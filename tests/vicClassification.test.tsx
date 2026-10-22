@@ -4,6 +4,20 @@ import { VicClassificationControls, VicFilterSidebar } from "../src/features/med
 import { VIC_CATEGORIES, classificationTextColor, matchesVicFilter, toggleVicFilter, vicClassification } from "../src/features/media/model/vicClassification";
 
 describe("Project VIC review", () => {
+  test("CLIP suggestions filter independently without changing manual assignment choices", () => {
+    const labels = [{ category: 1 }, { category: 7 }];
+    expect(matchesVicFilter(0, [257], null, labels)).toBe(true);
+    expect(matchesVicFilter(null, [263], null, labels)).toBe(true);
+    expect(matchesVicFilter(0, [270], null, labels)).toBe(false);
+    expect(matchesVicFilter(0, [0, 270], null, labels)).toBe(true);
+    const counts = Array(273).fill(0); counts[0] = 3; counts[258] = 1; counts[264] = 2;
+    const sidebar = renderToStaticMarkup(<VicFilterSidebar filter={[257]} counts={counts} onChange={() => {}} />);
+    expect(sidebar).toContain("CLIP: Weapons &amp; firearms");
+    expect(sidebar).toContain("CLIP: Media characteristics");
+    expect(sidebar).toContain(">3<");
+    const controls = renderToStaticMarkup(<VicClassificationControls category={0} onClassify={() => {}} />);
+    expect(controls).not.toContain("CLIP:");
+  });
   test("custom classifications resolve labels and combine with VIC filters", () => {
     const custom = [{ value: 5, label: "Needs review", color: "#123456" }];
     expect(vicClassification(5, custom)?.label).toBe("Needs review");

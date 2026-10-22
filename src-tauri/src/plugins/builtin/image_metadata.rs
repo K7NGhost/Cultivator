@@ -57,6 +57,29 @@ pub struct MediaItem {
     pub metadata_loaded: bool,
     #[serde(default)]
     pub vic_category: Option<i64>,
+    /// None means not analyzed (or decoding failed), distinct from zero faces.
+    #[serde(default)]
+    pub face_count: Option<u32>,
+    #[serde(default)]
+    pub face_boxes: Vec<FaceBox>,
+    #[serde(default)]
+    pub clip_classifications: Vec<ClipClassification>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipClassification {
+    pub category: u32,
+    pub score: f32,
+    pub matched_label: String,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct FaceBox {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 fn default_metadata_loaded() -> bool {
@@ -419,6 +442,9 @@ fn process_media_item(
         metadata: item_metadata,
         metadata_loaded: !format_supports_exif(format.format),
         vic_category: None,
+        face_count: None,
+        face_boxes: Vec::new(),
+        clip_classifications: Vec::new(),
     };
 
     Ok(Some(item))

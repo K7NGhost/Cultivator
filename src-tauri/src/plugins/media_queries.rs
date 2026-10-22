@@ -67,9 +67,19 @@ async fn read_filtered_page(
     } else {
         Some(serde_json::to_string(categories).map_err(|error| error.to_string())?)
     };
-    let mut classification_counts = vec![0u64; 257];
+    // Slot 257 is an overlapping automatic face filter, not a manual category.
+    let mut classification_counts = vec![0u64; 273];
     let (direct, nested) = media_directories::directory_patterns(directory);
     if media_type == "image" {
+        let clip_counts = sqlx::query("SELECT t.category, COUNT(*) AS count FROM media_gallery_items g JOIN media_clip_classifications t ON t.item_id = g.id WHERE g.datasource_id = $1 AND g.media_type = 'image' AND ($2 IS NULL OR (replace(g.path, char(92), '/') LIKE $2 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $3 ESCAPE '\\')) GROUP BY t.category")
+            .bind(datasource_id).bind(&direct).bind(&nested).fetch_all(&mut *transaction).await.map_err(|error| error.to_string())?;
+        for row in clip_counts {
+            classification_counts[(row.get::<i64, _>("category") + 257) as usize] = row.get::<i64, _>("count") as u64;
+        }
+        classification_counts[257] = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM media_gallery_items g WHERE g.datasource_id = $1 AND g.media_type = $2 AND json_extract(g.payload, '$.faceCount') > 0 AND ($3 IS NULL OR (replace(g.path, char(92), '/') LIKE $3 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $4 ESCAPE '\\'))"
+        ).bind(datasource_id).bind(media_type).bind(&direct).bind(&nested)
+            .fetch_one(&mut *transaction).await.map_err(|error| error.to_string())? as u64;
         let counts = sqlx::query("SELECT COALESCE(c.category, -1) AS category, COUNT(*) AS count FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR (replace(g.path, char(92), '/') LIKE $3 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $4 ESCAPE '\\')) GROUP BY c.category")
             .bind(datasource_id).bind(media_type).bind(&direct).bind(&nested).fetch_all(&mut *transaction).await.map_err(|error| error.to_string())?;
         for row in counts {
@@ -78,7 +88,7 @@ async fn read_filtered_page(
         }
     }
     let total_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3))) AND ($4 IS NULL OR (replace(g.path, char(92), '/') LIKE $4 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $5 ESCAPE '\\'))",
+        "SELECT COUNT(*) FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3)) OR (256 IN (SELECT value FROM json_each($3)) AND json_extract(g.payload, '$.faceCount') > 0) OR EXISTS (SELECT 1 FROM media_clip_classifications t WHERE t.item_id = g.id AND t.category + 256 IN (SELECT value FROM json_each($3)))) AND ($4 IS NULL OR (replace(g.path, char(92), '/') LIKE $4 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $5 ESCAPE '\\'))",
     )
     .bind(&datasource_id)
     .bind(&media_type)
@@ -89,7 +99,7 @@ async fn read_filtered_page(
     .await
     .map_err(|error| error.to_string())?;
     let rows = sqlx::query(
-        "SELECT g.payload, c.category FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3))) AND ($6 IS NULL OR (replace(g.path, char(92), '/') LIKE $6 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $7 ESCAPE '\\')) ORDER BY g.name, g.path LIMIT $4 OFFSET $5")
+        "SELECT g.payload, c.category FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3)) OR (256 IN (SELECT value FROM json_each($3)) AND json_extract(g.payload, '$.faceCount') > 0) OR EXISTS (SELECT 1 FROM media_clip_classifications t WHERE t.item_id = g.id AND t.category + 256 IN (SELECT value FROM json_each($3)))) AND ($6 IS NULL OR (replace(g.path, char(92), '/') LIKE $6 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $7 ESCAPE '\\')) ORDER BY g.name, g.path LIMIT $4 OFFSET $5")
         .bind(&datasource_id).bind(&media_type).bind(&filter).bind(limit).bind(offset).bind(&direct).bind(&nested)
         .fetch_all(&mut *transaction).await.map_err(|error| error.to_string())?;
     let items = rows
@@ -122,6 +132,60 @@ async fn read_filtered_page(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn faces_filter_uses_saved_results_and_preserves_manual_categories() {
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        ensure_plugin_tables(&pool).await.unwrap();
+        sqlx::query("INSERT INTO plugin_jobs (id, case_id, datasource_id, plugin_id, status, started_at) VALUES ('faces', 'case', 'source', 'image-metadata', 'complete', 'now')").execute(&pool).await.unwrap();
+        let photos = [Some(2), Some(0), None, Some(1)].into_iter().enumerate().map(|(index, count)| {
+            serde_json::from_value(serde_json::json!({
+                "id": index.to_string(), "mediaType": "image", "path": format!("/images/{index}.jpg"),
+                "name": format!("{index}.jpg"), "format": "JPEG", "size": 1,
+                "mediaPath": "unused", "thumbnailPath": "unused", "metadata": [], "faceCount": count,
+                "faceBoxes": vec![serde_json::json!({"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}); count.unwrap_or(0) as usize],
+                "clipClassifications": if index == 0 { serde_json::json!([
+                    {"category": 1, "score": 0.34, "matchedLabel": "rifles"},
+                    {"category": 7, "score": 0.31, "matchedLabel": "faces"}
+                ]) } else if index == 3 { serde_json::json!([
+                    {"category": 7, "score": 0.33, "matchedLabel": "groups"}
+                ]) } else { serde_json::json!([]) }
+            })).unwrap()
+        }).collect();
+        replace_media_gallery_items(&pool, "faces", "source", &builtin::MediaGallery { photos, videos: vec![], scanned_files: 4 }).await.unwrap();
+        sqlx::query("INSERT INTO media_classifications VALUES ('/images/0.jpg', 0, 'now')").execute(&pool).await.unwrap();
+        let page = read_filtered_page(&pool, "source", "image", 0, 1, &[256], None).await.unwrap();
+        assert_eq!(page.total_count, 2);
+        assert!(page.has_next_page);
+        assert_eq!(page.items[0].face_count, Some(2));
+        assert_eq!(page.items[0].face_boxes.len(), 2);
+        assert_eq!(page.items[0].face_boxes[0].x, 0.1);
+        assert_eq!(page.items[0].vic_category, Some(0));
+        assert_eq!(page.classification_counts[257], 2);
+        assert_eq!(page.classification_counts[..257].iter().sum::<u64>(), 4);
+        let union = read_filtered_page(&pool, "source", "image", 0, 500, &[256, 0], Some("/images")).await.unwrap();
+        assert_eq!(union.total_count, 2); // no duplicate for an image matching both
+        let next = read_filtered_page(&pool, "source", "image", 1, 1, &[256], None).await.unwrap();
+        assert_eq!(next.items[0].face_count, Some(1));
+        assert_eq!(next.items[0].vic_category, None);
+        let absent = read_filtered_page(&pool, "source", "image", 0, 500, &[256], Some("/other")).await.unwrap();
+        assert_eq!(absent.total_count, 0);
+        assert_eq!(absent.classification_counts[257], 0);
+        let weapons = read_filtered_page(&pool, "source", "image", 0, 500, &[257], None).await.unwrap();
+        assert_eq!(weapons.total_count, 1);
+        assert_eq!(weapons.items[0].vic_category, Some(0));
+        assert_eq!(weapons.items[0].clip_classifications.len(), 2);
+        assert_eq!(weapons.classification_counts[258], 1);
+        assert_eq!(weapons.classification_counts[264], 2);
+        let people = read_filtered_page(&pool, "source", "image", 1, 1, &[263, 257, 0], Some("/images")).await.unwrap();
+        assert_eq!(people.total_count, 2);
+        assert_eq!(people.items[0].path, "/images/3.jpg");
+        // A rescan replaces automatic results and cascades old filter rows.
+        replace_media_gallery_items(&pool, "faces", "source", &builtin::MediaGallery { photos: vec![], videos: vec![], scanned_files: 0 }).await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_clip_classifications").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(media_classifications::category_for(&pool, "/images/0.jpg").await.unwrap(), Some(0));
+    }
 
     #[tokio::test]
     async fn directory_filter_is_literal_direct_and_combines_with_classification_and_pagination() {
