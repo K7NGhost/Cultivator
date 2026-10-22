@@ -1,7 +1,5 @@
 # Cultivator
 
-[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/K7NGhost/Cultivator?utm_source=badge)
-
 Cultivator is a modern digital forensics application designed to expand upon the capabilities and workflows commonly found in tools such as Autopsy.
 
 Built with **Rust** and **React**, Cultivator combines the performance, safety, and concurrency capabilities of Rust with a modern and responsive user interface.
@@ -81,9 +79,3 @@ The long-term goal of Cultivator is not simply to replicate existing forensic pl
 Cultivator is an ongoing personal project and will continue to evolve as new forensic workflows, artifact types, and analysis capabilities are implemented.
 
 Current Statistics - researching
-
-## Development checks and releases
-
-See [the CI and release guide](.github/README.md) for GitHub Actions checks,
-CodSpeed benchmarks, native build verification, signing secrets, and version-tag
-releases.

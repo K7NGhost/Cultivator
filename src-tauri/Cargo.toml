@@ -57,7 +57,6 @@ libloading = "0.7.4"
 windows = { version = "0.61.3", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
 
 [dev-dependencies]
-criterion = { package = "codspeed-criterion-compat", version = "=5.0.2", features = ["async_tokio"] }
 tempfile = "3"
 
 # Camera JPEG entropy decoding runs on every cold gallery visit in development.
@@ -72,15 +71,3 @@ opt-level = 3
 
 [profile.dev.package.flate2]
 opt-level = 3
-
-[[bench]]
-name = "text_preview"
-harness = false
-
-[[bench]]
-name = "file_format"
-harness = false
-
-[[bench]]
-name = "hex_preview"
-harness = false
