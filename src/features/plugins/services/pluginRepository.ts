@@ -1,3 +1,4 @@
+import { getAnalysisMode } from "@/features/settings/performanceSettings";
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
@@ -130,7 +131,18 @@ export async function listPluginJobs(
 
 export async function submitDatasourcePlugins(input: SubmitPluginRunInput): Promise<SubmittedPluginRun> {
   await waitForPluginProgressListener();
-  return invoke<SubmittedPluginRun>("submit_plugin_run", { request: input });
+  return invoke<SubmittedPluginRun>("submit_plugin_run", {
+    request: {
+      ...input,
+      pluginOptions: {
+        ...input.pluginOptions,
+        "image-metadata": {
+          ...input.pluginOptions?.["image-metadata"],
+          analysisMode: getAnalysisMode(),
+        },
+      },
+    },
+  });
 }
 
 export async function waitForPluginRun(caseDatabasePath: string, runId: string): Promise<PluginRunSummary> {

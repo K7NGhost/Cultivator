@@ -722,6 +722,7 @@ async fn list_media_gallery_page(
     limit: u32,
     categories: Option<Vec<i64>>,
     directory: Option<String>,
+    visual_options: Option<plugins::MediaVisualOptions>,
 ) -> Result<plugins::MediaGalleryPage, String> {
     plugins::list_media_gallery_page(
         case_database_path,
@@ -731,6 +732,7 @@ async fn list_media_gallery_page(
         limit,
         categories,
         directory,
+        visual_options,
     )
     .await
 }

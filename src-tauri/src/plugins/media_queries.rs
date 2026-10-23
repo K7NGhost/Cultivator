@@ -1,5 +1,38 @@
 use super::*;
 
+// Same IDs as the client; invalid or absent scores never count as negatives.
+const NSFW_STATUS_SQL: &str = "CASE WHEN json_type(g.payload, '$.nsfwScore') IN ('integer', 'real') AND json_extract(g.payload, '$.nsfwScore') BETWEEN 0 AND 1 THEN CASE WHEN json_extract(g.payload, '$.nsfwScore') >= 0.5 THEN 272 ELSE 273 END ELSE 274 END";
+
+pub(super) async fn ensure_nsfw_index(pool: &SqlitePool) -> Result<(), String> {
+    let mut transaction = pool.begin().await.map_err(|e| e.to_string())?;
+    let added = sqlx::query("INSERT OR IGNORE INTO media_classification_migrations(name) VALUES ('nsfw-score-v1')")
+        .execute(&mut *transaction).await.map_err(|e| e.to_string())?.rows_affected();
+    if added > 0 {
+        // Reuse scores saved by the original metadata-only implementation.
+        sqlx::query(r#"UPDATE media_gallery_items SET payload = json_set(payload, '$.nsfwScore', (
+            SELECT CAST(json_extract(m.value, '$.value') AS REAL) FROM json_each(payload, '$.metadata') m
+            WHERE json_extract(m.value, '$.label') = 'NSFW score'
+            AND CASE WHEN json_valid(json_extract(m.value, '$.value')) THEN
+                json_type(json_extract(m.value, '$.value')) IN ('integer', 'real')
+                AND CAST(json_extract(m.value, '$.value') AS REAL) BETWEEN 0 AND 1 ELSE 0 END LIMIT 1
+        )) WHERE json_extract(payload, '$.nsfwScore') IS NULL AND payload LIKE '%"NSFW score"%'"#)
+            .execute(&mut *transaction).await.map_err(|e| e.to_string())?;
+    }
+    let status = NSFW_STATUS_SQL.replace("g.payload", "payload");
+    sqlx::query(&format!("CREATE INDEX IF NOT EXISTS media_gallery_nsfw_idx ON media_gallery_items(datasource_id, media_type, ({status}))"))
+        .execute(&mut *transaction).await.map_err(|e| e.to_string())?;
+    transaction.commit().await.map_err(|e| e.to_string())
+}
+
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MediaVisualOptions {
+    pub skin_min: Option<f64>,
+    pub collapse_similar: bool,
+    pub stack_id: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaGalleryPage {
@@ -19,6 +52,7 @@ pub async fn list_media_gallery_page(
     limit: u32,
     categories: Option<Vec<i64>>,
     directory: Option<String>,
+    visual_options: Option<MediaVisualOptions>,
 ) -> Result<MediaGalleryPage, String> {
     if !matches!(media_type.as_str(), "image" | "video") {
         return Err("Invalid media type.".into());
@@ -27,7 +61,7 @@ pub async fn list_media_gallery_page(
     ensure_plugin_tables(&pool).await?;
     let categories = categories.unwrap_or_default();
     media_classifications::validate_filter(&categories)?;
-    read_filtered_page(
+    read_visual_page(
         &pool,
         &datasource_id,
         &media_type,
@@ -35,6 +69,7 @@ pub async fn list_media_gallery_page(
         limit,
         &categories,
         directory.as_deref(),
+        &visual_options.unwrap_or_default(),
     )
     .await
 }
@@ -50,6 +85,7 @@ async fn read_page(
     read_filtered_page(pool, datasource_id, media_type, offset, limit, &[], None).await
 }
 
+#[cfg(test)]
 async fn read_filtered_page(
     pool: &SqlitePool,
     datasource_id: &str,
@@ -59,18 +95,45 @@ async fn read_filtered_page(
     categories: &[i64],
     directory: Option<&str>,
 ) -> Result<MediaGalleryPage, String> {
+    read_visual_page(pool, datasource_id, media_type, offset, limit, categories, directory, &MediaVisualOptions::default()).await
+}
+
+async fn read_visual_page(
+    pool: &SqlitePool,
+    datasource_id: &str,
+    media_type: &str,
+    offset: u32,
+    limit: u32,
+    categories: &[i64],
+    directory: Option<&str>,
+    visual: &MediaVisualOptions,
+) -> Result<MediaGalleryPage, String> {
+    if visual.skin_min.is_some_and(|r| !r.is_finite() || !(0.0..=1.0).contains(&r)) {
+        return Err("Invalid skin-tone threshold".into());
+    }
+    let (skin_min, stack_id, requested_collapse) = if media_type == "image" {
+        (visual.skin_min, visual.stack_id.as_deref(), visual.collapse_similar && visual.stack_id.is_none())
+    } else { (None, None, false) };
     let limit = limit.clamp(1, 500);
     // A read transaction keeps the count and page consistent across rescans.
     let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
+    let collapse = requested_collapse && sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM media_gallery_items WHERE datasource_id = $1 AND media_type = $2 AND json_extract(payload, '$.visualStackId') IS NOT NULL)")
+        .bind(datasource_id).bind(media_type).fetch_one(&mut *transaction).await.map_err(|e| e.to_string())? != 0;
+
     let filter = if categories.is_empty() || media_type != "image" {
         None
     } else {
         Some(serde_json::to_string(categories).map_err(|error| error.to_string())?)
     };
     // Slot 257 is an overlapping automatic face filter, not a manual category.
-    let mut classification_counts = vec![0u64; 273];
+    let mut classification_counts = vec![0u64; 276];
     let (direct, nested) = media_directories::directory_patterns(directory);
     if media_type == "image" {
+        let nsfw_counts = sqlx::query(&format!("SELECT {NSFW_STATUS_SQL} AS status, COUNT(*) AS count FROM media_gallery_items g WHERE g.datasource_id = $1 AND g.media_type = 'image' AND ($2 IS NULL OR (replace(g.path, char(92), '/') LIKE $2 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $3 ESCAPE '\\')) GROUP BY status"))
+            .bind(datasource_id).bind(&direct).bind(&nested).fetch_all(&mut *transaction).await.map_err(|e| e.to_string())?;
+        for row in nsfw_counts {
+            classification_counts[(row.get::<i64, _>("status") + 1) as usize] = row.get::<i64, _>("count") as u64;
+        }
         let clip_counts = sqlx::query("SELECT t.category, COUNT(*) AS count FROM media_gallery_items g JOIN media_clip_classifications t ON t.item_id = g.id WHERE g.datasource_id = $1 AND g.media_type = 'image' AND ($2 IS NULL OR (replace(g.path, char(92), '/') LIKE $2 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $3 ESCAPE '\\')) GROUP BY t.category")
             .bind(datasource_id).bind(&direct).bind(&nested).fetch_all(&mut *transaction).await.map_err(|error| error.to_string())?;
         for row in clip_counts {
@@ -87,26 +150,38 @@ async fn read_filtered_page(
                 row.get::<i64, _>("count") as u64;
         }
     }
-    let total_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3)) OR (256 IN (SELECT value FROM json_each($3)) AND json_extract(g.payload, '$.faceCount') > 0) OR EXISTS (SELECT 1 FROM media_clip_classifications t WHERE t.item_id = g.id AND t.category + 256 IN (SELECT value FROM json_each($3)))) AND ($4 IS NULL OR (replace(g.path, char(92), '/') LIKE $4 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $5 ESCAPE '\\'))",
-    )
-    .bind(&datasource_id)
-    .bind(&media_type)
-    .bind(&filter)
-    .bind(&direct)
-    .bind(&nested)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(|error| error.to_string())?;
-    let rows = sqlx::query(
-        "SELECT g.payload, c.category FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3)) OR (256 IN (SELECT value FROM json_each($3)) AND json_extract(g.payload, '$.faceCount') > 0) OR EXISTS (SELECT 1 FROM media_clip_classifications t WHERE t.item_id = g.id AND t.category + 256 IN (SELECT value FROM json_each($3)))) AND ($6 IS NULL OR (replace(g.path, char(92), '/') LIKE $6 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $7 ESCAPE '\\')) ORDER BY g.name, g.path LIMIT $4 OFFSET $5")
-        .bind(&datasource_id).bind(&media_type).bind(&filter).bind(limit).bind(offset).bind(&direct).bind(&nested)
-        .fetch_all(&mut *transaction).await.map_err(|error| error.to_string())?;
+    // Apply all image filters before choosing stack representatives. A matching
+    // non-head member must not disappear because a different member failed a filter.
+    let matching = format!("SELECT json_extract(g.payload, '$.visualStackId') AS visual_stack_id, g.id, c.category, g.name, g.path,
+        COALESCE('stack:' || json_extract(g.payload, '$.visualStackId'), 'item:' || g.id) AS stack_key
+        FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3)) OR (256 IN (SELECT value FROM json_each($3)) AND json_extract(g.payload, '$.faceCount') > 0) OR EXISTS (SELECT 1 FROM media_clip_classifications t WHERE t.item_id = g.id AND t.category + 256 IN (SELECT value FROM json_each($3))) OR ({NSFW_STATUS_SQL}) IN (SELECT value FROM json_each($3))) AND ($4 IS NULL OR (replace(g.path, char(92), '/') LIKE $4 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $5 ESCAPE '\\'))
+        AND ($6 IS NULL OR (json_type(g.payload, '$.skinRatio') IN ('integer', 'real') AND json_extract(g.payload, '$.skinRatio') BETWEEN $6 AND 1))
+        AND ($7 IS NULL OR json_extract(g.payload, '$.visualStackId') = $7)");
+    let count_sql = format!("WITH matching AS ({matching}) SELECT {} FROM matching", if collapse { "COUNT(DISTINCT stack_key)" } else { "COUNT(*)" });
+    let total_count: i64 = sqlx::query_scalar(&count_sql)
+        .bind(datasource_id).bind(media_type).bind(&filter).bind(&direct).bind(&nested).bind(skin_min).bind(stack_id)
+        .fetch_one(&mut *transaction).await.map_err(|e| e.to_string())?;
+    // Seek a preceding matching member using the stack index, rather than
+    // sorting every payload into window partitions on each scroll request.
+    let page_sql = format!("WITH matching AS NOT MATERIALIZED ({matching})
+        SELECT g.payload, page.category, CASE WHEN page.visual_stack_id IS NULL THEN 1 ELSE (
+            SELECT COUNT(*) FROM matching sibling WHERE sibling.visual_stack_id = page.visual_stack_id
+        ) END AS stack_count FROM (
+            SELECT m.id, m.category, m.visual_stack_id, m.name, m.path FROM matching m
+            WHERE NOT $8 OR m.visual_stack_id IS NULL OR NOT EXISTS (
+                SELECT 1 FROM matching earlier WHERE earlier.visual_stack_id = m.visual_stack_id
+                AND (earlier.name < m.name OR (earlier.name = m.name AND earlier.path < m.path)))
+            ORDER BY m.name, m.path LIMIT $9 OFFSET $10
+        ) page JOIN media_gallery_items g ON g.id = page.id ORDER BY page.name, page.path");
+    let rows = sqlx::query(&page_sql)
+        .bind(datasource_id).bind(media_type).bind(&filter).bind(&direct).bind(&nested).bind(skin_min).bind(stack_id)
+        .bind(collapse).bind(limit).bind(offset).fetch_all(&mut *transaction).await.map_err(|e| e.to_string())?;
     let items = rows
         .into_iter()
         .map(|row| {
             let mut item: builtin::MediaItem = serde_json::from_str(row.get::<&str, _>("payload"))
                 .map_err(|error| error.to_string())?;
+            item.stack_size = row.get::<i64, _>("stack_count") as u64;
             item.vic_category = if media_type == "image" {
                 row.get("category")
             } else {
@@ -132,6 +207,90 @@ async fn read_filtered_page(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn skin_filter_and_stacking_choose_matching_members_before_pagination() {
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        ensure_plugin_tables(&pool).await.unwrap();
+        sqlx::query("INSERT INTO plugin_jobs (id, case_id, datasource_id, plugin_id, status, started_at) VALUES ('visual', 'case', 'source', 'image-metadata', 'complete', 'now')").execute(&pool).await.unwrap();
+        let photos = [Some(0.05), Some(0.5), None, Some(0.3)].into_iter().enumerate().map(|(index, skin)| {
+            serde_json::from_value(serde_json::json!({
+                "id": index.to_string(), "mediaType": "image", "path": format!("/images/{index}.jpg"),
+                "name": format!("{index}.jpg"), "format": "JPEG", "size": 1,
+                "mediaPath": "unused", "thumbnailPath": "unused", "metadata": [],
+                "skinRatio": skin, "visualStackId": if index < 2 { Some("/images/0.jpg") } else { None }
+            })).unwrap()
+        }).collect();
+        replace_media_gallery_items(&pool, "visual", "source", &builtin::MediaGallery { photos, videos: vec![], scanned_files: 4 }).await.unwrap();
+        sqlx::query("INSERT INTO media_classifications VALUES ('/images/1.jpg', 0, 'now')").execute(&pool).await.unwrap();
+        let mut options = MediaVisualOptions { collapse_similar: true, ..Default::default() };
+        let page = read_visual_page(&pool, "source", "image", 0, 1, &[], None, &options).await.unwrap();
+        assert_eq!(page.total_count, 3);
+        assert_eq!(page.items[0].stack_size, 2);
+        assert!(page.has_next_page);
+        let next = read_visual_page(&pool, "source", "image", 1, 1, &[], None, &options).await.unwrap();
+        assert_eq!(next.items[0].path, "/images/2.jpg");
+        options.skin_min = Some(0.3);
+        let skin = read_visual_page(&pool, "source", "image", 0, 500, &[], None, &options).await.unwrap();
+        assert_eq!(skin.total_count, 2);
+        assert_eq!(skin.items[0].path, "/images/1.jpg"); // matching non-head survives
+        let manual = read_visual_page(&pool, "source", "image", 0, 500, &[0], None, &options).await.unwrap();
+        assert_eq!(manual.total_count, 1);
+        assert_eq!(manual.items[0].vic_category, Some(0));
+        options.skin_min = None;
+        options.stack_id = Some("/images/0.jpg".into());
+        let expanded = read_visual_page(&pool, "source", "image", 0, 500, &[], None, &options).await.unwrap();
+        assert_eq!(expanded.total_count, 2);
+        assert_eq!(expanded.items[1].path, "/images/1.jpg");
+        let elsewhere = read_visual_page(&pool, "source", "image", 0, 500, &[], Some("/other"), &options).await.unwrap();
+        assert_eq!(elsewhere.total_count, 0);
+        options.skin_min = Some(f64::NAN);
+        assert!(read_visual_page(&pool, "source", "image", 0, 500, &[], None, &options).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn nsfw_filters_migrate_saved_scores_and_preserve_counts_pagination_and_unions() {
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        ensure_plugin_tables(&pool).await.unwrap();
+        sqlx::query("INSERT INTO plugin_jobs (id, case_id, datasource_id, plugin_id, status, started_at) VALUES ('nsfw', 'case', 'source', 'image-metadata', 'complete', 'now')").execute(&pool).await.unwrap();
+        let photos = [Some(0.9), Some(0.5), Some(0.499999), Some(0.0), None, None].into_iter().enumerate().map(|(index, score)| {
+            serde_json::from_value(serde_json::json!({
+                "id": index.to_string(), "mediaType": "image", "path": format!("/images/{index}.jpg"),
+                "name": format!("{index}.jpg"), "format": "JPEG", "size": 1,
+                "mediaPath": "unused", "thumbnailPath": "unused", "metadata": [], "nsfwScore": score
+            })).unwrap()
+        }).collect();
+        replace_media_gallery_items(&pool, "nsfw", "source", &builtin::MediaGallery { photos, videos: vec![], scanned_files: 6 }).await.unwrap();
+        // Simulate scores stored before the filter existed, including malformed metadata.
+        for (name, value) in [("0.jpg", "0.9"), ("5.jpg", "unavailable")] {
+            sqlx::query("UPDATE media_gallery_items SET payload = json_set(json_remove(payload, '$.nsfwScore'), '$.metadata', json(?)) WHERE name = ?")
+                .bind(serde_json::json!([{"label": "NSFW score", "value": value}]).to_string()).bind(name).execute(&pool).await.unwrap();
+        }
+        sqlx::query("DELETE FROM media_classification_migrations WHERE name = 'nsfw-score-v1'").execute(&pool).await.unwrap();
+        ensure_nsfw_index(&pool).await.unwrap();
+        ensure_nsfw_index(&pool).await.unwrap(); // migration is idempotent
+        sqlx::query("INSERT INTO media_classifications VALUES ('/images/0.jpg', 0, 'now')").execute(&pool).await.unwrap();
+        for category in [272, 273, 274] {
+            let page = read_filtered_page(&pool, "source", "image", 0, 1, &[category], Some("/images")).await.unwrap();
+            assert_eq!(page.total_count, 2);
+            assert!(page.has_next_page);
+            assert_eq!(&page.classification_counts[273..276], &[2, 2, 2]);
+            assert_eq!(page.classification_counts[..257].iter().sum::<u64>(), 6);
+            let next = read_filtered_page(&pool, "source", "image", 1, 1, &[category], None).await.unwrap();
+            assert!(!next.has_next_page);
+            assert_ne!(page.items[0].path, next.items[0].path);
+        }
+        let flagged = read_filtered_page(&pool, "source", "image", 0, 500, &[272], None).await.unwrap();
+        assert_eq!(flagged.items[0].nsfw_score, Some(0.9));
+        assert_eq!(flagged.items[0].vic_category, Some(0));
+        let union = read_filtered_page(&pool, "source", "image", 0, 500, &[272, 0], None).await.unwrap();
+        assert_eq!(union.total_count, 2);
+        let missing = read_filtered_page(&pool, "source", "image", 0, 500, &[274], Some("/other")).await.unwrap();
+        assert_eq!(missing.total_count, 0);
+        assert_eq!(&missing.classification_counts[273..276], &[0, 0, 0]);
+        let other = read_filtered_page(&pool, "other-source", "image", 0, 500, &[272], None).await.unwrap();
+        assert_eq!(other.total_count, 0);
+    }
 
     #[tokio::test]
     async fn faces_filter_uses_saved_results_and_preserves_manual_categories() {

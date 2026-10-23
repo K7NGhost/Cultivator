@@ -3,6 +3,7 @@ mod image_metadata;
 mod face_detection;
 mod clip_classification;
 mod python_worker;
+mod visual_screening;
 
 use crate::plugins::PythonPluginManifest;
 use serde_json::Value as JsonValue;
@@ -113,6 +114,15 @@ impl<'a> BuiltinPluginContext<'a> {
 
     pub(crate) fn into_effects(self) -> BuiltinPluginEffects {
         self.effects
+    }
+}
+
+pub(super) fn analysis_limits(context: &BuiltinPluginContext<'_>) -> (usize, usize) {
+    let cpus = std::thread::available_parallelism().map_or(4, usize::from);
+    match context.options.get("analysisMode").and_then(JsonValue::as_str) {
+        Some("performance") => (cpus.saturating_sub(2).clamp(1, 16), 64),
+        Some("saver") => (2.min(cpus), 8),
+        _ => ((cpus / 2).clamp(1, 8), 32),
     }
 }
 
@@ -254,11 +264,15 @@ impl BuiltinPlugin for ImageMetadataPlugin {
                 gallery.scanned_files, matched_files
             ),
         );
-        if context.options.get("detectFaces").is_some_and(|value| value.as_bool() == Some(true) || value.as_str() == Some("true")) {
-            face_detection::classify(&mut gallery, context)?;
-        }
-        if context.options.get("classifyClip").is_some_and(|value| value.as_bool() == Some(true) || value.as_str() == Some("true")) {
+        visual_screening::analyze(&mut gallery, context)?;
+        let faces = context.options.get("detectFaces").is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
+        let clip = context.options.get("classifyClip").is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
+        let nsfw = context.options.get("classifyNsfw").is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
+        if clip || nsfw {
+            // Combined worker decodes once and overlaps CPU faces with GPU inference.
             clip_classification::classify(&mut gallery, context)?;
+        } else if faces {
+            face_detection::classify(&mut gallery, context)?;
         }
         context.replace_media(gallery);
 

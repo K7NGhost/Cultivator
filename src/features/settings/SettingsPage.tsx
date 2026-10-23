@@ -4,17 +4,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { applyPerformanceSettings, defaultPerformanceSettings, nativeMemoryMb, recordCacheBytes, thumbnailCacheBytes, usePerformanceSettings, performancePresets, thumbnailConcurrency } from "./performanceSettings";
 import { clearPreparedThumbnails, preparedThumbnails } from "../media/services/preparedThumbnails";
+import { getAnalysisMode, saveAnalysisMode, type AnalysisMode } from "./performanceSettings";
 import { PluginModels } from "./PluginModels";
 
 export function SettingsPage() {
   const applied = usePerformanceSettings();
   const [draft, setDraft] = useState(applied);
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>(getAnalysisMode);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   async function save(event: React.FormEvent) {
     event.preventDefault();
     setSaving(true); setMessage("");
-    try { await applyPerformanceSettings(draft); setMessage("Settings saved. Gallery memory and loading limits updated."); }
+    try { await applyPerformanceSettings(draft); saveAnalysisMode(analysisMode); setMessage("Settings saved. Analysis mode applies to new plugin runs."); }
     catch (error) { setMessage(`Could not save settings: ${String(error)}`); }
     finally { setSaving(false); }
   }
@@ -42,9 +44,18 @@ export function SettingsPage() {
         </label>
         <p className="text-muted-foreground">The lookahead follows your scroll direction and fits within the memory budget. Cached images can appear immediately; fast scrolling or large jumps can still need loading. Refreshing the gallery revalidates the evidence snapshot.</p>
         <p className="text-muted-foreground">Up to {thumbnailConcurrency(draft)} image previews load at once. Leaving the gallery releases its image cache. Images that exceed safe decoding limits show an unavailable preview.</p>
+        <h2 className="border-b pb-1 font-medium">Media analysis performance</h2>
+        <label className="grid grid-cols-[13rem_12rem] items-center gap-2">CLIP and YuNet processing
+          <select aria-label="Media analysis mode" className="h-8 rounded-sm border bg-background px-2" value={analysisMode} disabled={saving} onChange={event => setAnalysisMode(event.target.value as AnalysisMode)}>
+            <option value="saver">Resource saver</option>
+            <option value="balanced">Balanced</option>
+            <option value="performance">High performance</option>
+          </select>
+        </label>
+        <p className="text-muted-foreground">CLIP uses your NVIDIA GPU when available; YuNet runs on CPU. High performance uses up to 16 CPU workers and batches of 64 images, Balanced up to 8 workers and batches of 32, and Resource saver up to 2 workers and batches of 8. Larger CLIP models and limited GPU memory automatically use smaller batches. Face detection resolution and confidence stay the same in every mode.</p>
         <div className="flex gap-2 border-t pt-2">
           <Button size="sm" type="submit" disabled={saving}>{saving ? "Saving..." : "Apply settings"}</Button>
-          <Button size="sm" variant="outline" type="button" disabled={saving} onClick={() => setDraft({ ...defaultPerformanceSettings })}>Restore defaults</Button>
+          <Button size="sm" variant="outline" type="button" disabled={saving} onClick={() => { setDraft({ ...defaultPerformanceSettings }); setAnalysisMode("balanced"); }}>Restore defaults</Button>
           <Button size="sm" variant="outline" type="button" onClick={() => { const count = preparedThumbnails.size; clearPreparedThumbnails(); setMessage(`Cleared ${count} thumbnails from RAM. Disk thumbnails remain available.`); }}>Clear thumbnail RAM cache</Button>
         </div>
         <p role="status" className="min-h-4 text-muted-foreground">{message}</p>
