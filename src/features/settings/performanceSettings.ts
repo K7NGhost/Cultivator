@@ -56,3 +56,12 @@ export async function applyPerformanceSettings(value: PerformanceSettings) {
 export async function initializePerformanceSettings() {
   await invoke("configure_thumbnail_memory", { memoryMb: nativeMemoryMb(settings) });
 }
+
+export type AnalysisMode = "saver" | "balanced" | "performance";
+export function getAnalysisMode(): AnalysisMode {
+  const value = localStorage.getItem("cultivator.analysisMode.v1");
+  return value === "saver" || value === "performance" ? value : "balanced";
+}
+export function saveAnalysisMode(mode: AnalysisMode) {
+  localStorage.setItem("cultivator.analysisMode.v1", mode);
+}

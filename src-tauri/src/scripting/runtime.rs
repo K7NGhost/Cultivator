@@ -131,19 +131,20 @@ pub fn prepare_with_cancellation(
         let requirements = environment.join("cultivator-requirements.txt");
         fs::write(&requirements, dependencies.join("\n"))
             .map_err(|error| format!("Failed to write plugin requirements: {error}"))?;
-        run_uv(
-            &uv,
-            root,
-            cancelled,
-            &[
-                "pip".as_ref(),
-                "install".as_ref(),
-                "--python".as_ref(),
-                executable.as_os_str(),
-                "--requirements".as_ref(),
-                requirements.as_os_str(),
-            ],
-        )?;
+        let mut install_arguments: Vec<&std::ffi::OsStr> = vec![
+            "pip".as_ref(), "install".as_ref(), "--python".as_ref(),
+            executable.as_os_str(), "--requirements".as_ref(), requirements.as_os_str(),
+        ];
+        if name == "openclip-accelerated-v2" {
+            // Explicit backend selection fixes Windows PyPI's CPU-only torch default.
+            let mut probe = Command::new("nvidia-smi");
+            hide_window(&mut probe);
+            if probe.arg("-L").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success()) {
+                install_arguments.push("--torch-backend".as_ref());
+                install_arguments.push("cu128".as_ref());
+            }
+        }
+        run_uv(&uv, root, cancelled, &install_arguments)?;
     }
     if !executable.is_file() {
         return Err("uv did not create a Python interpreter for this environment.".into());

@@ -153,7 +153,7 @@ export function MediaPage() {
   const [hashsetSelection, setHashsetSelection] = useState<{ context: string; filter: HashsetFilter } | null>(null);
   const hashsetFilter = hashsetSelection?.context === classificationContext ? hashsetSelection.filter : null;
   const sidebarContext = JSON.stringify([classificationContext, hashsetFilter?.runId]);
-  const emptySidebarCounts = useMemo(() => Array(mediaSource === "plugin" && !hashsetFilter ? 273 : 257).fill(0) as number[], [mediaSource, !!hashsetFilter]);
+  const emptySidebarCounts = useMemo(() => Array(mediaSource === "plugin" && !hashsetFilter ? 276 : 257).fill(0) as number[], [mediaSource, !!hashsetFilter]);
   const [sidebarCounts, setSidebarCounts] = useState<{ context: string; counts: number[] } | null>(null);
   useEffect(() => {
     if (mediaSource !== "plugin" || hashsetFilter) {
@@ -315,7 +315,7 @@ export function MediaPage() {
         setSelectedItem((currentItem) => {
           if (
             currentItem &&
-            (currentItem.mediaType === "video" || matchesVicFilter(currentItem.vicCategory, classificationFilter, currentItem.faceCount, currentItem.clipClassifications))
+            (currentItem.mediaType === "video" || matchesVicFilter(currentItem.vicCategory, classificationFilter, currentItem.faceCount, currentItem.clipClassifications, currentItem.nsfwScore))
           ) {
             return currentItem;
           }
@@ -401,7 +401,7 @@ export function MediaPage() {
       setGallery((current) => ({ ...current, photos: current.photos.map((photo) => photo.path === item.path ? { ...photo, vicCategory: category } : photo) }));
       try {
         if (advanceFromIndex !== undefined && galleryScopeRef.current === reviewScope && selectedItemRef.current?.path === item.path) {
-          const next = await nextReviewImage(advanceFromIndex, matchesVicFilter(category, classificationFilter, item.faceCount, item.clipClassifications),
+          const next = await nextReviewImage(advanceFromIndex, matchesVicFilter(category, classificationFilter, item.faceCount, item.clipClassifications, item.nsfwScore),
             (offset) => fetchPage("image", offset));
           if (classificationContextRef.current !== context || galleryScopeRef.current !== reviewScope || selectedItemRef.current?.path !== item.path) return;
           setSelectedItem(next?.item ?? null);

@@ -36,33 +36,54 @@ def face_boxes(faces, width, height):
     return boxes
 
 
+class FaceAnalyzer:
+    """Each CPU worker owns its detector; OpenCV DNN nets are not thread safe."""
+    def __init__(self, directory):
+        import cv2
+        import threading
+        cv2.setNumThreads(1)
+        self.model = model_path(directory)
+        self.local = threading.local()
+
+    def detect(self, image):
+        import cv2
+        import numpy as np
+        detector = getattr(self.local, "detector", None)
+        if detector is None:
+            detector = cv2.FaceDetectorYN.create(self.model, "", (320, 320), 0.8, 0.3, 5000)
+            self.local.detector = detector
+        image.thumbnail((1280, 1280))
+        frame = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR)
+        detector.setInputSize((frame.shape[1], frame.shape[0]))
+        _, faces = detector.detect(frame)
+        boxes = face_boxes(faces, frame.shape[1], frame.shape[0])
+        return {"count": len(boxes), "boxes": boxes}
+
+
 def main():
-    import cv2
-    import numpy as np
+    import os
+    from concurrent.futures import ThreadPoolExecutor
     from PIL import Image, ImageOps
     import pillow_heif
 
     pillow_heif.register_heif_opener(depth_images=False, aux_images=False, decode_threads=1)
-    cv2.setNumThreads(2)
-    detector = cv2.FaceDetectorYN.create(model_path(sys.argv[1]), "", (320, 320), 0.8, 0.3, 5000)
-    emit({"ready": True})
-    for line in sys.stdin:
+    analyzer = FaceAnalyzer(sys.argv[1])
+    workers = min(16, max(1, int(sys.argv[2]))) if len(sys.argv) > 2 else min(8, os.cpu_count() or 1)
+    def analyze(path):
         try:
-            request = json.loads(line)
-            # Decode originals, not gallery thumbnails: tiny thumbnails lose faces.
-            # Bound inference resolution and handle Unicode paths and EXIF rotation.
-            with Image.open(request["path"]) as source:
+            with Image.open(path) as source:
                 source.draft("RGB", (1280, 1280))
-                image = ImageOps.exif_transpose(source)
-                image.thumbnail((1280, 1280))
-                frame = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR)
-            detector.setInputSize((frame.shape[1], frame.shape[0]))
-            _, faces = detector.detect(frame)
-            boxes = face_boxes(faces, frame.shape[1], frame.shape[0])
-            emit({"count": len(boxes), "boxes": boxes})
+                return analyzer.detect(ImageOps.exif_transpose(source))
         except Exception as error:
-            # A corrupt/unsupported image is unknown, never a negative detection.
-            emit({"error": str(error)})
+            return {"error": str(error)}
+    emit({"ready": True, "workers": workers})
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for line in sys.stdin:
+            request = json.loads(line)
+            if "paths" in request:
+                emit({"results": list(pool.map(analyze, request["paths"]))})
+            else:
+                emit(analyze(request["path"]))
 
 
 if __name__ == "__main__":

@@ -61,6 +61,8 @@ pub struct MediaItem {
     #[serde(default)]
     pub face_count: Option<u32>,
     #[serde(default)]
+    pub nsfw_score: Option<f64>,
+    #[serde(default)]
     pub face_boxes: Vec<FaceBox>,
     #[serde(default)]
     pub clip_classifications: Vec<ClipClassification>,
@@ -443,6 +445,7 @@ fn process_media_item(
         metadata_loaded: !format_supports_exif(format.format),
         vic_category: None,
         face_count: None,
+        nsfw_score: None,
         face_boxes: Vec::new(),
         clip_classifications: Vec::new(),
     };

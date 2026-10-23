@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import type { ReactNode } from "react";
-import { VIC_CATEGORIES, toggleVicFilter, type ClassificationDefinition, type VicCategory, type VicFilterValue } from "../model/vicClassification";
+import { NSFW_FILTERS, VIC_CATEGORIES, toggleVicFilter, type ClassificationDefinition, type VicCategory, type VicFilterValue } from "../model/vicClassification";
 import { CustomClassificationManager, type CustomClassificationActions } from "./CustomClassificationManager";
 import clipCategories from "../model/clipClassifications.json";
 import { ChevronDown } from "lucide-react";
@@ -93,10 +93,10 @@ export function VicFilterSidebar({ filter, counts, onChange, disabled, custom, d
             <span className="font-mono text-[11px] text-muted-foreground">{(counts[257] ?? 0).toLocaleString()}</span>
           </label>
         </FilterSection>}
-        {counts.length > 258 && <FilterSection title="CLIP categories" label="CLIP category filters" selected={filter.filter(value => value > 256).length}>
+        {counts.length > 258 && <FilterSection title="CLIP categories" label="CLIP category filters" selected={filter.filter(value => value > 256 && value < 272).length}>
           <div className="flex justify-end">
             <Button size="xs" variant="ghost" type="button" aria-label="Clear CLIP filters"
-              disabled={disabled || !filter.some(value => value > 256)} onClick={() => clearGroup(value => value > 256)}>Clear</Button>
+              disabled={disabled || !filter.some(value => value > 256 && value < 272)} onClick={() => clearGroup(value => value > 256 && value < 272)}>Clear</Button>
           </div>
           <p className="mb-1 text-[11px] text-muted-foreground">Saved suggestions from OpenCLIP.</p>
           {clipCategories.map(category => (
@@ -107,6 +107,22 @@ export function VicFilterSidebar({ filter, counts, onChange, disabled, custom, d
                 onChange={() => onChange(toggleVicFilter(filter, 256 + category.id))} />
               <span className="min-w-0 flex-1 break-words leading-4">{category.label}</span>
               <span className="font-mono text-[11px] text-muted-foreground">{(counts[257 + category.id] ?? 0).toLocaleString()}</span>
+            </label>
+          ))}
+        </FilterSection>}
+        {counts.length > 273 && <FilterSection title="NSFW" label="NSFW classifier filters" selected={filter.filter(value => value >= 272 && value <= 274).length}>
+          <div className="flex justify-end">
+            <Button size="xs" variant="ghost" type="button" aria-label="Clear NSFW filters"
+              disabled={disabled || !filter.some(value => value >= 272 && value <= 274)} onClick={() => clearGroup(value => value >= 272 && value <= 274)}>Clear</Button>
+          </div>
+          <p className="mb-1 text-[11px] text-muted-foreground">Images flagged by the dedicated NSFW classifier (score ? 0.5).</p>
+          {NSFW_FILTERS.map(entry => (
+            <label key={entry.value} className="flex cursor-pointer items-start gap-2 rounded-sm px-1 py-1.5 hover:bg-accent">
+              <input type="checkbox" className="mt-0.5 shrink-0 accent-primary" aria-label={`NSFW: ${entry.label}`}
+                checked={filter.includes(entry.value)} disabled={disabled}
+                onChange={() => onChange(toggleVicFilter(filter, entry.value))} />
+              <span className="min-w-0 flex-1 leading-4">{entry.label}</span>
+              <span className="font-mono text-[11px] text-muted-foreground">{(counts[entry.value + 1] ?? 0).toLocaleString()}</span>
             </label>
           ))}
         </FilterSection>}

@@ -1,9 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { VicClassificationControls, VicFilterSidebar } from "../src/features/media/components/VicClassification";
-import { VIC_CATEGORIES, classificationTextColor, matchesVicFilter, toggleVicFilter, vicClassification } from "../src/features/media/model/vicClassification";
+import { NSFW_FILTERS, VIC_CATEGORIES, classificationTextColor, matchesVicFilter, toggleVicFilter, vicClassification } from "../src/features/media/model/vicClassification";
 
 describe("Project VIC review", () => {
+  test("NSFW filters separate the threshold, unknown results, and CLIP categories", () => {
+    expect(matchesVicFilter(0, [272], null, [], 0.5)).toBe(true);
+    expect(matchesVicFilter(null, [273], null, [], 0)).toBe(true);
+    expect(matchesVicFilter(null, [273], null, [], 0.499999)).toBe(true);
+    expect(matchesVicFilter(null, [273], null, [], null)).toBe(false);
+    for (const score of [undefined, null, NaN, -0.1, 1.1]) {
+      expect(matchesVicFilter(null, [274], null, [], score)).toBe(true);
+      expect(matchesVicFilter(null, [272], null, [], score)).toBe(false);
+    }
+    expect(matchesVicFilter(0, [0, 272], null, [], 0.1)).toBe(true);
+    const counts = Array(276).fill(0); counts[0] = 6; counts[273] = 2; counts[274] = 2; counts[275] = 2;
+    const sidebar = renderToStaticMarkup(<VicFilterSidebar filter={[272]} counts={counts} onChange={() => {}} />);
+    expect(sidebar).toContain('aria-label="NSFW classifier filters"');
+    for (const entry of NSFW_FILTERS) expect(sidebar).toContain(`NSFW: ${entry.label}`);
+    expect(sidebar).not.toContain("Below threshold");
+    expect(sidebar).not.toContain("Not analyzed");
+    expect(sidebar).toContain(">6<"); // overlapping automatic counts do not inflate All images
+    expect(sidebar).toContain('aria-label="Clear CLIP filters" disabled=""');
+    expect(sidebar).toContain('aria-label="Clear NSFW filters"');
+    expect(renderToStaticMarkup(<VicClassificationControls onClassify={() => {}} />)).not.toContain("NSFW");
+  });
   test("CLIP suggestions filter independently without changing manual assignment choices", () => {
     const labels = [{ category: 1 }, { category: 7 }];
     expect(matchesVicFilter(0, [257], null, labels)).toBe(true);

@@ -3034,6 +3034,7 @@ async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
     // Keep face counts cheap on large galleries without parsing every payload on scroll.
     sqlx::query("CREATE INDEX IF NOT EXISTS media_gallery_faces_idx ON media_gallery_items(datasource_id, media_type) WHERE json_extract(payload, '$.faceCount') > 0")
         .execute(pool).await.map_err(|error| error.to_string())?;
+    media_queries::ensure_nsfw_index(pool).await?;
     sqlx::query("CREATE TABLE IF NOT EXISTS media_clip_classifications (item_id TEXT NOT NULL REFERENCES media_gallery_items(id) ON DELETE CASCADE, category INTEGER NOT NULL CHECK(category BETWEEN 1 AND 15), score REAL NOT NULL, matched_label TEXT NOT NULL, PRIMARY KEY(item_id, category)) WITHOUT ROWID")
         .execute(pool).await.map_err(|error| error.to_string())?;
     sqlx::query("CREATE INDEX IF NOT EXISTS media_clip_category_idx ON media_clip_classifications(category, item_id)")

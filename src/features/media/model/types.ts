@@ -7,6 +7,7 @@ export type MediaGalleryResult = {
 };
 
 export type MediaItem = {
+  nsfwScore?: number | null;
   faceCount?: number | null;
   faceBoxes?: Array<{ x: number; y: number; width: number; height: number }>;
   clipClassifications?: Array<{ category: number; score: number; matchedLabel: string }>;

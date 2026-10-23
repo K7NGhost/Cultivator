@@ -1,7 +1,7 @@
 id = "image-metadata"
 name = "Image Metadata"
 author = "Cultivator Team"
-version = "1.6.0"
+version = "1.8.0"
 description = "Streaming parallel media discovery with fast header parsing and deferred EXIF details."
 type = "other"
 target = "other"
@@ -27,7 +27,14 @@ defaultValue = "false"
 [[options]]
 id = "classifyClip"
 label = "Classify images with OpenCLIP (15 categories)"
-description = "Suggest multiple content categories using local OpenCLIP. Download the selected model in Settings > Plugin models first. Saves labels and similarity scores for gallery filters without changing manual classifications. Images only."
+description = "Suggest 15 content categories using local OpenCLIP. Download the selected model in Settings > Plugin models first. NSFW classification is a separate option. Images only; manual classifications stay unchanged."
+type = "checkbox"
+defaultValue = "false"
+
+[[options]]
+id = "classifyNsfw"
+label = "Detect NSFW images (LAION / NVIDIA classifier)"
+description = "This dedicated classifier may be more accurate at detecting NSFW sexual or explicit content than a normal CLIP category run. Accuracy depends on the images; review flagged results. Runs independently of CLIP categories. Download the NSFW classifier (includes ViT-L/14) in Settings > Plugin models first. Images only."
 type = "checkbox"
 defaultValue = "false"
 

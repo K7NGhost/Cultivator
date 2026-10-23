@@ -21,9 +21,17 @@ export function classificationTextColor(color: string) {
   });
   return red * 0.2126 + green * 0.7152 + blue * 0.0722 > 0.179 ? "#000000" : "#ffffff";
 }
-export function matchesVicFilter(category: VicCategory | null | undefined, filter: VicFilterValue[], faceCount?: number | null, clipClassifications?: Array<{ category: number }>) {
+export const NSFW_FILTERS = [
+  { value: 272, label: "Flagged" },
+] as const;
+export function nsfwFilterValue(score?: number | null) {
+  return typeof score === "number" && Number.isFinite(score) && score >= 0 && score <= 1
+    ? score >= 0.5 ? 272 : 273 : 274;
+}
+export function matchesVicFilter(category: VicCategory | null | undefined, filter: VicFilterValue[], faceCount?: number | null, clipClassifications?: Array<{ category: number }>, nsfwScore?: number | null) {
   return !filter.length || filter.includes(category ?? -1) || (filter.includes(256) && (faceCount ?? 0) > 0)
-    || !!clipClassifications?.some(match => filter.includes(256 + match.category));
+    || !!clipClassifications?.some(match => filter.includes(256 + match.category))
+    || filter.includes(nsfwFilterValue(nsfwScore));
 }
 export function toggleVicFilter(filter: VicFilterValue[], category: VicFilterValue) {
   return filter.includes(category) ? filter.filter((value) => value !== category) : [...filter, category];
