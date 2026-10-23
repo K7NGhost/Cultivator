@@ -7,6 +7,9 @@ export type MediaGalleryResult = {
 };
 
 export type MediaItem = {
+  skinRatio?: number | null;
+  visualStackId?: string | null;
+  stackSize?: number;
   nsfwScore?: number | null;
   faceCount?: number | null;
   faceBoxes?: Array<{ x: number; y: number; width: number; height: number }>;

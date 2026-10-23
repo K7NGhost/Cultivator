@@ -455,6 +455,11 @@ async fn append_batch(
             clip_classifications: Vec::new(),
             face_count: None,
             nsfw_score: None,
+            skin_ratio: None,
+            perceptual_hash: None,
+            difference_hash: None,
+            visual_stack_id: None,
+            stack_size: 0,
             face_boxes: Vec::new(),
             id: format!("file-view:{media_type}:{}", entry.path),
             media_type: if media_type == "image" {

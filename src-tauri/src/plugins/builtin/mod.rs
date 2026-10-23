@@ -3,6 +3,7 @@ mod image_metadata;
 mod face_detection;
 mod clip_classification;
 mod python_worker;
+mod visual_screening;
 
 use crate::plugins::PythonPluginManifest;
 use serde_json::Value as JsonValue;
@@ -263,6 +264,7 @@ impl BuiltinPlugin for ImageMetadataPlugin {
                 gallery.scanned_files, matched_files
             ),
         );
+        visual_screening::analyze(&mut gallery, context)?;
         let faces = context.options.get("detectFaces").is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
         let clip = context.options.get("classifyClip").is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
         let nsfw = context.options.get("classifyNsfw").is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));

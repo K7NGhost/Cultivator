@@ -46,7 +46,7 @@ pub use media_classifications::{
     delete_custom_classification, list_custom_classifications, list_file_view_media_page,
     save_custom_classification, set_media_classification, CustomClassification,
 };
-pub use media_queries::{list_media_gallery_page, load_media_details, MediaGalleryPage};
+pub use media_queries::{list_media_gallery_page, load_media_details, MediaGalleryPage, MediaVisualOptions};
 
 pub use builtin::{MediaGallery, MediaItem};
 pub use bundle::{
@@ -3035,6 +3035,10 @@ async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
     sqlx::query("CREATE INDEX IF NOT EXISTS media_gallery_faces_idx ON media_gallery_items(datasource_id, media_type) WHERE json_extract(payload, '$.faceCount') > 0")
         .execute(pool).await.map_err(|error| error.to_string())?;
     media_queries::ensure_nsfw_index(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS media_gallery_skin_idx ON media_gallery_items(datasource_id, media_type, json_extract(payload, '$.skinRatio'))")
+        .execute(pool).await.map_err(|e| e.to_string())?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS media_gallery_stack_idx ON media_gallery_items(datasource_id, media_type, json_extract(payload, '$.visualStackId'), name, path)")
+        .execute(pool).await.map_err(|e| e.to_string())?;
     sqlx::query("CREATE TABLE IF NOT EXISTS media_clip_classifications (item_id TEXT NOT NULL REFERENCES media_gallery_items(id) ON DELETE CASCADE, category INTEGER NOT NULL CHECK(category BETWEEN 1 AND 15), score REAL NOT NULL, matched_label TEXT NOT NULL, PRIMARY KEY(item_id, category)) WITHOUT ROWID")
         .execute(pool).await.map_err(|error| error.to_string())?;
     sqlx::query("CREATE INDEX IF NOT EXISTS media_clip_category_idx ON media_clip_classifications(category, item_id)")

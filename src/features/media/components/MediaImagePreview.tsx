@@ -12,9 +12,10 @@ type MediaImagePreviewProps = {
   retain?: boolean;
   edge?: number;
   item: MediaItem;
+  showFaceBoxes?: boolean;
 };
 
-export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", retain = false, edge = 256, item }: MediaImagePreviewProps) {
+export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", retain = false, edge = 256, item, showFaceBoxes = true }: MediaImagePreviewProps) {
   const container = useRef<HTMLDivElement>(null);
   const image = useRef<HTMLImageElement>(null);
   const [imageSize, setImageSize] = useState<{ key: string; width: number; height: number }>();
@@ -24,11 +25,11 @@ export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", 
   const cachedSource = usePreparedThumbnail(key);
   const recordImageSize = useCallback(() => {
     const element = image.current;
-    if (!item.faceBoxes?.length || !element?.naturalWidth || !element.naturalHeight) return;
+    if (!showFaceBoxes || !item.faceBoxes?.length || !element?.naturalWidth || !element.naturalHeight) return;
     const width = element.naturalWidth, height = element.naturalHeight;
     setImageSize(previous => previous?.key === key && previous.width === width && previous.height === height
       ? previous : { key, width, height });
-  }, [key, item.faceBoxes?.length]);
+  }, [key, item.faceBoxes?.length, showFaceBoxes]);
   useEffect(recordImageSize, [recordImageSize, cachedSource]);
   useEffect(() => {
     let current = true;
@@ -76,7 +77,7 @@ export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", 
         <><img ref={image} src={cachedSource} alt={item.name} className={cn("h-full w-full", fit === "contain" ? "object-contain" : "object-cover")}
           draggable={false} loading="eager" decoding="async"
           onLoad={recordImageSize} onError={() => setFailedKey(key)} />
-          {!!item.faceBoxes?.length && imageSize?.key === key && <svg className="pointer-events-none absolute inset-0 h-full w-full"
+          {showFaceBoxes && !!item.faceBoxes?.length && imageSize?.key === key && <svg className="pointer-events-none absolute inset-0 h-full w-full"
             viewBox={`0 0 ${imageSize.width} ${imageSize.height}`} preserveAspectRatio={fit === "contain" ? "xMidYMid meet" : "xMidYMid slice"} aria-hidden="true">
             {item.faceBoxes.map((face, index) => {
               const width = face.width * imageSize.width, height = face.height * imageSize.height;

@@ -4,6 +4,19 @@ import { VicClassificationControls, VicFilterSidebar } from "../src/features/med
 import { NSFW_FILTERS, VIC_CATEGORIES, classificationTextColor, matchesVicFilter, toggleVicFilter, vicClassification } from "../src/features/media/model/vicClassification";
 
 describe("Project VIC review", () => {
+  test("skin and similar-image controls remain distinct from classifications", () => {
+    const markup = renderToStaticMarkup(<VicFilterSidebar filter={[]} counts={Array(276).fill(0)} onChange={() => {}} visual={{
+      skinMin: 0.3, collapseSimilar: true, stackId: "/stack", onSkinMinChange: () => {}, onCollapseSimilarChange: () => {}, onOpenStack: () => {}, onClearStack: () => {},
+    }} />);
+    expect(markup).toContain('aria-label="Skin-tone filters"');
+    expect(markup).toContain('aria-label="Minimum skin-tone ratio"');
+    expect(markup).toContain('value="0.3" selected=""');
+    expect(markup).toContain('50% or more');
+    expect(markup).toContain('aria-label="Similar image stacking"');
+    expect(markup).toContain('Collapse similar images');
+    expect(markup).toContain('Leave stack');
+    expect(markup).not.toContain('aria-pressed="true"');
+  });
   test("NSFW filters separate the threshold, unknown results, and CLIP categories", () => {
     expect(matchesVicFilter(0, [272], null, [], 0.5)).toBe(true);
     expect(matchesVicFilter(null, [273], null, [], 0)).toBe(true);

@@ -1,7 +1,7 @@
 id = "image-metadata"
 name = "Image Metadata"
 author = "Cultivator Team"
-version = "1.8.0"
+version = "2.0.0"
 description = "Streaming parallel media discovery with fast header parsing and deferred EXIF details."
 type = "other"
 target = "other"
@@ -15,28 +15,28 @@ id = "hashMedia"
 label = "Hash media (SHA-256, MD5, SHA-1)"
 description = "Calculate all three hashes for every image and video found."
 type = "checkbox"
-defaultValue = "false"
+defaultValue = "true"
 
 [[options]]
 id = "detectFaces"
 label = "Detect images with faces (YuNet)"
 description = "Use Python OpenCV and YuNet to classify images with faces. Download YuNet in Settings > Plugin models first. Saves face counts without changing manual classifications. Images stay local; videos are skipped."
 type = "checkbox"
-defaultValue = "false"
+defaultValue = "true"
 
 [[options]]
 id = "classifyClip"
 label = "Classify images with OpenCLIP (15 categories)"
 description = "Suggest 15 content categories using local OpenCLIP. Download the selected model in Settings > Plugin models first. NSFW classification is a separate option. Images only; manual classifications stay unchanged."
 type = "checkbox"
-defaultValue = "false"
+defaultValue = "true"
 
 [[options]]
 id = "classifyNsfw"
 label = "Detect NSFW images (LAION / NVIDIA classifier)"
 description = "This dedicated classifier may be more accurate at detecting NSFW sexual or explicit content than a normal CLIP category run. Accuracy depends on the images; review flagged results. Runs independently of CLIP categories. Download the NSFW classifier (includes ViT-L/14) in Settings > Plugin models first. Images only."
 type = "checkbox"
-defaultValue = "false"
+defaultValue = "true"
 
 [[options]]
 id = "clipModel"
@@ -52,3 +52,17 @@ description = "Higher values produce fewer suggested matches. Cosine similarity 
 type = "select"
 defaultValue = "0.22"
 choices = [{ value = "0.18", label = "0.18 - More matches" }, { value = "0.22", label = "0.22 - Default" }, { value = "0.26", label = "0.26 - Fewer matches" }]
+
+[[options]]
+id = "screenSkin"
+label = "Screen skin-tone ratio"
+description = "Estimate skin-colored image coverage using normalized color, brightness, and color-spread measurements. Enables 10%, 30%, and 50% gallery filters. This is a color-screening aid, not a content classification. Runs natively in Rust without starting Python."
+type = "checkbox"
+defaultValue = "true"
+
+[[options]]
+id = "groupSimilar"
+label = "Stack visually similar images"
+description = "Group visually similar pictures using native frequency and gradient fingerprints. Each member must match its stack representative; nearly featureless images are excluded. Enables collapsed stacks in the gallery; open a stack to review its members. Original files and manual classifications stay unchanged."
+type = "checkbox"
+defaultValue = "true"

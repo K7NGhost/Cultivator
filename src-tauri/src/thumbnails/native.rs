@@ -210,6 +210,72 @@ fn decode_native(
     budget: u64,
 ) -> Result<(Vec<u8>, Timings), NativeError> {
     let start = Instant::now();
+    let (image, orientation) = decode_pixels(source, cancelled, budget)?;
+    encode_preview(image, orientation, start, cancelled)
+}
+
+/// Reuse the native decoder and EXIF handling without JPEG encoding, IPC, or disk writes.
+pub(crate) fn analysis_pixels(
+    path: &Path,
+    runtime: Option<&Path>,
+    cancelled: &AtomicBool,
+    decode_gate: &RwLock<()>,
+    worker_budget: u64,
+    total_budget: u64,
+) -> Result<image::RgbImage, String> {
+    let (_, source) = Source::new(Path::new(""), "visual-analysis", path)?;
+    let decode = |budget| {
+        let mut result = decode_pixels(&source, cancelled, budget);
+        #[cfg(windows)]
+        if matches!(result, Err(NativeError::Unsupported)) {
+            if let Some(executable) = runtime {
+                match heif::decode(executable, &source.path, source.size, budget, cancelled) {
+                    Ok(image) => result = Ok((image, image::metadata::Orientation::NoTransforms)),
+                    Err(NativeError::Budget) => return Err(NativeError::Budget),
+                    Err(_) => {}
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = runtime;
+        let (mut image, orientation) = result?;
+        check_cancel(cancelled)?;
+        image.apply_orientation(orientation);
+        let pixels = image.resize(EDGE, EDGE, FilterType::Triangle).to_rgb8();
+        check_cancel(cancelled)?;
+        // Keep the decode gate until the full-resolution buffers are released.
+        // An oversized image owns the whole budget through resizing, too.
+        Ok(pixels)
+    };
+    let mut result = {
+        let _guard = decode_gate
+            .read()
+            .map_err(|_| "Image decoder lock unavailable")?;
+        decode(worker_budget)
+    };
+    if matches!(result, Err(NativeError::Budget)) {
+        let _guard = decode_gate
+            .write()
+            .map_err(|_| "Image decoder lock unavailable")?;
+        check_cancel(cancelled)?;
+        result = decode(total_budget);
+    }
+    let pixels = result.map_err(|e| match e {
+        NativeError::Unsupported => "No native decoder is available for this image".to_string(),
+        NativeError::Budget => "Image exceeds the visual-analysis memory budget".to_string(),
+        NativeError::Failed(message) => message,
+    })?;
+    if !source.unchanged() {
+        return Err("Image changed during visual analysis".into());
+    }
+    Ok(pixels)
+}
+
+fn decode_pixels(
+    source: &Source,
+    cancelled: &AtomicBool,
+    budget: u64,
+) -> Result<(DynamicImage, image::metadata::Orientation), NativeError> {
     // Bound compressed input too; header/metadata parsing is work before pixel allocation.
     if source.size > budget / 4 {
         return Err(NativeError::Budget);
@@ -219,17 +285,12 @@ fn decode_native(
     let n = file.read(&mut header)?;
     if n == 16 && &header[12..16] == b"CgBI" {
         let image = cgbi::decode(source, cancelled, budget)?;
-        return encode_preview(
-            image,
-            image::metadata::Orientation::NoTransforms,
-            start,
-            cancelled,
-        );
+        return Ok((image, image::metadata::Orientation::NoTransforms));
     }
     #[cfg(windows)]
     if n == 16 && &header[4..8] == b"ftyp" {
         let (image, orientation) = wic::decode(source, cancelled, budget)?;
-        return encode_preview(image, orientation, start, cancelled);
+        return Ok((image, orientation));
     }
     file.rewind()?;
     let mut reader = ImageReader::new(BufReader::new(file)).with_guessed_format()?;
@@ -266,7 +327,7 @@ fn decode_native(
     } else {
         DynamicImage::from_decoder(decoder)?
     };
-    encode_preview(image, orientation, start, cancelled)
+    Ok((image, orientation))
 }
 
 fn check_budget(

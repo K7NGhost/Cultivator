@@ -63,6 +63,16 @@ pub struct MediaItem {
     #[serde(default)]
     pub nsfw_score: Option<f64>,
     #[serde(default)]
+    pub skin_ratio: Option<f64>,
+    #[serde(default)]
+    pub perceptual_hash: Option<String>,
+    #[serde(default)]
+    pub difference_hash: Option<String>,
+    #[serde(default)]
+    pub visual_stack_id: Option<String>,
+    #[serde(default)]
+    pub stack_size: u64,
+    #[serde(default)]
     pub face_boxes: Vec<FaceBox>,
     #[serde(default)]
     pub clip_classifications: Vec<ClipClassification>,
@@ -446,6 +456,11 @@ fn process_media_item(
         vic_category: None,
         face_count: None,
         nsfw_score: None,
+        skin_ratio: None,
+        perceptual_hash: None,
+        difference_hash: None,
+        visual_stack_id: None,
+        stack_size: 0,
         face_boxes: Vec::new(),
         clip_classifications: Vec::new(),
     };

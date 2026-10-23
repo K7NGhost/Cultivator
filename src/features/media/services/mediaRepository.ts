@@ -123,13 +123,16 @@ function fileExtension(name: string) {
   return extension?.toUpperCase() ?? "Unknown";
 }
 
+export type MediaVisualOptions = { skinMin: number | null; collapseSimilar: boolean; stackId: string | null };
+
 export async function listMediaGalleryPage(
   caseDatabasePath: string, datasourceId: string,
   mediaType: "image" | "video", offset = 0, categories: VicFilterValue[] = [],
   directory: string | null = null,
+  visualOptions?: MediaVisualOptions,
 ): Promise<FileViewMediaPage> {
   return invoke<FileViewMediaPage>("list_media_gallery_page", {
-    caseDatabasePath, datasourceId, mediaType, offset, limit: 500, categories, directory,
+    caseDatabasePath, datasourceId, mediaType, offset, limit: 500, categories, directory, visualOptions,
   });
 }
 

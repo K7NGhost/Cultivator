@@ -46,6 +46,17 @@ pub fn prepare_default(root: &Path) -> Result<PythonRuntime, String> {
     prepare(root, "default", DEFAULT_PYTHON, &[])
 }
 
+pub(crate) fn existing_media(root: &Path) -> Option<PythonRuntime> {
+    let dependencies = MEDIA_DEPENDENCIES
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect::<Vec<_>>();
+    let directory = environment_path(root, "media-preview", DEFAULT_PYTHON, &dependencies);
+    environment_ready(&directory).then(|| PythonRuntime {
+        executable: python_executable(&directory),
+    })
+}
+
 pub fn prepare_media(root: &Path) -> Result<PythonRuntime, String> {
     let dependencies = MEDIA_DEPENDENCIES
         .iter()

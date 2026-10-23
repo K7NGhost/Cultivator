@@ -60,7 +60,7 @@ import type { MediaGalleryResult, MediaItem } from "../model/types";
 import { VIC_CATEGORIES, vicClassification, classificationTextColor, matchesVicFilter, type ClassificationDefinition, type VicCategory, type VicFilterValue } from "../model/vicClassification";
 import { useCustomClassifications } from "../services/useCustomClassifications";
 import type { CustomClassificationActions } from "../components/CustomClassificationManager";
-import { VicClassificationControls, VicFilterSidebar } from "../components/VicClassification";
+import { VicClassificationControls, VicFilterSidebar, type VisualGalleryControls } from "../components/VicClassification";
 import { nextReviewImage } from "../services/nextReviewImage";
 import { GALLERY_TILE_SIZES, readGalleryTileWidth, saveGalleryTileWidth } from "../model/galleryTileSize";
 import { cn } from "@/lib/utils";
@@ -73,6 +73,9 @@ import { GalleryPrefetch, galleryPrefetchRange } from "../services/galleryPrefet
 import { clearPreparedThumbnails, prepareThumbnail, useThumbnailEpoch } from "../services/preparedThumbnails";
 
 type GalleryClassification = {
+  showFaceBoxes: boolean;
+  onShowFaceBoxesChange: (value: boolean) => void;
+  visual?: VisualGalleryControls;
   custom: CustomClassificationActions;
   focusTarget?: { path: string; index: number } | null;
   filter: VicFilterValue[];
@@ -106,6 +109,7 @@ type ElementSize = {
 };
 
 type VirtualizedMediaGridData = {
+  showFaceBoxes: boolean;
   thumbnailEdge: number;
   customCategories?: ClassificationDefinition[];
   onClassify?: GalleryClassification["onClassify"];
@@ -123,6 +127,13 @@ const MEDIA_TILE_ASPECT_RATIO = 3 / 4;
 type MediaSource = "plugin" | "file-view";
 
 export function MediaPage() {
+  const [showFaceBoxes, setShowFaceBoxes] = useState(() => {
+    try { return localStorage.getItem("cultivator.media.showFaceBoxes") !== "false"; } catch { return true; }
+  });
+  const handleShowFaceBoxesChange = (visible: boolean) => {
+    setShowFaceBoxes(visible);
+    try { localStorage.setItem("cultivator.media.showFaceBoxes", String(visible)); } catch { /* Keep the session preference. */ }
+  };
   const [tileWidth, setTileWidth] = useState<number>(readGalleryTileWidth);
   const handleTileWidthChange = (width: number) => { setTileWidth(width); saveGalleryTileWidth(width); };
   const galleryActive = useGalleryActive();
@@ -152,6 +163,12 @@ export function MediaPage() {
   const directoryFilter = directorySelection?.context === classificationContext ? directorySelection.path : null;
   const [hashsetSelection, setHashsetSelection] = useState<{ context: string; filter: HashsetFilter } | null>(null);
   const hashsetFilter = hashsetSelection?.context === classificationContext ? hashsetSelection.filter : null;
+  const [skinMin, setSkinMin] = useState<number | null>(null);
+  const [collapseSimilar, setCollapseSimilar] = useState(true);
+  const [stackSelection, setStackSelection] = useState<{ context: string; id: string } | null>(null);
+  const stackId = stackSelection?.context === classificationContext ? stackSelection.id : null;
+  const visualOptions = useMemo(() => mediaSource === "plugin" && !hashsetFilter
+    ? { skinMin, collapseSimilar, stackId } : undefined, [mediaSource, !!hashsetFilter, skinMin, collapseSimilar, stackId]);
   const sidebarContext = JSON.stringify([classificationContext, hashsetFilter?.runId]);
   const emptySidebarCounts = useMemo(() => Array(mediaSource === "plugin" && !hashsetFilter ? 276 : 257).fill(0) as number[], [mediaSource, !!hashsetFilter]);
   const [sidebarCounts, setSidebarCounts] = useState<{ context: string; counts: number[] } | null>(null);
@@ -164,7 +181,7 @@ export function MediaPage() {
   classificationContextRef.current = classificationContext;
   const galleryScopeRef = useRef<string | undefined>(undefined);
   useEffect(() => { setClassificationSaving(false); }, [classificationContext]);
-  useEffect(() => { setReviewFocusTarget(null); }, [classificationContext, classificationFilter, directoryFilter, hashsetFilter?.runId]);
+  useEffect(() => { setReviewFocusTarget(null); }, [classificationContext, classificationFilter, directoryFilter, hashsetFilter?.runId, visualOptions]);
   const [isLoading, setIsLoading] = useState(false);
   const [isDataSourcesLoading, setIsDataSourcesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -272,7 +289,7 @@ export function MediaPage() {
     }
 
     let isCurrent = true;
-    const scope = JSON.stringify([classificationContext, classificationFilter, directoryFilter, hashsetFilter?.runId]);
+    const scope = JSON.stringify([classificationContext, classificationFilter, directoryFilter, hashsetFilter?.runId, visualOptions]);
     if (galleryScopeRef.current !== scope) {
       setGallery({ photos: [], videos: [] });
       setFileViewPages({ image: null, video: null });
@@ -289,7 +306,7 @@ export function MediaPage() {
     const getPage = (type: "image" | "video") => hashsetFilter
       ? listHashsetHitMediaPage(activeCase.databasePath, hashsetFilter.runId, type, 0, type === "image" ? classificationFilter : [], directoryFilter)
       : mediaSource === "plugin"
-      ? listMediaGalleryPage(activeCase.databasePath, selectedDataSourceId, type, 0, type === "image" ? classificationFilter : [], directoryFilter)
+      ? listMediaGalleryPage(activeCase.databasePath, selectedDataSourceId, type, 0, type === "image" ? classificationFilter : [], directoryFilter, visualOptions)
       : listClassifiedFileViewMediaPage(activeCase.databasePath, selectedDataSource?.paths ?? [], type, 0, type === "image" ? classificationFilter : [], directoryFilter);
     const galleryRequest = Promise.all([getPage("image"), getPage("video")])
       .then(([image, video]) => ({
@@ -353,7 +370,7 @@ export function MediaPage() {
     return () => {
       isCurrent = false;
     };
-  }, [activeCase, dataSources, mediaSource, refreshKey, selectedDataSourceId, classificationContext, classificationFilter, classificationRevision, directoryFilter, hashsetFilter, sidebarContext, emptySidebarCounts]);
+  }, [activeCase, dataSources, mediaSource, refreshKey, selectedDataSourceId, classificationContext, classificationFilter, classificationRevision, directoryFilter, hashsetFilter, sidebarContext, emptySidebarCounts, visualOptions]);
 
   useEffect(() => {
     if (!activeCase || !selectedDataSourceId || mediaSource !== "plugin" ||
@@ -361,7 +378,7 @@ export function MediaPage() {
     let current = true;
     loadMediaDetails(activeCase.databasePath, selectedDataSourceId, selectedItem.path)
       .then((item) => { if (current) setSelectedItem(previous => previous?.path === item.path
-        ? { ...item, metadata: [...item.metadata, ...previous.metadata.filter(field => field.label === "Hashset hit")] } : previous); })
+        ? { ...item, stackSize: previous.stackSize, metadata: [...item.metadata, ...previous.metadata.filter(field => field.label === "Hashset hit")] } : previous); })
       .catch((error) => { if (current) setError(getErrorMessage(error)); });
     return () => { current = false; };
   }, [activeCase, selectedDataSourceId, mediaSource, selectedItem]);
@@ -384,9 +401,9 @@ export function MediaPage() {
     return hashsetFilter
       ? listHashsetHitMediaPage(activeCase.databasePath, hashsetFilter.runId, type, offset, type === "image" ? classificationFilter : [], directoryFilter)
       : mediaSource === "plugin"
-      ? listMediaGalleryPage(activeCase.databasePath, datasource.id, type, offset, type === "image" ? classificationFilter : [], directoryFilter)
+      ? listMediaGalleryPage(activeCase.databasePath, datasource.id, type, offset, type === "image" ? classificationFilter : [], directoryFilter, visualOptions)
       : listClassifiedFileViewMediaPage(activeCase.databasePath, datasource.paths, type, offset, type === "image" ? classificationFilter : [], directoryFilter);
-  }, [activeCase, dataSources, selectedDataSourceId, mediaSource, classificationFilter, classificationRevision, directoryFilter, hashsetFilter]);
+  }, [activeCase, dataSources, selectedDataSourceId, mediaSource, classificationFilter, classificationRevision, directoryFilter, hashsetFilter, visualOptions]);
 
   async function handleClassify(item: MediaItem, category: VicCategory | null, advanceFromIndex?: number) {
     if (!activeCase || item.mediaType !== "image" || classificationSaving || isLoading || customClassifications.busy || !customClassifications.ready) return;
@@ -563,12 +580,18 @@ export function MediaPage() {
             tileWidth={tileWidth}
             onTileWidthChange={handleTileWidthChange}
             classification={{
+              showFaceBoxes, onShowFaceBoxesChange: handleShowFaceBoxesChange,
               custom: { categories: customClassifications.categories, disabled: !customClassifications.ready || customClassifications.busy,
                 onSave: customClassifications.onSave, onDelete: customClassifications.onDelete },
               focusTarget: reviewFocusTarget,
               filter: classificationFilter,
               counts: sidebarCounts?.context === sidebarContext ? sidebarCounts.counts : emptySidebarCounts,
               onFilterChange: setClassificationFilter,
+              visual: visualOptions ? {
+                ...visualOptions, onSkinMinChange: setSkinMin, onCollapseSimilarChange: setCollapseSimilar,
+                onOpenStack: id => setStackSelection({ context: classificationContext, id }),
+                onClearStack: () => setStackSelection(null),
+              } : undefined,
               onClassify: (item, category, advanceFromIndex) => { void handleClassify(item, category, advanceFromIndex); },
               saving: classificationSaving || isLoading || customClassifications.busy || !customClassifications.ready,
             }}
@@ -578,7 +601,7 @@ export function MediaPage() {
             tiles={gallery.photos}
             detailTitle="Image Details"
             emptyText={
-              hashsetFilter ? "No hashset image hits match the current filters." : directoryFilter ? "No images match the filters in this directory." : classificationFilter.length ? "No images match the selected classifications." : mediaSource === "plugin"
+              hashsetFilter ? "No hashset image hits match the current filters." : directoryFilter ? "No images match the filters in this directory." : classificationFilter.length || skinMin !== null || stackId ? "No images match the current filters." : mediaSource === "plugin"
                 ? "No byte-detected images found. Run the Image Metadata plugin from Plugins."
                 : "No files with image extensions were found in this datasource."
             }
@@ -641,7 +664,8 @@ function MediaGallery({
   return (
     <div className={cn("grid h-full min-h-0", classification || directorySearch ? "grid-cols-[12rem_minmax(0,1fr)_16rem]" : "grid-cols-[minmax(0,1fr)_16rem]")}>
       {classification && <VicFilterSidebar key={caseDatabasePath} filter={classification.filter} counts={classification.counts}
-        onChange={classification.onFilterChange} disabled={classification.custom.disabled} custom={classification.custom} directorySearch={directorySearch} />}
+        showFaceBoxes={classification.showFaceBoxes} onShowFaceBoxesChange={classification.onShowFaceBoxesChange}
+        onChange={classification.onFilterChange} disabled={classification.custom.disabled} custom={classification.custom} directorySearch={directorySearch} visual={classification.visual} />}
       {!classification && directorySearch && <aside className="flex min-h-0 flex-col overflow-auto border-r bg-muted/20" aria-label="Video filters">
         <div className="flex h-8 shrink-0 items-center border-b px-2 text-xs font-medium">Filters</div>{directorySearch}
       </aside>}
@@ -650,7 +674,7 @@ function MediaGallery({
           <Icon className="size-3.5 text-muted-foreground" aria-hidden="true" />
           <h2 className="text-xs font-medium">{title}</h2>
           <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
-            {(totalCount ?? tiles.length).toLocaleString()}
+            {(totalCount ?? tiles.length).toLocaleString()}{classification?.visual?.collapseSimilar && !classification.visual.stackId ? " groups" : ""}
           </Badge>
           <label className="ml-auto flex shrink-0 items-center gap-1 text-[11px]">
             Tile size
@@ -664,6 +688,7 @@ function MediaGallery({
         <div className="min-h-0 flex-1 overflow-hidden p-2">
           {tiles.length > 0 ? (
             <VirtualizedMediaGrid
+              showFaceBoxes={classification?.showFaceBoxes ?? true}
               customCategories={classification?.custom.categories}
               tileWidth={tileWidth}
               focusTarget={classification?.focusTarget}
@@ -691,6 +716,7 @@ function MediaGallery({
 }
 
 function VirtualizedMediaGrid({
+  showFaceBoxes,
   customCategories,
   tileWidth,
   focusTarget,
@@ -704,6 +730,7 @@ function VirtualizedMediaGrid({
   totalCount,
   fetchPage,
 }: {
+  showFaceBoxes: boolean;
   customCategories?: ClassificationDefinition[];
   tileWidth: number;
   focusTarget?: GalleryClassification["focusTarget"];
@@ -785,6 +812,7 @@ function VirtualizedMediaGrid({
     if (button) { button.focus({ preventScroll: true }); pendingFocus.current = null; }
   });
   const gridData: VirtualizedMediaGridData = {
+    showFaceBoxes,
     thumbnailEdge,
     customCategories,
     onClassify,
@@ -856,6 +884,7 @@ function MediaGridCell({
   return (
     <div style={style} className="p-1">
       <MediaTilePreview
+        showFaceBoxes={data.showFaceBoxes}
         thumbnailEdge={data.thumbnailEdge}
         customCategories={data.customCategories}
         itemIndex={itemIndex}
@@ -873,6 +902,7 @@ function MediaGridCell({
 }
 
 function MediaTilePreview({
+  showFaceBoxes,
   thumbnailEdge,
   customCategories,
   itemIndex,
@@ -885,6 +915,7 @@ function MediaTilePreview({
   onSelectItem,
   tile,
 }: {
+  showFaceBoxes: boolean;
   thumbnailEdge: number;
   customCategories?: ClassificationDefinition[];
   itemIndex: number;
@@ -920,8 +951,10 @@ function MediaTilePreview({
         }
       }}
     >
+      {mediaType === "image" && (tile.stackSize ?? 0) > 1 && <span className="pointer-events-none absolute bottom-10 left-1 z-10 rounded bg-black/80 px-1 text-[10px] text-white" title="Matching images in this visual stack">? {tile.stackSize}</span>}
       {mediaType === "image" ? (
         <MediaImagePreview
+          showFaceBoxes={showFaceBoxes}
           caseDatabasePath={caseDatabasePath}
           item={tile}
           retain
@@ -1087,12 +1120,15 @@ function MediaDetailsPanel({
       <div className="min-h-0 flex-1 overflow-auto p-2">
         {item && galleryActive && <section className="mb-2 overflow-hidden rounded-lg border-2" aria-label="Selected media preview"
           style={selectedClassification ? { borderColor: selectedClassification.color } : undefined}>
-          {item.mediaType === "image" ? <MediaImagePreview caseDatabasePath={caseDatabasePath} item={item} fit="contain" retain
+          {item.mediaType === "image" ? <MediaImagePreview caseDatabasePath={caseDatabasePath} item={item} fit="contain" retain showFaceBoxes={classification?.showFaceBoxes ?? true}
             className="aspect-[4/3] w-full bg-black" /> : <MediaVideoPreview item={item} className="aspect-[4/3] w-full bg-black" />}
           <div className="truncate bg-black px-1 py-0.5 text-[11px] text-white" title={item.name}>{item.name}</div>
           {selectedClassification && <div className="break-words px-1 py-0.5 text-center text-[11px] font-semibold"
             style={{ backgroundColor: selectedClassification.color, color: classificationTextColor(selectedClassification.color) }}>{selectedClassification.label}</div>}
         </section>}
+        {item?.visualStackId && (item.stackSize ?? 0) > 1 && classification?.visual && classification.visual.stackId !== item.visualStackId && (
+          <Button size="sm" variant="outline" onClick={() => classification.visual?.onOpenStack(item.visualStackId!)}>Open similar stack ({item.stackSize})</Button>
+        )}
         {classification && <VicClassificationControls category={item?.vicCategory} customCategories={classification.custom.categories}
           disabled={!item || classification.saving}
           onClassify={(category) => { if (item) classification.onClassify(item, category); }} />}
