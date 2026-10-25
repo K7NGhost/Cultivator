@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::{fs, io::Read, path::Path};
+use std::path::Path;
 
 pub mod hex;
 pub mod image;
@@ -49,14 +49,5 @@ pub async fn file_format_preview(path: String) -> Result<Option<FileFormatPrevie
 }
 
 pub(crate) fn read_file_prefix(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String> {
-    let mut file = fs::File::open(path)
-        .map_err(|error| format!("Failed to open file '{}': {error}", path.display()))?;
-    let mut bytes = Vec::with_capacity(max_bytes);
-
-    Read::by_ref(&mut file)
-        .take(max_bytes as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("Failed to read file preview '{}': {error}", path.display()))?;
-
-    Ok(bytes)
+    crate::evidence::read_prefix(path, max_bytes)
 }

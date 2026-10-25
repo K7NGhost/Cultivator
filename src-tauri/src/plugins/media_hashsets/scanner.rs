@@ -68,14 +68,11 @@ fn hash_file(
     algorithms: &[String],
     cancelled: &AtomicBool,
 ) -> Result<Vec<FileDigest>, String> {
-    let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
-    let before = file.metadata().map_err(|e| e.to_string())?;
-    if !before.is_file() {
-        return Err("Media source is not a regular file.".into());
-    }
+    let mut file = crate::evidence::EvidenceReader::open(path)?;
+    let before = crate::build_directory_entry(path)?;
     let digests = hash_reader(&mut file, algorithms, cancelled)?;
-    let after = fs::metadata(path).map_err(|e| e.to_string())?;
-    if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+    let after = crate::build_directory_entry(path)?;
+    if before.size != after.size || before.modified_ms != after.modified_ms {
         return Err("Media source changed while hashing; run the scan again.".into());
     }
     Ok(digests)
@@ -235,31 +232,15 @@ pub(super) async fn scan(
             if cancelled.load(Ordering::Acquire) {
                 break;
             }
-            let walker = ignore::WalkBuilder::new(root)
-                .hidden(false)
-                .ignore(false)
-                .git_ignore(false)
-                .git_exclude(false)
-                .git_global(false)
-                .follow_links(false)
-                .build();
-            for entry in walker {
-                if cancelled.load(Ordering::Acquire) {
-                    break;
-                }
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(error) => {
-                        scan.failed += 1;
-                        scan.error = Some(error.to_string());
-                        continue;
-                    }
-                };
-                if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-                    continue;
-                }
-                let extension = entry
-                    .path()
+            let mut files = Vec::new();
+            crate::evidence::visit_files(root, |path| {
+                if cancelled.load(Ordering::Relaxed) { return Err("Scan cancelled".into()); }
+                files.push(path.to_path_buf()); Ok(())
+            })?;
+            for path in files {
+                if cancelled.load(Ordering::Acquire) { break; }
+                let extension = path
+                    .as_path()
                     .extension()
                     .and_then(|s| s.to_str())
                     .unwrap_or("")
@@ -271,7 +252,7 @@ pub(super) async fn scan(
                 } else {
                     continue;
                 };
-                let entry = match crate::build_directory_entry(entry.path()) {
+                let entry = match crate::build_directory_entry(path.as_path()) {
                     Ok(entry) => entry,
                     Err(error) => {
                         scan.failed += 1;

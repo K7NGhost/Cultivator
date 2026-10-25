@@ -1,4 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { CheckCircle2, Files, FolderOpen, Play, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -71,6 +73,11 @@ const dataSourceTypes: Array<{
     type: "logicalFiles",
     label: "Logical files",
     description: "Add selected folders and files from an extracted source.",
+  },
+  {
+    type: "diskImage",
+    label: "Disk image / logical acquisition",
+    description: "Index supported evidence images; extract files as plugins and viewers need them.",
   },
 ];
 
@@ -187,6 +194,17 @@ export function DataSourceWizardDialog({
   const [name, setName] = useState("");
   const [type, setType] = useState<DataSourceType>("logicalFiles");
   const [paths, setPaths] = useState<string[]>([]);
+  const [partition, setPartition] = useState("");
+  const [imageInfo, setImageInfo] = useState("");
+  const [importId, setImportId] = useState("");
+  const [importProgress, setImportProgress] = useState("Opening evidence…");
+  useEffect(() => {
+    if (!importId) return;
+    const subscription = listen<{ datasourceId: string; files: number; bytes: number; message: string }>("evidence-import-progress", ({ payload }) => {
+      if (payload.datasourceId === importId) setImportProgress(`${payload.files.toLocaleString()} files · ${(payload.bytes / 1048576).toFixed(1)} MB · ${payload.message}`);
+    });
+    return () => { void subscription.then((unlisten) => unlisten()); };
+  }, [importId]);
   const [pluginFilter, setPluginFilter] = useState("");
   const [pluginTargetFilter, setPluginTargetFilter] = useState<
     DataSourcePluginTarget | "all"
@@ -249,6 +267,10 @@ export function DataSourceWizardDialog({
     setName("");
     setType("logicalFiles");
     setPaths([]);
+    setPartition("");
+    setImageInfo("");
+    setImportId("");
+    setImportProgress("Opening evidence…");
     setPluginFilter("");
     setPluginTargetFilter("all");
     setActivePluginId("");
@@ -258,6 +280,7 @@ export function DataSourceWizardDialog({
   }
 
   function updateType(nextType: DataSourceType) {
+    if (nextType !== type) { setPaths([]); setPartition(""); }
     setType(nextType);
     setSelectedPluginIds([]);
   }
@@ -329,7 +352,14 @@ export function DataSourceWizardDialog({
       title: "Choose files",
     });
 
-    addSelectedPaths(normalizeSelectedPaths(selectedPaths));
+    const selected = normalizeSelectedPaths(selectedPaths);
+    addSelectedPaths(selected);
+    if (type === "diskImage" && selected.length === 1) {
+      try {
+        const table = await invoke<{ partitions: Array<{ index: number; name: string; is_container: boolean; sectors: number }> } | null>("inspect_evidence_image", { path: selected[0] });
+        setImageInfo(table ? `Partitions: ${table.partitions.filter((p) => !p.is_container).map((p) => `${p.index}${p.name ? ` (${p.name})` : ""}`).join(", ")}` : "Whole-volume image or logical acquisition; leave partition blank.");
+      } catch (error) { setImageInfo(String(error)); }
+    }
   }
 
   async function selectFolders() {
@@ -383,6 +413,9 @@ export function DataSourceWizardDialog({
     try {
       const createdDatasource = await createDataSource({
         caseDatabasePath: activeCase.databasePath,
+        caseFolderPath: activeCase.folderPath,
+        partition: type === "diskImage" && partition.trim() ? Number(partition) : undefined,
+        onImportStarted: setImportId,
         caseId: activeCase.id,
         name,
         type,
@@ -421,6 +454,7 @@ export function DataSourceWizardDialog({
     <Dialog
       open={isOpen}
       onOpenChange={(nextOpen) => {
+        if (isSaving) return;
         onOpenChange(nextOpen);
 
         if (!nextOpen) {
@@ -557,13 +591,14 @@ export function DataSourceWizardDialog({
                       }}
                     >
                       <Files className="size-3.5" aria-hidden="true" />
-                      Add files
+                      {type === "diskImage" ? "Add images (first segment)" : "Add files"}
                     </Button>
                     <Button
                       type="button"
                       variant="outline"
                       size="xs"
                       className="h-8 rounded-sm px-2 text-xs"
+                      disabled={type === "diskImage"}
                       onClick={() => {
                         void selectFolders();
                       }}
@@ -572,6 +607,15 @@ export function DataSourceWizardDialog({
                       Add folders
                     </Button>
                   </div>
+                  {type === "diskImage" && (
+                    <div className="space-y-2 text-xs">
+                      <label htmlFor="evidence-partition">Partition number (blank for all partitions or a whole-volume image)</label>
+                      <Input id="evidence-partition" type="number" min="1" step="1" value={partition}
+                        onChange={(event) => setPartition(event.target.value)} />
+                      <p>Import indexes the filesystem. Plugins and viewers create shared working copies only for files they need. Original evidence remains unchanged.</p>
+                      {imageInfo && <p role="status">{imageInfo}</p>}
+                    </div>
+                  )}
                   <div className="h-48 overflow-auto rounded-sm border">
                     {paths.length > 0 ? (
                       <div className="divide-y">
@@ -774,6 +818,11 @@ export function DataSourceWizardDialog({
         </Stepper>
 
         <DialogFooter className="border-t p-2">
+          {isSaving && <div className="mr-auto max-w-md truncate text-xs" role="status">{importProgress}</div>}
+          {isSaving && importId && <Button type="button" variant="outline" size="xs" onClick={() => {
+            void invoke("cancel_evidence_import", { datasourceId: importId });
+            setImportProgress("Cancelling import…");
+          }}>Cancel import</Button>}
           <Button
             type="button"
             variant="outline"

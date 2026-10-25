@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   FixedSizeGrid,
@@ -13,6 +13,7 @@ import {
   Film,
   FolderSearch,
   Images,
+  Layers,
   RefreshCw,
   Video,
 } from "lucide-react";
@@ -951,7 +952,12 @@ function MediaTilePreview({
         }
       }}
     >
-      {mediaType === "image" && (tile.stackSize ?? 0) > 1 && <span className="pointer-events-none absolute bottom-10 left-1 z-10 rounded bg-black/80 px-1 text-[10px] text-white" title="Matching images in this visual stack">? {tile.stackSize}</span>}
+      {mediaType === "image" && (tile.stackSize ?? 0) > 1 && <span
+        className="pointer-events-none absolute bottom-10 left-1 z-10 inline-flex items-center gap-1 rounded border border-white/20 bg-black/80 px-1.5 py-0.5 text-[10px] font-medium text-white shadow-sm"
+        title={`${tile.stackSize} similar images in this stack`} aria-label={`${tile.stackSize} similar images in this stack`}>
+        <Layers className="size-3 shrink-0" aria-hidden="true" />
+        <span className="tabular-nums">{tile.stackSize}</span>
+      </span>}
       {mediaType === "image" ? (
         <MediaImagePreview
           showFaceBoxes={showFaceBoxes}
@@ -1005,7 +1011,8 @@ function MediaTilePreview({
 
 async function revealMediaItemPath(item: MediaItem) {
   try {
-    await revealItemInDir(item.mediaPath || item.path);
+    const path = await invoke<string>("ensure_evidence_file", { path: item.mediaPath || item.path });
+    await revealItemInDir(path);
   } catch (error) {
     console.error(`Failed to reveal ${item.path}`, error);
   }
@@ -1018,7 +1025,15 @@ function VideoPlayerSheet({
   item: MediaItem | null;
   onOpenChange: (item: MediaItem | null) => void;
 }) {
-  const source = item ? convertFileSrc(item.mediaPath) : "";
+  const [prepared, setPrepared] = useState<{ path: string; source: string } | null>(null);
+  useEffect(() => {
+    let active = true;
+    if (item) void invoke<string>("ensure_evidence_file", { path: item.mediaPath }).then((path) => {
+      if (active) setPrepared({ path: item.mediaPath, source: convertFileSrc(path) });
+    }).catch(console.error);
+    return () => { active = false; };
+  }, [item?.mediaPath]);
+  const source = item && prepared?.path === item.mediaPath ? prepared.source : "";
 
   return (
     <Sheet

@@ -80,30 +80,14 @@ fn scan_directories(roots: Vec<String>) -> Result<Vec<MediaDirectory>, String> {
             .iter()
             .any(|other| other != *root && root.starts_with(other))
     }) {
-        let walker = ignore::WalkBuilder::new(root)
-            .hidden(false)
-            .ignore(false)
-            .git_ignore(false)
-            .git_global(false)
-            .git_exclude(false)
-            .follow_links(false)
-            .build();
-        for entry in walker {
-            let entry = entry.map_err(|e| e.to_string())?;
-            if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-                continue;
-            }
-            let extension = entry
-                .path()
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
+        crate::evidence::visit_files(root, |path| {
+            let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
             let image = crate::IMAGE_EXTENSIONS.contains(&extension.as_str());
             if image || crate::VIDEO_EXTENSIONS.contains(&extension.as_str()) {
-                add_file(&mut directories, &entry.path().to_string_lossy(), image);
+                add_file(&mut directories, &path.to_string_lossy(), image);
             }
-        }
+            Ok(())
+        })?;
     }
     Ok(directories.into_values().collect())
 }

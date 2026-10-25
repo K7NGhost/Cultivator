@@ -22,6 +22,8 @@ type DataSourceRow = {
   type: DataSourceType;
   path: string;
   created_at: string;
+  original_paths: string | null;
+  manifest_path: string | null;
 };
 
 type DataSourcePathRow = {
@@ -45,6 +47,11 @@ function createId(prefix: string) {
 async function ensureDataSourceTables(databasePath: string) {
   await withCaseDatabaseWriteLock(databasePath, async () => {
     const database = await getCaseDatabase(databasePath);
+
+    await database.execute(`CREATE TABLE IF NOT EXISTS evidence_sources (
+      data_source_id TEXT PRIMARY KEY, original_paths TEXT NOT NULL, manifest_path TEXT NOT NULL,
+      FOREIGN KEY (data_source_id) REFERENCES data_sources(id) ON DELETE CASCADE
+    )`);
 
     await database.execute(`
       CREATE TABLE IF NOT EXISTS data_sources (
@@ -100,89 +107,42 @@ export async function createDataSource(
     throw new Error("Select at least one datasource path.");
   }
 
+  if (input.partition !== undefined && (!Number.isSafeInteger(input.partition) || input.partition < 1)) {
+    throw new Error("Partition number must be a positive integer.");
+  }
+  await ensureDataSourceTables(input.caseDatabasePath);
+  const datasourceId = createId("datasource");
+  input.onImportStarted?.(datasourceId);
+  const imported = await invoke<{ paths: string[]; originalPaths: string[]; manifestPath: string }>("import_evidence", {
+    request: { caseFolderPath: input.caseFolderPath, datasourceId, sourceType: input.type,
+      paths: normalizedPaths, partition: input.partition ?? null },
+  });
+
   const now = new Date().toISOString();
   const nextDataSource: DataSourceRecord = {
-    id: createId("datasource"),
+    id: datasourceId,
     caseId: input.caseId,
     name,
     type: input.type,
-    path: normalizedPaths[0],
-    paths: normalizedPaths,
+    path: normalizePath(imported.paths[0]),
+    paths: imported.paths.map(normalizePath),
+    originalPaths: imported.originalPaths,
+    manifestPath: imported.manifestPath,
     pluginIds: input.plugins.map((plugin) => plugin.id),
     createdAt: now,
   };
 
-  await ensureDataSourceTables(input.caseDatabasePath);
-
-  await withCaseDatabaseWriteLock(input.caseDatabasePath, async () => {
-    const database = await getCaseDatabase(input.caseDatabasePath);
-
-    await database.execute(
-      `
-        INSERT INTO data_sources (
-          id,
-          case_id,
-          name,
-          type,
-          path,
-          created_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6)
-      `,
-      [
-        nextDataSource.id,
-        nextDataSource.caseId,
-        nextDataSource.name,
-        nextDataSource.type,
-        nextDataSource.path,
-        nextDataSource.createdAt,
-      ],
-    );
-
-    for (const [index, path] of nextDataSource.paths.entries()) {
-      await database.execute(
-        `
-          INSERT INTO data_source_paths (
-            id,
-            data_source_id,
-            path,
-            sort_order,
-            created_at
-          )
-          VALUES ($1, $2, $3, $4, $5)
-        `,
-        [
-          createId("datasource-path"),
-          nextDataSource.id,
-          path,
-          index,
-          now,
-        ],
-      );
-    }
-
-    for (const plugin of input.plugins) {
-      await database.execute(
-        `
-          INSERT INTO data_source_plugins (
-            id,
-            data_source_id,
-            plugin_id,
-            plugin_name,
-            created_at
-          )
-          VALUES ($1, $2, $3, $4, $5)
-        `,
-        [
-          createId("datasource-plugin"),
-          nextDataSource.id,
-          plugin.id,
-          plugin.name,
-          now,
-        ],
-      );
-    }
-  });
+  try {
+    await withCaseDatabaseWriteLock(input.caseDatabasePath, async () => {
+      await invoke("commit_evidence_import", {
+        caseDatabasePath: input.caseDatabasePath,
+        record: { ...nextDataSource, plugins: input.plugins.map((plugin) => ({ id: plugin.id, name: plugin.name })) },
+      });
+    });
+  } catch (error) {
+    await invoke("discard_evidence_import", { caseFolderPath: input.caseFolderPath, datasourceId });
+    throw error;
+  }
 
   notifyDataSourcesChanged(input.caseId);
 
@@ -260,15 +220,12 @@ async function listDataSourcesUncached(
   const rows = await database.select<DataSourceRow[]>(
     `
       SELECT
-        id,
-        case_id,
-        name,
-        type,
-        path,
-        created_at
-      FROM data_sources
-      WHERE case_id = $1
-      ORDER BY created_at DESC
+        d.id, d.case_id, d.name, d.type, d.path, d.created_at,
+        e.original_paths, e.manifest_path
+      FROM data_sources d
+      LEFT JOIN evidence_sources e ON e.data_source_id = d.id
+      WHERE d.case_id = $1
+      ORDER BY d.created_at DESC
     `,
     [caseId],
   );
@@ -327,6 +284,8 @@ async function listDataSourcesUncached(
       type: row.type,
       path: row.path,
       paths,
+      originalPaths: row.original_paths ? JSON.parse(row.original_paths) as string[] : paths,
+      manifestPath: row.manifest_path ?? undefined,
       pluginIds: pluginIdsByDataSourceId.get(row.id) ?? [],
       createdAt: row.created_at,
     };

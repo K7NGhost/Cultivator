@@ -223,6 +223,9 @@ pub(crate) fn analysis_pixels(
     worker_budget: u64,
     total_budget: u64,
 ) -> Result<image::RgbImage, String> {
+    let local = crate::evidence::ensure_local(path, cancelled)?;
+    let path = local.as_path();
+
     let (_, source) = Source::new(Path::new(""), "visual-analysis", path)?;
     let decode = |budget| {
         let mut result = decode_pixels(&source, cancelled, budget);

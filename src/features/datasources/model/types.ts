@@ -1,4 +1,4 @@
-export type DataSourceType = "logicalFiles";
+export type DataSourceType = "logicalFiles" | "diskImage";
 
 export type DataSourcePluginTarget =
   | "android"
@@ -44,12 +44,17 @@ export type DataSourceRecord = {
   type: DataSourceType;
   path: string;
   paths: string[];
+  originalPaths?: string[];
+  manifestPath?: string;
   pluginIds: string[];
   createdAt: string;
 };
 
 export type CreateDataSourceInput = {
   caseDatabasePath: string;
+  caseFolderPath: string;
+  partition?: number;
+  onImportStarted?: (datasourceId: string) => void;
   caseId: string;
   name: string;
   type: DataSourceType;

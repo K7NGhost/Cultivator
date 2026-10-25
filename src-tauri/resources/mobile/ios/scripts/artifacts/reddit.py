@@ -1,0 +1,913 @@
+__artifacts_v2__ = {
+    "reddit_chat_users": {
+        "name": "Reddit Chat Users",
+        "description": "Chat participants cached in RoomsUsersService.db: display name, "
+                       "Matrix user id and the store's own access and update dates.",
+        "author": "@AlexisBrignoni, Claude",
+        "creation_date": "2026-08-16",
+        "last_update_date": "2026-08-16",
+        "requirements": "none",
+        "category": "Reddit",
+        "notes": (
+            "The store is a Core Data key-value cache under "
+            "Library/Caches/MatrixChat/roomsAccount/<account>/MatrixUsers-*/. Each row is "
+            "keyed by the Matrix user id (@t2_<reddit id>:reddit.com) and its value is "
+            "JSON preceded by a single 0x01 byte, which is stripped before parsing. The "
+            "display name, user id and updated date are read from the value's exists._0 "
+            "object.\n"
+            "Is Current App User is the value's own is_current flag; on the tested image "
+            "exactly one of the four rows carried it. Updated Date is Unix milliseconds "
+            "from the value, while Access Date and Store Update Date are the row's Core Data Apple "
+            "absolute timestamps, shown in UTC.\n"
+            "The reference documents this store at a redditAccount/RedditUsers-* path "
+            "holding user identity JSON. On the tested image that path holds a different "
+            "database (see Reddit Users) and this content sits under "
+            "roomsAccount/MatrixUsers-*, so both locations are matched.\n"
+            "Reference: Arun Kalackattu Hari, 'Forensic Analysis of Reddit App: iOS and "
+            "Android', dfdive.com, 06 April 2026, https://dfdive.com/articles/"
+            " (an index page that carried the article text when read on 2026-10-03)"
+        ),
+        "paths": (
+            '*/Library/Caches/MatrixChat/roomsAccount/*/MatrixUsers-*/RoomsUsersService.db*',
+            '*/Library/Caches/MatrixChat/redditAccount/*/RedditUsers-*/RoomsusersService.db*',
+        ),
+        "output_types": "standard",
+        "artifact_icon": "users",
+        "sample_data": {
+            "iphone11_ios17": "iOS 17.3 | 4 rows (1 flagged as the current app user)",
+            "otto_ios17": "iOS 17.5.1 | 0 rows (store present, no entries)",
+            "hickman_ios15": "iOS 15.3.1 | no RoomsUsersService.db found",
+            "hickman_ios14": "iOS 14.3 | no RoomsUsersService.db found",
+            "hickman_ios13": "iOS 13.3.1 | no RoomsUsersService.db found",
+            "ctf2020_ios12": "iOS 12.4 | no RoomsUsersService.db found",
+        },
+    },
+    "reddit_users": {
+        "name": "Reddit Users",
+        "description": "Reddit accounts cached in RedditUsersStore.db: display name, "
+                       "account id, karma totals and profile creation date as stored.",
+        "author": "@AlexisBrignoni, Claude",
+        "creation_date": "2026-08-16",
+        "last_update_date": "2026-08-16",
+        "requirements": "none",
+        "category": "Reddit",
+        "notes": (
+            "A Core Data key-value cache under "
+            "Library/Caches/MatrixChat/redditAccount/<account>/RedditUsers-*/, keyed by "
+            "the Reddit account id (t2_<id>). The value is JSON preceded by a single "
+            "0x01 byte, which is stripped before parsing.\n"
+            "Karma is reported in total and by source as the app cached it. Profile "
+            "Created is the value's profile.createdAt. The verified, NSFW, blocked and "
+            "accepting-chats flags are reported as stored; a cached row records what the "
+            "app knew about the account, not a current state.\n"
+            "Access Date and Store Update Date are the row's Core Data Apple absolute timestamps, "
+            "shown in UTC.\n"
+            "Reference for the neighbouring RoomsusersService.db only: Arun Kalackattu Hari, "
+            "'Forensic Analysis of Reddit App: iOS and Android', dfdive.com, 06 April 2026, "
+            "https://dfdive.com/articles/ (an index page that carried the article text when read on "
+            "2026-10-03). That article does not describe RedditUsersStore.db, and no source for its "
+            "fields is cited here."
+        ),
+        "paths": ('*/Library/Caches/MatrixChat/redditAccount/*/RedditUsers-*/RedditUsersStore.db*',),
+        "output_types": "standard",
+        "artifact_icon": "user",
+        "sample_data": {
+            "iphone11_ios17": "iOS 17.3 | 4 rows",
+            "otto_ios17": "iOS 17.5.1 | 1 row",
+            "hickman_ios15": "iOS 15.3.1 | no RedditUsersStore.db found",
+            "hickman_ios14": "iOS 14.3 | no RedditUsersStore.db found",
+            "hickman_ios13": "iOS 13.3.1 | no RedditUsersStore.db found",
+            "ctf2020_ios12": "iOS 12.4 | no RedditUsersStore.db found",
+        },
+    },
+    "reddit_subreddit_subscriptions": {
+        "name": "Reddit Subreddit Subscriptions",
+        "description": "Communities from the SubredditSubscriptions archive: name, title, "
+                       "subscriber count, creation date and the app's subscribed, "
+                       "favourite and muted flags as stored.",
+        "author": "@AlexisBrignoni, Claude",
+        "creation_date": "2026-08-16",
+        "last_update_date": "2026-08-16",
+        "requirements": "none",
+        "category": "Reddit",
+        "notes": (
+            "Documents/release02/accountData/<reddit id>/SubredditSubscriptions is an "
+            "NSKeyedArchiver property list holding one entry per community, deserialised "
+            "before reading. The account folder name is reported as the Account column; a folder "
+            "named 'anonymous' is "
+            "reported under that name.\nCommunity ID is the t5_ identifier the reference "
+            "documents as the value that links a community across the app's other stores. "
+            "Subscribed, Favourite, Muted and NSFW come from the entry's own boolean fields. "
+            "Subreddit Type is reported as stored because no source for the integer was "
+            "verified.\nSubscriber and active counts are reported as stored in the archive, not "
+            "measurements made here.\n"
+            "Reference: Arun Kalackattu Hari, 'Forensic Analysis of Reddit App: iOS and "
+            "Android', dfdive.com, 06 April 2026, https://dfdive.com/articles/"
+            " (an index page that carried the article text when read on 2026-10-03)"
+        ),
+        "paths": ('*/Documents/release02/accountData/*/SubredditSubscriptions',),
+        "output_types": "standard",
+        "artifact_icon": "users-group",
+        "sample_data": {
+            "ctf2020_ios12": "iOS 12.4 | 151 rows",
+            "otto_ios17": "iOS 17.5.1 | 16 rows",
+            "iphone11_ios17": "iOS 17.3 | 12 rows",
+            "hickman_ios15": "iOS 15.3.1 | 12 rows",
+            "hickman_ios14": "iOS 14.3 | 12 rows",
+            "hickman_ios13": "iOS 13.3.1 | 12 rows",
+            "hexordia_ios1651": "iOS 16.5.1 | 8 rows",
+            "jess_ios15": "iOS 15.0.2 | 5 rows",
+        },
+    },
+    "reddit_chats": {
+        "name": "Reddit Chats",
+        "description": "Chat messages, reactions and redaction events from the Reddit app's Matrix rooms cache (Account.db)",
+        "author": "@stark4n6",
+        "creation_date": "2026-04-28",
+        "last_update_date": "2026-10-09",
+        "requirements": "none",
+        "category": "Reddit",
+        "notes": (
+            "An m.room.message event whose content carries no msgtype is labelled No msgtype "
+            "stored in Message Type. The Matrix redaction algorithm strips the content keys of a "
+            "redacted m.room.message event, so a redacted message has this shape, but the label "
+            "does not state that the message was deleted. Whether anything else "
+            "leaves a message event without a msgtype in this store, and which room version "
+            "Reddit's rooms use, is not established here; the Event Type column shows the "
+            "redaction events the store holds. Direction compares the sender id with the account "
+            "id in the .m.rule.invite_for_me push rule and is blank when that rule is absent. "
+            "Recipient(s) lists the display names of the room's other joined members, not a "
+            "recorded recipient list. Server Timestamp is ZORIGINSERVERDATE read as seconds since "
+            "2001-01-01. Reference: Matrix Specification v1.11, 'Room Version 11 - Redactions', "
+            "https://spec.matrix.org/v1.11/rooms/v11/#redactions"
+        ),
+        "paths": (
+            '*/Library/Caches/MatrixChat/roomsAccount/*/Account-*/Account.db*',
+            '*/Library/Caches/MatrixChat/roomsAccount/*/Downloads-*/ContentService.db*',
+            '*/Library/Caches/MatrixChat/roomsAccount/*/Downloads-*/Files/*'
+        ),
+        "output_types": "standard",
+        "artifact_icon": "message-circle",
+        "sample_data": {
+            "iphone11_ios17": "iOS 17.3 | Reddit 2023.50.1 | 44 rows",
+            "otto_ios17": "iOS 17.5.1 | Reddit 2024.33.0 | 0 rows",
+        },
+        "data_views": {
+            "conversation": {
+                "conversationDiscriminatorColumn": "Room ID",
+                "textColumn": "Message",
+                "directionColumn": "Direction",
+                "directionSentValue": "Outgoing",
+                "timeColumn": "Server Timestamp",
+                "senderColumn": "Sender Display Name",
+                "mediaColumn": "Attachment"
+            }
+        },
+    },
+    "reddit_chat_messages": {
+        "name": "Reddit Chat Messages",
+        "description": "Chat messages held in the app's own chat database, with the "
+                       "account that sent each one.",
+        "author": "@AlexisBrignoni, Claude",
+        "creation_date": "2026-09-06",
+        "last_update_date": "2026-09-06",
+        "requirements": "none",
+        "category": "Reddit",
+        "notes": "One row per row of ChatMessage, whatever its channel, in "
+                 "Documents/release02/accountData/<account "
+                 "id>/chat/<version>/chat.sqlite, which is the app's own chat store. It is a "
+                 "different store from the one the Reddit Chats artifact reports, which reads the "
+                 "newer Matrix rooms cache, so a device can carry either, both or neither. "
+                 "Timestamp is Unix milliseconds, reported in UTC, and read that way the values "
+                 "fall in 2021 and 2022 on the one tested image that holds messages. Direction is "
+                 "recorded rather than inferred: the channel row names the account's own "
+                 "identifier, and a message whose sender identifier equals it is outgoing. That "
+                 "identifier also matches the accountData folder the file sits in, which is a "
+                 "second source for the same value. Sender Username is joined from the Contact "
+                 "table in the same store "
+                 "and resolved on all 26 rows. Image URL and GIF URL are the two columns the "
+                 "store keeps for a picture or animation message; both were empty on every row of "
+                 "every tested image, so no message here carried either and nothing was attached. "
+                 "Message Type and State held 0 on every row, which is too few values to say what "
+                 "either distinguishes, and both are reported as stored. The store's "
+                 "SubredditChannel table is read by nothing here: on the image that has rows it "
+                 "holds 36 subreddit chat channels, and joined, invited, moderator and popular "
+                 "are 0 on every one of them with a created time of 0.",
+        "paths": ('*/Documents/release02/accountData/*/chat/*/chat.sqlite*',),
+        "output_types": "standard",
+        "artifact_icon": "message-square",
+        "sample_data": {
+                           "ctf2020_ios12": "iOS 12.4 | Reddit | 0 rows",
+                           "hickman_ios15": "iOS 15.3.1 | Reddit | 26 rows",
+                           "jess_ios15": "iOS 15.0.2 | Reddit | 0 rows",
+                       },
+        "data_views": {
+            "conversation": {
+                "conversationDiscriminatorColumn": "Channel URL",
+                "textColumn": "Message",
+                "directionColumn": "Direction",
+                "directionSentValue": "Outgoing",
+                "timeColumn": "Timestamp",
+                "senderColumn": "Sender Username",
+            }
+        },
+    },
+    "reddit_chat_contacts": {
+        "name": "Reddit Chat Contacts",
+        "description": "Accounts the app's own chat database holds a contact record for, with "
+                       "the karma and profile flags stored against each.",
+        "author": "@AlexisBrignoni, Claude",
+        "creation_date": "2026-09-06",
+        "last_update_date": "2026-09-06",
+        "requirements": "none",
+        "category": "Reddit",
+        "notes": "One row per row of Contact in the app's own chat store, "
+                 "Documents/release02/accountData/<account id>/chat/<version>/chat.sqlite. A row "
+                 "records an account the chat store holds a contact record for. On the one tested "
+                 "image that has rows there are two. Which account each row describes is not "
+                 "established here; User ID can be compared with the Account ID column and with "
+                 "Sender ID in Reddit Chat Messages. Created is Unix seconds, "
+                 "reported in UTC, and read that way the two rows fall in 2020 and 2021. Link "
+                 "Karma and Comment Karma held 0 on both rows and are reported as stored, so "
+                 "neither carries a usable figure here. Blocked and Profile NSFW read NO on both "
+                 "rows. Username and Real Name held the same value on both rows, so the display "
+                 "name the store keeps matched the account name on this device, which two rows "
+                 "cannot show to be the general case. Profile Thumbnail URL is a remote address, "
+                 "reported as stored; the picture "
+                 "itself is not in this store, so nothing is attached.",
+        "paths": ('*/Documents/release02/accountData/*/chat/*/chat.sqlite*',),
+        "output_types": "standard",
+        "artifact_icon": "users",
+        "sample_data": {
+                           "ctf2020_ios12": "iOS 12.4 | Reddit | 0 rows",
+                           "hickman_ios15": "iOS 15.3.1 | Reddit | 2 rows",
+                           "jess_ios15": "iOS 15.0.2 | Reddit | 0 rows",
+                       },
+    },
+    "reddit_post_history": {
+        "name": "Reddit Post History",
+        "description": "Post IDs from the PostHistory archive, in stored list order, with the "
+                       "kGlanceInfoKey value where the archive holds an info entry for the ID.",
+        "author": "@AlexisBrignoni, Claude",
+        "creation_date": "2026-10-22",
+        "last_update_date": "2026-10-22",
+        "requirements": "none",
+        "category": "Reddit",
+        "notes": (
+            "Documents/release02/accountData/<account>/PostHistory is an NSKeyedArchiver "
+            "property list, deserialised before reading. Its kPostIDDictionaryKey value is an "
+            "ordered list of post IDs and its kInfoDictionaryKey value maps a post ID to a "
+            "dictionary. List Position is the zero-based position in that list. On the tested "
+            "images the archive held no time for an entry, so the order is reported as stored "
+            "and is not a timeline.\n"
+            "Post ID is reported as stored. The t3_ prefix is Reddit's type prefix for a "
+            "submission (a post): PRAW glossary, https://github.com/praw-dev/praw/blob/"
+            "99e8a56de739dad51d0584c01d2dd2714c576d4b/docs/package_info/glossary.rst#L20. On "
+            "the tested images the archive held the IDs and the kGlanceInfoKey entries only; "
+            "no titles, authors or text.\n"
+            "kGlanceInfoKey was the only key in an info entry on the tested images and held "
+            "True wherever it was present (779 of 870 rows across eight images). The other 91 "
+            "rows are listed posts with no info entry, and kGlanceInfoKey is blank for them. "
+            "Its meaning is not established here, so it is reported as stored. A post ID "
+            "present only in kInfoDictionaryKey is reported with a blank List Position; no "
+            "tested image held one, so that branch is unexercised.\n"
+            "The account folder name is reported as the Account column. Account held one value "
+            "on each tested image except hickman_ios13, where PostHistory sits under two account "
+            "folders, one of them named anonymous.\n"
+            "Not reported: CachedSDUIListingData.json in the same folder holds cached feed "
+            "listings (type keys named home and, on one tested file, popular) of base64 JSON cells, "
+            "including ad payloads, with viewed False on every entry on three tested images. It "
+            "is cached feed content; what it records about the user's activity is not "
+            "established here.\n"
+            "Store identified by @CyberMike81."
+        ),
+        "paths": ('*/Documents/release02/accountData/*/PostHistory',),
+        "output_types": "standard",
+        "artifact_icon": "list-numbers",
+        "sample_data": {
+            "ctf2020_ios12": "iOS 12.4 | Reddit 2020.10.0 | 250 rows",
+            "hickman_ios13": "iOS 13.3.1 | Reddit 2020.11.0 | 206 rows (two account folders)",
+            "hickman_ios14": "iOS 14.3 | Reddit 2021.03.1 | 250 rows",
+            "jess_ios15": "iOS 15.0.2 | Reddit 2022.02.0 | 40 rows",
+            "hickman_ios15": "iOS 15.3.1 | Reddit 2023.16.0 | 1 row",
+            "hexordia_ios1651": "iOS 16.5.1 | Reddit 2023.50.1 | 19 rows",
+            "iphone11_ios17": "iOS 17.3 | Reddit 2023.50.1 | 102 rows",
+            "otto_ios17": "iOS 17.5.1 | Reddit 2024.33.0 | 2 rows",
+            "felix_ios17": "iOS 17.6.1 | Reddit not installed | 0 rows",
+        },
+    },
+    "reddit_recent_post_cache": {
+        "name": "Reddit Recent Post Cache",
+        "description": "Post IDs from RecentPostCache.json, in stored list order.",
+        "author": "@AlexisBrignoni, Claude",
+        "creation_date": "2026-10-22",
+        "last_update_date": "2026-10-22",
+        "requirements": "none",
+        "category": "Reddit",
+        "notes": (
+            "Documents/release02/accountData/<account>/RecentPostCache.json is a JSON list of "
+            "post IDs. Position is the zero-based position in that list. On the tested images "
+            "the file held only the ID list and no times, so the order is reported as stored "
+            "and is not a timeline. What adds an ID to this list is not established here.\n"
+            "Post ID is reported as stored. The t3_ prefix is Reddit's type prefix for a "
+            "submission (a post): PRAW glossary, https://github.com/praw-dev/praw/blob/"
+            "99e8a56de739dad51d0584c01d2dd2714c576d4b/docs/package_info/glossary.rst#L20. "
+            "This is a different list from Reddit Post History: on the tested "
+            "images that held both, most IDs here were not in PostHistory. The account folder "
+            "name is reported as the Account column; Account held one value on each tested "
+            "image, because only one account folder per image held a non-empty list.\n"
+            "Store found while reviewing the PostHistory work by @CyberMike81."
+        ),
+        "paths": ('*/Documents/release02/accountData/*/RecentPostCache.json',),
+        "output_types": "standard",
+        "artifact_icon": "list-numbers",
+        "sample_data": {
+            "hexordia_ios1651": "iOS 16.5.1 | Reddit 2023.50.1 | 39 rows",
+            "iphone11_ios17": "iOS 17.3 | Reddit 2023.50.1 | 50 rows",
+            "otto_ios17": "iOS 17.5.1 | Reddit 2024.33.0 | 22 rows",
+            "hickman_ios15": "iOS 15.3.1 | Reddit 2023.16.0 | 0 rows (both files hold an empty list)",
+            "ctf2020_ios12": "iOS 12.4 | Reddit 2020.10.0 | 0 rows (no RecentPostCache.json found)",
+            "hickman_ios13": "iOS 13.3.1 | Reddit 2020.11.0 | 0 rows (no RecentPostCache.json found)",
+            "hickman_ios14": "iOS 14.3 | Reddit 2021.03.1 | 0 rows (no RecentPostCache.json found)",
+            "jess_ios15": "iOS 15.0.2 | Reddit 2022.02.0 | 0 rows (no RecentPostCache.json found)",
+        },
+    },
+    "reddit_subreddit_history": {
+        "name": "Reddit Subreddit History",
+        "description": "Subreddit IDs from the SubredditHistory archive, in stored list order, "
+                       "with the name and title stored for the same ID in the account folder.",
+        "author": "@AlexisBrignoni, Claude",
+        "creation_date": "2026-10-22",
+        "last_update_date": "2026-10-22",
+        "requirements": "none",
+        "category": "Reddit",
+        "notes": (
+            "Documents/release02/accountData/<account>/SubredditHistory is an NSKeyedArchiver "
+            "property list holding an ordered list of subreddit IDs, deserialised before "
+            "reading. List Position is the zero-based position in that list. On the tested "
+            "images the archive held no time for an entry, so the order is reported as stored "
+            "and is not a timeline. The t5_ prefix is Reddit's type prefix for a subreddit: "
+            "PRAW glossary, https://github.com/praw-dev/praw/blob/"
+            "99e8a56de739dad51d0584c01d2dd2714c576d4b/docs/package_info/glossary.rst#L22.\n"
+            "Subreddit is the record's displayName field and Title its title field. Both are "
+            "looked up by exact ID in the same account folder: first in "
+            "subreddits/<subreddit id>, a per-subreddit archive whose PrimaryKey equalled its "
+            "file name on all 2,298 tested files, then in the SubredditSubscriptions archive by "
+            "PrimaryKey. Name Source names the file used and is blank when neither holds the "
+            "ID; the ID is still reported. Where both held an ID on the tested images, their "
+            "names and titles agreed (175 of 175 across ctf2020_ios12, hickman_ios13 and "
+            "hickman_ios14). Subreddit and Title were blank on the "
+            "single hexordia_ios1651 row, whose ID is in neither file.\n"
+            "The account folder name is reported as the Account column; Account held one value "
+            "on each tested image.\n"
+            "Store identified by @CyberMike81."
+        ),
+        "paths": (
+            '*/Documents/release02/accountData/*/SubredditHistory',
+            '*/Documents/release02/accountData/*/SubredditSubscriptions',
+            '*/Documents/release02/accountData/*/subreddits/t5_*',
+        ),
+        "output_types": "standard",
+        "artifact_icon": "history",
+        "sample_data": {
+            "ctf2020_ios12": "iOS 12.4 | Reddit 2020.10.0 | 105 rows (105 named from subreddits/)",
+            "hickman_ios14": "iOS 14.3 | Reddit 2021.03.1 | 1 row (named from subreddits/)",
+            "jess_ios15": "iOS 15.0.2 | Reddit 2022.02.0 | 2 rows (named from SubredditSubscriptions)",
+            "hexordia_ios1651": "iOS 16.5.1 | Reddit 2023.50.1 | 1 row (ID in neither name source)",
+            "hickman_ios13": "iOS 13.3.1 | Reddit 2020.11.0 | 0 rows (no SubredditHistory found)",
+            "hickman_ios15": "iOS 15.3.1 | Reddit 2023.16.0 | 0 rows (no SubredditHistory found)",
+            "iphone11_ios17": "iOS 17.3 | Reddit 2023.50.1 | 0 rows (no SubredditHistory found)",
+            "otto_ios17": "iOS 17.5.1 | Reddit 2024.33.0 | 0 rows (no SubredditHistory found)",
+        },
+    },
+}
+
+import json
+
+from os.path import basename, dirname, isdir
+from re import search
+
+from scripts.ilapfuncs import artifact_processor, get_file_path, get_sqlite_db_records, attach_sqlite_db_readonly, check_in_media, get_plist_file_content, convert_unix_ts_to_utc, convert_cocoa_core_data_ts_to_utc, does_table_exist_in_db, logfunc
+
+
+def _reddit_owner_id(source_path):
+    """Own Matrix user id from the .m.rule.invite_for_me push rule (its
+    state_key pattern is the account's own id, server-populated)."""
+    rows = get_sqlite_db_records(
+        source_path,
+        "SELECT ZDATA FROM ZACCOUNTSTORAGEACCOUNTDATAITEM WHERE ZEVENTTYPEFIELD = 'm.push_rules'")
+    for (blob,) in rows:
+        try:
+            rules = json.loads(blob.decode('utf-8', 'replace') if isinstance(blob, (bytes, bytearray)) else blob)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        for section in ((rules.get('content') or {}).get('global') or {}).values():
+            if not isinstance(section, list):
+                continue
+            for rule in section:
+                if rule.get('rule_id') == '.m.rule.invite_for_me':
+                    for cond in rule.get('conditions') or []:
+                        if cond.get('key') == 'state_key' and cond.get('pattern'):
+                            return cond['pattern']
+    return ''
+
+@artifact_processor
+def reddit_chats(context):
+    data_list = []
+    files_found = context.get_files_found()
+    source_path = get_file_path(files_found, "Account.db")
+    attachDB = get_file_path(files_found, "ContentService.db")
+    
+    attach_query = attach_sqlite_db_readonly(attachDB, 'content')
+    
+    query = '''
+    SELECT 
+    datetime(m.ZORIGINSERVERDATE + 978307200,'unixepoch') AS 'Timestamp',
+	substr(m.ZITEMIDFIELD, instr(m.ZITEMIDFIELD, '|') + 1) AS 'Event ID',
+    (SELECT json_extract(u.ZDATA, '$.content.displayname') 
+     FROM ZACCOUNTSTORAGETIMELINEITEM u 
+     WHERE u.ZSTATEKEYFIELD = m.ZSENDERFIELD 
+     AND u.ZEVENTTYPEFIELD = 'm.room.member'
+     LIMIT 1) AS 'Sender',
+	 m.ZSENDERFIELD,
+    GROUP_CONCAT(
+        DISTINCT json_extract(rec.ZDATA, '$.content.displayname')
+    ) AS 'Recipient(s)',
+	CASE 
+		WHEN m.ZEVENTTYPEFIELD = 'm.room.message' THEN 'Message'
+		WHEN m.ZEVENTTYPEFIELD = 'm.reaction' THEN 'Reaction'
+		WHEN m.ZEVENTTYPEFIELD = 'm.room.redaction' THEN 'Deletion for Event ID: ' || json_extract(m.ZDATA, '$.redacts')
+		ELSE m.ZEVENTTYPEFIELD
+	END AS 'Event Type',
+	CASE
+		WHEN json_extract(m.ZDATA, '$.content.msgtype') IS NULL AND m.ZEVENTTYPEFIELD = 'm.room.message' THEN 'No msgtype stored'
+		WHEN json_extract(m.ZDATA, '$.content.msgtype') = 'm.text' THEN 'Text'
+		WHEN json_extract(m.ZDATA, '$.content.msgtype') = 'm.image' THEN 'Image'
+		ELSE json_extract(m.ZDATA, '$.content.msgtype')
+	END AS 'Message Type',
+	CASE
+		WHEN m.ZEVENTTYPEFIELD = 'm.reaction' THEN json_extract(m.ZDATA, '$.content."m.relates_to".key')
+		ELSE json_extract(m.ZDATA, '$.content.body')
+	END AS 'Message',
+    att.ZFILENAME AS 'Attachment File',
+    substr(m.ZITEMIDFIELD, 1, instr(m.ZITEMIDFIELD, '|') - 1) AS 'Room ID',
+	m.ZDATA
+    FROM ZACCOUNTSTORAGETIMELINEITEM AS m
+    LEFT JOIN content.ZKEYVALUESTORAGEBASEELEMENT AS att
+        ON json_extract(m.ZDATA, '$.content.url') = att.ZKEY
+    LEFT JOIN ZACCOUNTSTORAGETIMELINEITEM AS rec
+        ON substr(rec.ZITEMIDFIELD, 1, instr(rec.ZITEMIDFIELD, '|') - 1) = substr(m.ZITEMIDFIELD, 1, instr(m.ZITEMIDFIELD, '|') - 1)
+        AND rec.ZEVENTTYPEFIELD = 'm.room.member'
+        AND rec.ZSTATEKEYFIELD != m.ZSENDERFIELD  -- Don't list the sender as a receiver
+        AND json_extract(rec.ZDATA, '$.content.membership') = 'join'
+    WHERE m.ZEVENTTYPEFIELD = 'm.room.message' OR m.ZEVENTTYPEFIELD = 'm.room.redaction' OR m.ZEVENTTYPEFIELD = 'm.reaction'
+    GROUP BY m.ZORIGINSERVERDATE, m.ZITEMIDFIELD
+    ORDER BY "Timestamp" ASC;
+    '''
+
+    data_headers = (('Server Timestamp', 'datetime'), 'Direction', 'Sender Display Name', 'Message', ('Attachment','media'), 'Event ID', 'Sender ID', 'Recipient(s)', 'Event Type', 'Message Type', 'Attachment Cached Name', 'Room ID')
+
+    owner_id = _reddit_owner_id(source_path)
+
+    db_records = get_sqlite_db_records(source_path, query, attach_query)
+
+    for record in db_records:
+        attachment = ''
+        for x in files_found:
+            if str(record[8]) in x:
+                attachment = check_in_media(x,str(record[8]))
+        if owner_id and record[3]:
+            direction = 'Outgoing' if record[3] == owner_id else 'Incoming'
+        else:
+            direction = ''
+        data_list.append((record[0], direction, record[2], record[7], attachment, record[1], record[3], record[4], record[5], record[6], record[8], record[9]))
+
+    return data_headers, data_list, source_path
+
+def _kv_store_rows(source_path):
+    """(key, decoded JSON value, access date, update date) from a Core Data key-value store.
+
+    The stored value is JSON preceded by a single 0x01 byte, so the prefix is stripped
+    before parsing. A row whose value does not parse is skipped.
+    """
+    records = get_sqlite_db_records(
+        source_path,
+        "SELECT ZKEY, ZVALUE, ZACCESSDATE, ZUPDATEDATE FROM ZKEYVALUESTORAGEBASEELEMENT")
+    for key, value, access_date, update_date in records:
+        if isinstance(value, (bytes, bytearray)):
+            text = bytes(value).lstrip(b'\x01').decode('utf-8', 'replace')
+        else:
+            text = str(value or '')
+        try:
+            decoded = json.loads(text)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if isinstance(decoded, dict):
+            yield key, decoded, access_date, update_date
+
+
+def _apple_absolute(value):
+    if value in (None, ''):
+        return ''
+    try:
+        return convert_cocoa_core_data_ts_to_utc(float(value))
+    except (TypeError, ValueError):
+        return ''
+
+
+def _yes_no(value):
+    return 'YES' if value else 'NO'
+
+
+@artifact_processor
+def reddit_chat_users(context):
+    """ see artifact description """
+    data_list = []
+    source_path = ''
+    for file_found in context.get_files_found():
+        file_found = str(file_found)
+        if not file_found.lower().endswith(('roomsusersservice.db',)):
+            continue
+        source_path = source_path or file_found
+        source_file = context.get_relative_path(file_found)
+        for key, decoded, access_date, update_date in _kv_store_rows(file_found):
+            entry = (decoded.get('exists') or {}).get('_0') or {}
+            data_list.append((
+                convert_unix_ts_to_utc(entry.get('updated_date')) if entry.get('updated_date') else '',
+                _apple_absolute(access_date),
+                _apple_absolute(update_date),
+                entry.get('display_name', ''),
+                entry.get('user_id', '') or key,
+                _yes_no(entry.get('is_current')),
+                key,
+                source_file,
+            ))
+    data_headers = (
+        ('Updated Date', 'datetime'),
+        ('Access Date', 'datetime'),
+        ('Store Update Date', 'datetime'),
+        'Display Name',
+        'Matrix User ID',
+        'Is Current App User',
+        'Store Key',
+        'Source File',
+    )
+    return data_headers, data_list, source_path
+
+
+@artifact_processor
+def reddit_users(context):
+    """ see artifact description """
+    data_list = []
+    source_path = ''
+    for file_found in context.get_files_found():
+        file_found = str(file_found)
+        if not file_found.lower().endswith('redditusersstore.db'):
+            continue
+        source_path = source_path or file_found
+        source_file = context.get_relative_path(file_found)
+        for key, decoded, access_date, update_date in _kv_store_rows(file_found):
+            karma = decoded.get('karma') or {}
+            profile = decoded.get('profile') or {}
+            created = profile.get('createdAt')
+            data_list.append((
+                convert_unix_ts_to_utc(created) if created else '',
+                _apple_absolute(access_date),
+                _apple_absolute(update_date),
+                decoded.get('displayName', ''),
+                decoded.get('id', '') or key,
+                karma.get('total'),
+                karma.get('fromPosts'),
+                karma.get('fromComments'),
+                _yes_no(decoded.get('isVerified')),
+                _yes_no(profile.get('isNsfw')),
+                _yes_no(decoded.get('isBlocked')),
+                _yes_no(decoded.get('isAcceptingChats')),
+                _yes_no(decoded.get('isAcceptingPMs')),
+                source_file,
+            ))
+    data_headers = (
+        ('Profile Created', 'datetime'),
+        ('Access Date', 'datetime'),
+        ('Store Update Date', 'datetime'),
+        'Display Name',
+        'Reddit ID',
+        'Total Karma',
+        'Karma From Posts',
+        'Karma From Comments',
+        'Is Verified',
+        'Profile Is NSFW',
+        'Is Blocked',
+        'Is Accepting Chats',
+        'Is Accepting PMs',
+        'Source File',
+    )
+    return data_headers, data_list, source_path
+
+
+@artifact_processor
+def reddit_subreddit_subscriptions(context):
+    """ see artifact description """
+    data_list = []
+    source_path = ''
+    for file_found in context.get_files_found():
+        file_found = str(file_found)
+        if not file_found.endswith('SubredditSubscriptions'):
+            continue
+        source_path = source_path or file_found
+        source_file = context.get_relative_path(file_found)
+        account = basename(dirname(file_found))
+        entries = get_plist_file_content(file_found)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            data_list.append((
+                entry.get('kCreatedDateKey', ''),
+                entry.get('displayName', ''),
+                entry.get('title', ''),
+                entry.get('PrimaryKey', ''),
+                account,
+                _yes_no(entry.get('subscirbedBoolean')),
+                _yes_no(entry.get('favoritedBoolean')),
+                _yes_no(entry.get('mutedBoolean')),
+                _yes_no(entry.get('nsfwBoolean')),
+                entry.get('subscribedCount'),
+                entry.get('activeCount'),
+                entry.get('kSubredditType'),
+                entry.get('public_description', ''),
+                entry.get('kURLKey', ''),
+                source_file,
+            ))
+    data_headers = (
+        ('Community Created', 'datetime'),
+        'Community',
+        'Title',
+        'Community ID',
+        'Account',
+        'Subscribed',
+        'Favourite',
+        'Muted',
+        'NSFW',
+        'Subscriber Count',
+        'Active Count',
+        'Subreddit Type (as stored)',
+        'Public Description',
+        'URL',
+        'Source File',
+    )
+    return data_headers, data_list, source_path
+
+
+def _chat_stores(files_found):
+    '''Every chat.sqlite among the matches, directories and sidecars skipped.'''
+    seen = []
+    for found in files_found:
+        path = str(found)
+        if isdir(path) or path.endswith(('-wal', '-shm')):
+            continue
+        if basename(path) == 'chat.sqlite' and path not in seen:
+            seen.append(path)
+    return seen
+
+
+def _chat_account(path):
+    '''The account the accountData folder in the path is named for, or ''.'''
+    match = search(r'/accountData/([^/]+)/', str(path).replace('\\', '/'))
+    return match.group(1) if match else ''
+
+
+def _chat_rows(path, table, columns):
+    '''Rows of a table in the chat store, or nothing when it does not have it.'''
+    if not does_table_exist_in_db(path, table):
+        return []
+    try:
+        return list(get_sqlite_db_records(path, f'SELECT {columns} FROM {table}'))
+    except Exception as error:                   # pylint: disable=broad-except
+        logfunc(f'Reddit: could not read {table}: {error}')
+        return []
+
+
+@artifact_processor
+def reddit_chat_messages(context):
+    data_list = []
+    sources = []
+    for source_path in _chat_stores(context.get_files_found()):
+        sources.append(source_path)
+        account = _chat_account(source_path)
+        channels = {}
+        owners = {}
+        for (unique_id, url, own) in _chat_rows(
+                source_path, 'DirectChannel', 'uniqueID, channelUrl, currentUserId'):
+            channels[unique_id] = '' if url is None else str(url)
+            owners[unique_id] = '' if own is None else str(own)
+        names = {}
+        for (user_id, username) in _chat_rows(source_path, 'Contact', 'userID, username'):
+            if user_id is not None:
+                names[str(user_id)] = '' if username is None else str(username)
+        for (stamp, user_id, body, channel, kind, state, message_id,
+             image_url, gif_url) in _chat_rows(
+                source_path, 'ChatMessage',
+                'timestamp, userID, messageBody, channelID, type, state, sendbirdMessageId, '
+                'imageURL, gifURL'):
+            sender = '' if user_id is None else str(user_id)
+            own = owners.get(channel, '')
+            direction = ''
+            if own:
+                direction = 'Outgoing' if sender == own else 'Incoming'
+            data_list.append((
+                convert_unix_ts_to_utc(int(stamp) // 1000) if stamp else '',
+                direction, names.get(sender, ''), '' if body is None else str(body),
+                channels.get(channel, ''), sender,
+                '' if image_url is None else str(image_url),
+                '' if gif_url is None else str(gif_url),
+                '' if message_id is None else str(message_id),
+                '' if kind is None else str(kind), '' if state is None else str(state),
+                account,
+            ))
+
+    data_list.sort(key=lambda row: str(row[0]), reverse=True)
+    data_headers = (
+        ('Timestamp', 'datetime'), 'Direction', 'Sender Username', 'Message', 'Channel URL',
+        'Sender ID', 'Image URL', 'GIF URL', 'Message ID (as stored)',
+        'Message Type (as stored)', 'State (as stored)', 'Account ID',
+    )
+    return data_headers, data_list, '\n'.join(sources)
+
+
+@artifact_processor
+def reddit_chat_contacts(context):
+    data_list = []
+    sources = []
+    for source_path in _chat_stores(context.get_files_found()):
+        sources.append(source_path)
+        account = _chat_account(source_path)
+        for (created, username, user_id, real_name, link_karma, comment_karma,
+             blocked, nsfw, thumb) in _chat_rows(
+                source_path, 'Contact',
+                'createdAt, username, userID, realName, linkKarma, commentKarma, '
+                'blockedByMe, profileNSFW, profileThumbnailUrl'):
+            data_list.append((
+                convert_unix_ts_to_utc(created) if created else '',
+                '' if username is None else str(username),
+                '' if user_id is None else str(user_id),
+                '' if real_name is None else str(real_name),
+                '' if link_karma is None else str(link_karma),
+                '' if comment_karma is None else str(comment_karma),
+                _yes_no(blocked), _yes_no(nsfw),
+                '' if thumb is None else str(thumb), account,
+            ))
+
+    data_list.sort(key=lambda row: str(row[1]))
+    data_headers = (
+        ('Created', 'datetime'), 'Username', 'User ID', 'Real Name', 'Link Karma (as stored)',
+        'Comment Karma (as stored)', 'Blocked', 'Profile NSFW', 'Profile Thumbnail URL',
+        'Account ID',
+    )
+    return data_headers, data_list, '\n'.join(sources)
+
+
+def _named_files(context, name):
+    '''Matched files with this exact name, sorted so the row order does not depend on the volume.'''
+    return sorted(str(found) for found in context.get_files_found()
+                  if basename(str(found)) == name and not isdir(str(found)))
+
+
+def _glance(info, post_id):
+    '''kGlanceInfoKey of a post's info entry, or None when the post has no entry.'''
+    entry = info.get(post_id) if isinstance(post_id, str) else None
+    return entry.get('kGlanceInfoKey') if isinstance(entry, dict) else None
+
+
+@artifact_processor
+def reddit_post_history(context):
+    """ see artifact description """
+    data_list = []
+    sources = []
+    for file_found in _named_files(context, 'PostHistory'):
+        sources.append(file_found)
+        source_file = context.get_relative_path(file_found)
+        account = basename(dirname(file_found))
+        archive = get_plist_file_content(file_found)
+        if not isinstance(archive, dict):
+            logfunc(f'Reddit Post History: no dictionary in {source_file}')
+            continue
+        order = archive.get('kPostIDDictionaryKey')
+        info = archive.get('kInfoDictionaryKey')
+        if not isinstance(order, list):
+            logfunc(f'Reddit Post History: kPostIDDictionaryKey is not a list in {source_file}')
+            order = []
+        if not isinstance(info, dict):
+            if info is not None:
+                logfunc(f'Reddit Post History: kInfoDictionaryKey is not a dictionary in {source_file}')
+            info = {}
+        listed = set()
+        for position, post_id in enumerate(order):
+            if isinstance(post_id, str):
+                listed.add(post_id)
+            data_list.append((position, post_id, _glance(info, post_id), account, source_file))
+        for post_id in info:
+            if post_id not in listed:
+                data_list.append(('', post_id, _glance(info, post_id), account, source_file))
+    data_headers = (
+        'List Position',
+        'Post ID',
+        'kGlanceInfoKey (as stored)',
+        'Account',
+        'Source File',
+    )
+    return data_headers, data_list, '\n'.join(sources)
+
+
+@artifact_processor
+def reddit_recent_post_cache(context):
+    """ see artifact description """
+    data_list = []
+    sources = []
+    for file_found in _named_files(context, 'RecentPostCache.json'):
+        sources.append(file_found)
+        source_file = context.get_relative_path(file_found)
+        account = basename(dirname(file_found))
+        try:
+            with open(file_found, 'r', encoding='utf-8') as cache_file:
+                post_ids = json.load(cache_file)
+        except (OSError, ValueError) as error:
+            logfunc(f'Reddit Recent Post Cache: could not read {source_file}: {type(error).__name__}')
+            continue
+        if not isinstance(post_ids, list):
+            logfunc(f'Reddit Recent Post Cache: no list in {source_file}')
+            continue
+        for position, post_id in enumerate(post_ids):
+            data_list.append((position, post_id, account, source_file))
+    data_headers = (
+        'Position',
+        'Post ID',
+        'Account',
+        'Source File',
+    )
+    return data_headers, data_list, '\n'.join(sources)
+
+
+@artifact_processor
+def reddit_subreddit_history(context):
+    """ see artifact description """
+    # Name lookups are keyed on the account folder path, so two accounts never share names.
+    cached = {}
+    for found in context.get_files_found():
+        found = str(found)
+        if basename(dirname(found)) == 'subreddits' and not isdir(found):
+            cached[(dirname(dirname(found)), basename(found))] = found
+    subscriptions = {}
+    for found in _named_files(context, 'SubredditSubscriptions'):
+        subscriptions[dirname(found)] = found
+
+    data_list = []
+    sources = []
+    for file_found in _named_files(context, 'SubredditHistory'):
+        sources.append(file_found)
+        source_file = context.get_relative_path(file_found)
+        folder = dirname(file_found)
+        account = basename(folder)
+        entries = get_plist_file_content(file_found)
+        if not isinstance(entries, list):
+            logfunc(f'Reddit Subreddit History: no list in {source_file}')
+            continue
+        subscribed = None
+        for position, subreddit_id in enumerate(entries):
+            name = title = name_source = ''
+            if isinstance(subreddit_id, str):
+                cached_file = cached.get((folder, subreddit_id))
+                if cached_file:
+                    record = get_plist_file_content(cached_file)
+                    if isinstance(record, dict) and record.get('PrimaryKey') == subreddit_id:
+                        name = record.get('displayName', '')
+                        title = record.get('title', '')
+                        name_source = context.get_relative_path(cached_file)
+                        if cached_file not in sources:
+                            sources.append(cached_file)
+                if not name_source and folder in subscriptions:
+                    if subscribed is None:
+                        subscribed = {}
+                        listing = get_plist_file_content(subscriptions[folder])
+                        for entry in listing if isinstance(listing, list) else []:
+                            if isinstance(entry, dict) and isinstance(entry.get('PrimaryKey'), str):
+                                subscribed[entry['PrimaryKey']] = entry
+                    entry = subscribed.get(subreddit_id)
+                    if entry is not None:
+                        name = entry.get('displayName', '')
+                        title = entry.get('title', '')
+                        name_source = context.get_relative_path(subscriptions[folder])
+                        if subscriptions[folder] not in sources:
+                            sources.append(subscriptions[folder])
+            data_list.append((position, subreddit_id, name, title, name_source, account, source_file))
+    data_headers = (
+        'List Position',
+        'Subreddit ID',
+        'Subreddit',
+        'Title',
+        'Name Source',
+        'Account',
+        'Source File',
+    )
+    return data_headers, data_list, '\n'.join(sources)

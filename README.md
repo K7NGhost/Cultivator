@@ -40,6 +40,10 @@ Image and video analysis functionality is integrated directly into the media gal
 
 Cultivator supports lightweight Python plugins for artifact extraction and processing.
 
+The built-in **iOS Artifacts**, **Android Artifacts**, and **Vehicle Artifacts** plugins bundle the complete
+iLEAPP, ALEAPP, and VLEAPP artifact catalogs. See [mobile and vehicle artifact plugins](docs/mobile-artifact-plugins.md)
+for supported inputs, runtime setup and validation.
+
 The plugin system is designed to make creating new artifact parsers as straightforward as possible without requiring developers to understand the entire application architecture.
 
 ### 5. Dark Mode
@@ -52,12 +56,23 @@ Extensibility is a major focus of Cultivator.
 
 The plugin architecture is designed to minimize the amount of boilerplate required to create new forensic artifact parsers, analysis modules, and other functionality.
 
+## Evidence importing
+
+Cultivator uses the sibling [Inodex](../inodex) Rust library to import logical
+files/directories and supported disk images and filesystems. Image imports index
+the filesystem; case-owned working files are created only when plugins or viewers
+need local paths. Rust metadata and hashing consumers can read directly through
+Inodex, with original source metadata recorded separately.
+
+See [Inodex integration](docs/inodex-integration.md) for setup, importing,
+extraction/storage behavior and current limits, and the
+[media gallery benchmark](docs/media-gallery-benchmark.md) for the measured baseline.
+
 ## Planned Features
 
 Cultivator is still under active development. Planned features include:
 
 - **Local AI assistance** for helping examiners analyze and interpret forensic data
-- **The Sleuth Kit integration** through a Rust-compatible wrapper or interface
 - Continued **UI and performance improvements**
 - Standardized **artifact types** for building specialized artifact visualizations
 - **Timeline analysis**

@@ -25,6 +25,8 @@ use std::{
 use tauri::Emitter;
 
 mod jobs;
+mod evidence;
+mod file_view_scan;
 mod plugins;
 pub mod preview;
 mod scripting;
@@ -479,7 +481,7 @@ async fn list_directory(path: String) -> Result<DirectoryListing, String> {
 fn list_directory_impl(path: String) -> Result<DirectoryListing, String> {
     let root = PathBuf::from(path);
 
-    if !root.is_dir() {
+    if !root.is_dir() && evidence::indexed_metadata(&root)?.is_none() {
         return Err("Selected path is not a directory.".to_string());
     }
 
@@ -505,7 +507,7 @@ async fn list_directory_entries(path: String) -> Result<Vec<DirectoryEntry>, Str
 fn list_directory_entries_impl(path: String) -> Result<Vec<DirectoryEntry>, String> {
     let directory = PathBuf::from(path);
 
-    if !directory.is_dir() {
+    if !directory.is_dir() && evidence::indexed_metadata(&directory)?.is_none() {
         return Err("Selected tree item is not a directory.".to_string());
     }
 
@@ -525,7 +527,7 @@ fn describe_paths_impl(paths: Vec<String>) -> Result<Vec<DirectoryEntry>, String
     for path in paths {
         let path = PathBuf::from(path);
 
-        if !path.exists() {
+        if !path.exists() && evidence::indexed_metadata(&path)?.is_none() {
             continue;
         }
 
@@ -550,8 +552,9 @@ async fn list_file_view_entries_page(
 }
 
 #[tauri::command]
-async fn build_file_view_index(roots: Vec<String>) -> Result<FileViewIndex, String> {
-    tokio::task::spawn_blocking(move || build_file_view_index_impl(roots))
+async fn build_file_view_index(roots: Vec<String>, request_id: Option<String>) -> Result<FileViewIndex, String> {
+    let scan = file_view_scan::Scan::start(request_id)?;
+    tokio::task::spawn_blocking(move || build_file_view_index_with_cancellation(roots, &|| scan.cancelled()))
         .await
         .map_err(|error| format!("Failed to join file view index task: {error}"))?
 }
@@ -1323,7 +1326,8 @@ fn run_grep_search(
     let root = PathBuf::from(root_path);
     let trimmed_query = query.trim().to_string();
 
-    if !root.is_dir() && !root.is_file() {
+    let indexed = evidence::indexed_metadata(&root)?.is_some();
+    if !indexed && !root.is_dir() && !root.is_file() {
         return Err("Search root is not a file or directory.".to_string());
     }
 
@@ -1340,6 +1344,14 @@ fn run_grep_search(
 
     let matcher = build_grep_matcher(&trimmed_query, regex, case_sensitive)
         .map_err(|error| format!("Failed to build grep matcher: {error}"))?;
+
+    if indexed {
+        evidence::visit_files(&root, |path| {
+            if cancelled.load(Ordering::Relaxed) { return Err("Search cancelled".into()); }
+            evidence::ensure_local(path, &cancelled)?;
+            Ok(())
+        })?;
+    }
 
     if root.is_file() {
         let mut searcher = build_grep_searcher(binary_files);
@@ -1763,6 +1775,9 @@ async fn read_sqlite_table_rows(
 }
 
 async fn open_readonly_sqlite_database(path: &str) -> Result<SqlitePool, String> {
+    let owned = path.to_string();
+    tokio::task::spawn_blocking(move || evidence::ensure_family(Path::new(&owned), &AtomicBool::new(false)))
+        .await.map_err(|e| e.to_string())??;
     let path = PathBuf::from(path);
 
     if !path.is_file() {
@@ -1869,6 +1884,15 @@ fn sqlite_cell_to_json_value(
 }
 
 fn build_tree_node(path: &Path, depth: usize) -> Result<DirectoryTreeNode, String> {
+    if let Some(metadata) = evidence::indexed_metadata(path)? {
+        let entries = evidence::indexed_entries(path, false)?.unwrap_or_default();
+        let children = if depth < MAX_TREE_DEPTH && metadata.metadata.kind == inodex::filesystem::FileKind::Directory {
+            Some(entries.iter().take(MAX_DIRECTORY_CHILDREN).filter_map(|entry| build_tree_node(entry.local_path.as_ref()?, depth + 1).ok()).collect())
+        } else { None };
+        return Ok(DirectoryTreeNode { id: path.to_string_lossy().into_owned(), name: display_name(path),
+            path: path.to_string_lossy().into_owned(), kind: if metadata.metadata.kind == inodex::filesystem::FileKind::Directory { EntryKind::Directory } else { EntryKind::File },
+            files: entries.len(), children });
+    }
     let metadata = fs::metadata(path)
         .map_err(|error| format!("Failed to read path metadata '{}': {error}", path.display()))?;
 
@@ -1911,6 +1935,11 @@ fn build_tree_node(path: &Path, depth: usize) -> Result<DirectoryTreeNode, Strin
 }
 
 fn list_immediate_entries(path: &Path) -> Result<Vec<DirectoryEntry>, String> {
+    if let Some(entries) = evidence::indexed_entries(path, false)? {
+        let mut entries = entries.into_iter().take(MAX_LIST_ENTRIES).filter_map(|entry| build_directory_entry(entry.local_path.as_ref()?).ok()).collect::<Vec<_>>();
+        sort_directory_entries(&mut entries);
+        return Ok(entries);
+    }
     let entries = read_sorted_entries(path)?
         .into_iter()
         .take(MAX_LIST_ENTRIES)
@@ -1936,6 +1965,16 @@ fn list_file_view_entries_page_impl(
     for root in roots {
         let root = PathBuf::from(root);
 
+        if let Some(files) = evidence::indexed_entries(&root, true)? {
+            for file in files {
+                if file.metadata.kind != inodex::filesystem::FileKind::File { continue; }
+                let path = file.local_path.as_ref().unwrap();
+                if !seen_paths.insert(path.clone()) || !file_matches_view(path, file.metadata.size, view_id) { continue; }
+                let index = total_count; total_count += 1;
+                if index >= offset && entries.len() < limit { entries.push(build_directory_entry(path)?); }
+            }
+            continue;
+        }
         if !root.exists() {
             continue;
         }
@@ -1992,14 +2031,37 @@ fn list_file_view_entries_page_impl(
     })
 }
 
+#[cfg(test)]
 fn build_file_view_index_impl(roots: Vec<String>) -> Result<FileViewIndex, String> {
+    build_file_view_index_with_cancellation(roots, &|| false)
+}
+
+fn build_file_view_index_with_cancellation(roots: Vec<String>, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<FileViewIndex, String> {
+    let checkpoint = || if cancelled() { Err("File View indexing cancelled.".to_string()) } else { Ok(()) };
+    checkpoint()?;
     let mut view_entries = file_view_index_template();
     let mut view_counts = file_view_count_template();
     let mut seen_paths = HashSet::new();
 
     for root in roots {
+        checkpoint()?;
         let root = PathBuf::from(root);
 
+        if let Some(files) = evidence::indexed_entries(&root, true)? {
+            for file in files {
+                checkpoint()?;
+                if file.metadata.kind != inodex::filesystem::FileKind::File { continue; }
+                let path = file.local_path.as_ref().unwrap();
+                if !seen_paths.insert(path.clone()) { continue; }
+                for view_id in matching_file_view_ids(path, file.metadata.size) {
+                    if let Some(count) = view_counts.get_mut(view_id) { *count += 1; }
+                    if let Some(entries) = view_entries.get_mut(view_id) {
+                        if entries.len() < MAX_FILE_VIEW_ENTRIES { entries.push(build_directory_entry(path)?); }
+                    }
+                }
+            }
+            continue;
+        }
         if !root.exists() {
             continue;
         }
@@ -2013,6 +2075,7 @@ fn build_file_view_index_impl(roots: Vec<String>) -> Result<FileViewIndex, Strin
             .build();
 
         for result in walker {
+            checkpoint()?;
             let Ok(entry) = result else {
                 continue;
             };
@@ -2050,6 +2113,7 @@ fn build_file_view_index_impl(roots: Vec<String>) -> Result<FileViewIndex, Strin
     }
 
     for entries in view_entries.values_mut() {
+        checkpoint()?;
         sort_directory_entries(entries);
     }
 
@@ -2209,6 +2273,14 @@ fn looks_like_deleted_file(path: &Path) -> bool {
 }
 
 fn build_directory_entry(path: &Path) -> Result<DirectoryEntry, String> {
+    if let Some(file) = evidence::indexed_metadata(path)? {
+        let directory = file.metadata.kind == inodex::filesystem::FileKind::Directory;
+        return Ok(DirectoryEntry { id: path.to_string_lossy().into_owned(), name: display_name(path),
+            path: path.to_string_lossy().into_owned(), kind: if directory { EntryKind::Directory } else { EntryKind::File },
+            size: (!directory).then_some(file.metadata.size),
+            modified_ms: file.metadata.times.modified.filter(|t| t.seconds >= 0).map(|t| t.seconds as u128 * 1000 + t.nanos as u128 / 1_000_000),
+            child_count: if directory { Some(evidence::indexed_entries(path, false)?.unwrap_or_default().len()) } else { None } });
+    }
     let metadata = fs::metadata(path)
         .map_err(|error| format!("Failed to read path metadata '{}': {error}", path.display()))?;
     let is_directory = metadata.is_dir();
@@ -2396,11 +2468,18 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .manage(SearchRegistry::default())
         .invoke_handler(tauri::generate_handler![
+            evidence::import_evidence,
+            evidence::ensure_evidence_file,
+            evidence::cancel_evidence_import,
+            evidence::inspect_evidence_image,
+            evidence::commit_evidence_import,
+            evidence::discard_evidence_import,
             list_directory,
             list_directory_entries,
             describe_paths,
             list_file_view_entries_page,
             build_file_view_index,
+            file_view_scan::cancel_file_view_index,
             list_python_plugins,
             python_runtime_status,
             prepare_python_runtime,

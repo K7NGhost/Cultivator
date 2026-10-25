@@ -90,7 +90,7 @@ export function MediaImagePreview({ caseDatabasePath, className, fit = "cover", 
           </svg>}
         </>
       ) : <span className="sr-only">Loading {item.name}</span>}
-      {item.faceCount != null && <span className="pointer-events-none absolute right-1 top-1 rounded bg-black/80 px-1 py-0.5 text-[9px] text-cyan-300"
+      {(item.faceCount ?? 0) > 0 && <span className="pointer-events-none absolute right-1 top-1 rounded bg-black/80 px-1 py-0.5 text-[9px] text-cyan-300"
         title="Detected faces (YuNet)" aria-label={`${item.faceCount} faces detected by YuNet`}>Faces: {item.faceCount}</span>}
     </div>
   );

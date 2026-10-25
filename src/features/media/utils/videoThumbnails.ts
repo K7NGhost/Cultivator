@@ -1,4 +1,4 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getPerformanceSettings, subscribePerformanceSettings, thumbnailCacheBytes } from "../../settings/performanceSettings";
 
 const FRAME_FRACTIONS = [0.1, 0.35, 0.6, 0.85];
@@ -30,7 +30,9 @@ export function getVideoThumbnail(
     signal.throwIfAborted();
     const existing = thumbnails.get(key);
     if (existing) return existing;
-    const thumbnail = await captureVideoFrames(path, signal);
+    const local = await invoke<string>("ensure_evidence_file", { path });
+    signal.throwIfAborted();
+    const thumbnail = await captureVideoFrames(local || path, signal);
     signal.throwIfAborted();
     if (epoch !== generation) return thumbnail;
     thumbnails.set(key, thumbnail);

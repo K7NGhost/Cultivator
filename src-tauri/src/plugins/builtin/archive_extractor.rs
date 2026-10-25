@@ -2,7 +2,6 @@ use crate::plugins::cancellation::{self, Check};
 use crate::plugins::{PythonPluginManifest, PythonPluginMode};
 use flate2::read::GzDecoder;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
-use ignore::WalkBuilder;
 use regex::RegexSet;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -274,47 +273,15 @@ fn collect_archives(
     let mut archives = Vec::new();
 
     for root_path in paths {
-        cancellation::checkpoint(cancelled)?;
-        let root = PathBuf::from(root_path);
-
-        if !root.exists() {
-            continue;
-        }
-
-        if root.is_file() {
-            *scanned_files += 1;
-            if let Some(kind) = archive_kind(&root) {
-                archives.push((root, kind));
-            }
-            continue;
-        }
-
-        let mut walker = WalkBuilder::new(root);
-
-        walker
-            .hidden(false)
-            .ignore(false)
-            .parents(false)
-            .git_global(false)
-            .git_ignore(false)
-            .git_exclude(false);
-
-        for entry in walker.build().filter_map(Result::ok) {
+        crate::evidence::visit_files(Path::new(&root_path), |path| {
             cancellation::checkpoint(cancelled)?;
-            if !entry
-                .file_type()
-                .is_some_and(|file_type| file_type.is_file())
-            {
-                continue;
-            }
-
             *scanned_files += 1;
-            let path = entry.into_path();
-
-            if let Some(kind) = archive_kind(&path) {
+            if let Some(kind) = archive_kind(path) {
+                let path = crate::evidence::ensure_local_checked(path, cancelled)?;
                 archives.push((path, kind));
             }
-        }
+            Ok(())
+        })?;
     }
 
     Ok(archives)

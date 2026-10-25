@@ -1,0 +1,2736 @@
+{
+  "platform": "vehicle",
+  "project": "VLEAPP",
+  "repository": "https://github.com/abrignoni/VLEAPP",
+  "revision": "2d3c5415008d031da564597fa696d4afca5e985f",
+  "sourceHadUncommittedChanges": false,
+  "counts": {
+    "v1": 0,
+    "v2": 211,
+    "modules": 71,
+    "alternate_modules": 0
+  },
+  "modules": [
+    {
+      "path": "scripts/artifacts/AlfaRomeo_agenda_BT.py",
+      "artifacts": [
+        {
+          "key": "alfaRomeoBtSync",
+          "version": "v2",
+          "name": "Alfa Romeo - Bluetooth Last Sync",
+          "description": "Bluetooth device last-sync times from an Alfa Romeo agenda.sqlite.",
+          "category": "Alfa Romeo Vehicles",
+          "paths": [
+            "*/agenda.sqlite*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/AlfaRomeo_agenda_contacts.py",
+      "artifacts": [
+        {
+          "key": "alfaRomeoContacts",
+          "version": "v2",
+          "name": "Alfa Romeo - Contacts",
+          "description": "Contacts (with phone numbers and the Bluetooth address of the BT_Device row each contact links to) from an Alfa Romeo agenda.sqlite.",
+          "category": "Alfa Romeo Vehicles",
+          "paths": [
+            "*/agenda.sqlite*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/AlfaRomeo_sdars.py",
+      "artifacts": [
+        {
+          "key": "alfaRomeoSirius",
+          "version": "v2",
+          "name": "Alfa Romeo - Sirius Settings",
+          "description": "SiriusXM (SDARS) settings/values from an Alfa Romeo sdars_db.sqlite.",
+          "category": "Alfa Romeo Vehicles",
+          "paths": [
+            "*/sdars_db.sqlite*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/berla_ive_export.py",
+      "artifacts": [
+        {
+          "key": "berla_ive_export",
+          "version": "v2",
+          "name": "Berla iVe Export Record",
+          "description": "The vehicle and acquisition record an iVe .iVa export carries, with one row per acquisition giving the module, the acquisition type, the error message iVe recorded (shown as \"no error reported\" when the field is empty) and the counts iVe reported parsing.",
+          "category": "Vehicle Acquisition",
+          "paths": [
+            "*/Vehicle.json"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/bluetooth_hci_snoop.py",
+      "artifacts": [
+        {
+          "key": "bluetooth_hci_snoop_captures",
+          "version": "v2",
+          "name": "Bluetooth HCI Snoop - Captures",
+          "description": "Bluetooth HCI snoop captures (btsnoop files), one row per capture, with the first and last record time, the number of commands, events and other packets, and the addresses, name and version numbers the controller's answers in the capture state.",
+          "category": "Bluetooth HCI Snoop",
+          "paths": [
+            "*/btsnoop/btsnoop*.log*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/bmw_connected_devices.py",
+      "artifacts": [
+        {
+          "key": "bmw_connected_apple_devices",
+          "version": "v2",
+          "name": "BMW MGU - Connected Apple Devices",
+          "description": "Media library records from the head unit's iap2 stores (iap2_library table), with the identifier parsed from each store's file name and the device UDID each record holds.",
+          "category": "BMW MGU",
+          "paths": [
+            "*/iap2_*.db.backup"
+          ]
+        },
+        {
+          "key": "bmw_connected_device_media",
+          "version": "v2",
+          "name": "BMW MGU - Connected Device Media",
+          "description": "Media items the head unit indexed from connected Apple devices, with title, artist, album, genre and duration as the unit recorded them.",
+          "category": "BMW MGU",
+          "paths": [
+            "*/iap2_*.db.backup"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/bmw_mgu_request_documents.py",
+      "artifacts": [
+        {
+          "key": "bmw_mgu_request_documents",
+          "version": "v2",
+          "name": "BMW MGU - Request Documents",
+          "description": "One row for each request document: the position it carries, the request reason and counter, the mileage and position age bands, and the software levels it states.",
+          "category": "BMW MGU",
+          "paths": [
+            "*/tm/dumm/*.gzip"
+          ]
+        },
+        {
+          "key": "bmw_mgu_request_privacy_settings",
+          "version": "v2",
+          "name": "BMW MGU - Privacy Settings In Request Documents",
+          "description": "The data privacy settings named in the request documents, one row for each distinct setting and value, with how many documents carry it and the lowest and highest request number among them.",
+          "category": "BMW MGU",
+          "paths": [
+            "*/tm/dumm/*.gzip"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/btDevices.py",
+      "artifacts": [
+        {
+          "key": "btDevices",
+          "version": "v2",
+          "name": "Ford SYNC - Bluetooth Devices In Devlog",
+          "description": "Bluetooth device details from Ford SYNC devlog text logs (BT/devlog_*.txt), one row per file. Each column shows the last matching line in the file.",
+          "category": "Ford Vehicles",
+          "paths": [
+            "*/BT/devlog_*.txt"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/chrysler_accessories.py",
+      "artifacts": [
+        {
+          "key": "chryslerAccessories",
+          "version": "v2",
+          "name": "Chrysler - Accessory Data",
+          "description": "Accessory data (name::value pairs) from a Chrysler media/accessory_data.txt.",
+          "category": "Chrysler Vehicles",
+          "paths": [
+            "*/media/accessory_data.txt"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/chrysler_bt.py",
+      "artifacts": [
+        {
+          "key": "chryslerBtDevices",
+          "version": "v2",
+          "name": "Chrysler - Bluetooth Devices",
+          "description": "Bluetooth device addresses and names read from bdAddr and name lines (repeated pairs listed once) in a Chrysler betula/bt_log.txt.",
+          "category": "Chrysler Vehicles",
+          "paths": [
+            "*/betula/bt_log.txt"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/chrysler_contacts.py",
+      "artifacts": [
+        {
+          "key": "chryslerContacts",
+          "version": "v2",
+          "name": "Chrysler - Contacts List",
+          "description": "Voice-recognition phonebook contacts (name/information pairs) from a Chrysler voice/asr phonebook export.",
+          "category": "Chrysler Vehicles",
+          "paths": [
+            "*/voice/asr/context/phonebook/*.txt"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/chrysler_devices.py",
+      "artifacts": [
+        {
+          "key": "get_devices",
+          "version": "v2",
+          "name": "Chrysler - Device Manager Devices",
+          "description": "Device names and addresses (DeviceListTable) from Chrysler vehicles (DeviceManagerDeviceList bz2-compressed sqlite).",
+          "category": "Chrysler Vehicles",
+          "paths": [
+            "*/*DeviceManagerDeviceList.bz*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/chrysler_diag.py",
+      "artifacts": [
+        {
+          "key": "chryslerDiagnostics",
+          "version": "v2",
+          "name": "Chrysler - Diagnostic Data",
+          "description": "Diagnostic key/value data from a Chrysler persistence/nonvol_*.ps log.",
+          "category": "Chrysler Vehicles",
+          "paths": [
+            "*/persistence/nonvol_*.ps"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/chrysler_gps.py",
+      "artifacts": [
+        {
+          "key": "chryslerGps",
+          "version": "v2",
+          "name": "Chrysler - GPS",
+          "description": "Latitude and longitude values from \"Latitude read from PS\" and \"Longitude read from PS\" lines in Chrysler slog files. No time is reported and a repeated pair is listed once.",
+          "category": "Chrysler Vehicles",
+          "paths": [
+            "*/log/slogs*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/chrysler_logs.py",
+      "artifacts": [
+        {
+          "key": "get_location_logs",
+          "version": "v2",
+          "name": "Chrysler - Location Logs",
+          "description": "Location records (with accuracy, speed, course and the location method each line names) parsed from Chrysler JSR179 persistent logs.",
+          "category": "Chrysler Vehicles",
+          "paths": [
+            "*/persistentLogs/*/Log*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/chrysler_phonebook.py",
+      "artifacts": [
+        {
+          "key": "get_phone_book_devices",
+          "version": "v2",
+          "name": "Chrysler - PhoneBook Devices",
+          "description": "Phonebook BT device list with connect/disconnect times from Chrysler vehicles (PhoneBookDeviceList bz2-compressed sqlite).",
+          "category": "Chrysler Vehicles",
+          "paths": [
+            "*/*PhoneBookDeviceList.bz*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/connDevices.py",
+      "artifacts": [
+        {
+          "key": "connDevices",
+          "version": "v2",
+          "name": "Connected Devices In devices.db",
+          "description": "Rows of the device_master table in a vehicle infotainment devices.db. Last Connected Time is last_connected_time read as a Unix time (unit chosen by magnitude) and shown in UTC.",
+          "category": "Connected Devices",
+          "paths": [
+            "*/devices.db*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/contactsInfo.py",
+      "artifacts": [
+        {
+          "key": "contactsInfo",
+          "version": "v2",
+          "name": "Contacts In contact.db",
+          "description": "Contact records (with phone, email, address and the device_id each contact is linked to; a contact with several numbers or addresses appears once per combination) from a vehicle infotainment contact.db.",
+          "category": "Contacts",
+          "paths": [
+            "*/contact.db*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/dipoAudio.py",
+      "artifacts": [
+        {
+          "key": "dipoAudio",
+          "version": "v2",
+          "name": "Hyundai - Dipo Audio UUIDs",
+          "description": "Preference entry names (with the stored value of pref_key_local_bt_address only; values of other entries are not reported) from a Hyundai Santa Fe com.daudio.app.dipo pref_dipo.xml.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/com.daudio.app.dipo/shared_prefs/pref_dipo.xml"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_btdevices_history.py",
+      "artifacts": [
+        {
+          "key": "get_bt_device_hist",
+          "version": "v2",
+          "name": "Ford - Device History In SmartDeviceLink Log",
+          "description": "Device appeared and disappeared lines (name, serial, uuid, device type) from a Ford smartdevicelink.log.",
+          "category": "Ford Vehicles",
+          "paths": [
+            "*/*smartdevicelink.log"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_devices_json.py",
+      "artifacts": [
+        {
+          "key": "get_devices_json",
+          "version": "v2",
+          "name": "Ford - Bluetooth Devices In devices.json",
+          "description": "Bluetooth devices (MAC, serial, name) from a Ford devices.json. An entry missing any of the three values is not listed, and a repeated entry is listed once.",
+          "category": "Ford Vehicles",
+          "paths": [
+            "*/devices.json"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_diagnostics.py",
+      "artifacts": [
+        {
+          "key": "ford_diag_events",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Diagnostic Events",
+          "description": "Rows of the head unit's events_metadata table, with the creator_id of each one and the uploaded value where the record carries a date string.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/diagnostics/db/diagnostics_slave.sqlite*"
+          ]
+        },
+        {
+          "key": "ford_diag_upload_errors",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Diagnostic Upload Errors",
+          "description": "Failures the head unit recorded while trying to upload diagnostic events, each with a timestamp and the boot count current at the time.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/diagnostics/db/diagnostics_slave.sqlite*"
+          ]
+        },
+        {
+          "key": "ford_diag_identifiers",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Diagnostic Identifiers",
+          "description": "Identifier values the head unit stored beside its diagnostics configuration, reported as stored.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/diagnostics/*_id.txt"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_fav_places.py",
+      "artifacts": [
+        {
+          "key": "get_fav_places",
+          "version": "v2",
+          "name": "Ford - Recent and Favorite Places",
+          "description": "Places from Ford recents_storage and favorites_storage files (id, label, address, coordinates). The table does not say which of the two files a row came from. An empty label or address is shown as \"None\", an entry with no coordinates is not listed and a repeated entry is listed once.",
+          "category": "Ford Vehicles",
+          "paths": [
+            "*/recents_storage",
+            "*/favorites_storage"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_gps_speed_data.py",
+      "artifacts": [
+        {
+          "key": "get_ford_gps_speed_data",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Dead Reckoning Speed Data In Log",
+          "description": "Dead-reckoning speed/heading data from Ford fdp logs.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/*fdplog.np.txt*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_hmi_indexeddb.py",
+      "artifacts": [
+        {
+          "key": "ford_hmi_app_state",
+          "version": "v2",
+          "name": "Ford SYNC 4 - HMI Application State",
+          "description": "State the head unit's HMI applications persisted to IndexedDB, reported by application, database, object store and key with the value as stored.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/system_handled/IndexedDB/*"
+          ]
+        },
+        {
+          "key": "ford_vehicle_capabilities",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Vehicle Capability Values",
+          "description": "One stored value for each topic in the HMI applications' MQTT_API_TOPIC_MAP database: the record with the highest LevelDB sequence number for that topic in the first application store that holds it.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/system_handled/IndexedDB/*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_hmi_localstorage.py",
+      "artifacts": [
+        {
+          "key": "ford_hmi_localstorage",
+          "version": "v2",
+          "name": "Ford SYNC 4 - HMI Local Storage",
+          "description": "Values the head unit's HMI applications stored in Chromium Local Storage, with the time each write batch was recorded. Superseded versions of a key are reported alongside the current one.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/system_handled/Local Storage/leveldb/*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_installed_software.py",
+      "artifacts": [
+        {
+          "key": "ford_installed_software",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Installed Software",
+          "description": "Software packages present on the head unit, each with the package identifier, the part number, the display name, the version and the package type the unit recorded.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/alm/pacman/pacman.db*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/Ford_Model.py",
+      "artifacts": [
+        {
+          "key": "get_Model",
+          "version": "v2",
+          "name": "Ford - Bluetooth Device Name",
+          "description": "The device_name value from a Ford bluetooth_v1.ddb, reported as stored. Whether it names the vehicle model is not established.",
+          "category": "Ford Vehicles",
+          "paths": [
+            "*/bluetooth_v1.ddb"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_nav_pim.py",
+      "artifacts": [
+        {
+          "key": "ford_nav_paired_devices",
+          "version": "v2",
+          "name": "Garmin Navigation App - Paired Devices",
+          "description": "Rows of the device table in the navigation application's data_manager.sqlite, with the account rows linked to each. Unexercised: the tables were empty on the one tested extraction.",
+          "category": "Garmin Navigation App",
+          "paths": [
+            "*/com.garmin.sync.garmin-app/user-data/data_manager.sqlite*"
+          ]
+        },
+        {
+          "key": "ford_nav_call_log",
+          "version": "v2",
+          "name": "Garmin Navigation App - Call Log",
+          "description": "Rows of the call_log table in the navigation application's data_manager.sqlite, with the contact and device rows they link to. Unexercised: the table was empty on the one tested extraction.",
+          "category": "Garmin Navigation App",
+          "paths": [
+            "*/com.garmin.sync.garmin-app/user-data/data_manager.sqlite*"
+          ]
+        },
+        {
+          "key": "ford_nav_sms",
+          "version": "v2",
+          "name": "Garmin Navigation App - Messages",
+          "description": "Rows of the sms table in the navigation application's data_manager.sqlite, with the contact, conversation and device rows they link to. Unexercised: the table was empty on the one tested extraction.",
+          "category": "Garmin Navigation App",
+          "paths": [
+            "*/com.garmin.sync.garmin-app/user-data/data_manager.sqlite*"
+          ]
+        },
+        {
+          "key": "ford_nav_contacts",
+          "version": "v2",
+          "name": "Garmin Navigation App - Contacts",
+          "description": "Rows of the contact table in the navigation application's data_manager.sqlite (unexercised: empty on the one tested extraction), with their phone numbers, email addresses and postal addresses.",
+          "category": "Garmin Navigation App",
+          "paths": [
+            "*/com.garmin.sync.garmin-app/user-data/data_manager.sqlite*"
+          ]
+        },
+        {
+          "key": "ford_nav_calendar",
+          "version": "v2",
+          "name": "Garmin Navigation App - Calendar",
+          "description": "Rows of the calendar_event table in the navigation application's data_manager.sqlite, with the event_instance start and end times linked to each. Unexercised: the tables were empty on the one tested extraction.",
+          "category": "Garmin Navigation App",
+          "paths": [
+            "*/com.garmin.sync.garmin-app/user-data/data_manager.sqlite*"
+          ]
+        },
+        {
+          "key": "ford_nav_trips",
+          "version": "v2",
+          "name": "Garmin Navigation App - Trips",
+          "description": "Rows of the trips table in the navigation application's data_manager.sqlite, with their waypoints as stored. Unexercised: the table was empty on the one tested extraction.",
+          "category": "Garmin Navigation App",
+          "paths": [
+            "*/com.garmin.sync.garmin-app/user-data/data_manager.sqlite*"
+          ]
+        },
+        {
+          "key": "ford_nav_search_history",
+          "version": "v2",
+          "name": "Garmin Navigation App - Search History",
+          "description": "Rows of the search_history table in the navigation application's data_manager.sqlite. Unexercised: the table was empty on the one tested extraction.",
+          "category": "Garmin Navigation App",
+          "paths": [
+            "*/com.garmin.sync.garmin-app/user-data/data_manager.sqlite*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_nav_settings.py",
+      "artifacts": [
+        {
+          "key": "ford_nav_user_settings",
+          "version": "v2",
+          "name": "Garmin Navigation App - User Settings",
+          "description": "Settings the built-in navigation application stored against a user profile, each with the value as stored and the row's time_stamp.",
+          "category": "Garmin Navigation App",
+          "paths": [
+            "*/com.garmin.sync.garmin-app/user-data/data_manager.sqlite*"
+          ]
+        },
+        {
+          "key": "ford_nav_global_settings",
+          "version": "v2",
+          "name": "Garmin Navigation App - Global Settings",
+          "description": "Settings the built-in navigation application stored without a user profile, each with the value as stored and the row's time_stamp.",
+          "category": "Garmin Navigation App",
+          "paths": [
+            "*/com.garmin.sync.garmin-app/user-data/data_manager.sqlite*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_Phonebook.py",
+      "artifacts": [
+        {
+          "key": "get_PhoneBook",
+          "version": "v2",
+          "name": "Ford - Phonebook Contacts",
+          "description": "Phonebook contacts (name + number list) from Ford vehicles (BTPhonebook).",
+          "category": "Ford Vehicles",
+          "paths": [
+            "*/BTPhonebook*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_positioning_logs.py",
+      "artifacts": [
+        {
+          "key": "ford_nav_search_events",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Navigation Analytics Events",
+          "description": "Events from hmi.analytics lines in the head unit's fdplog.vn.txt logs, each with its phase, attributes, redacted field names and thread id.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/*fdplog.vn.txt*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_power_history.py",
+      "artifacts": [
+        {
+          "key": "ford_power_last_shutdown",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Last Shutdown",
+          "description": "The shutdown the head unit recorded most recently, with the boot count, the time, the uptime for that cycle and the initiator and reason it stored.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/fordlogs/sm/last-shutdown.txt"
+          ]
+        },
+        {
+          "key": "ford_power_reset_reason",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Last Reset Reason",
+          "description": "The reset the head unit recorded most recently in its own reset reason file, with the boot count, the time, and the initiator and reason it stored.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/fordlogs/sm/reset-reason.txt"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_sync4_platform_log.py",
+      "artifacts": [
+        {
+          "key": "ford_sync4_charge_locations",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Charge Locations In Log",
+          "description": "Charge locations named in the platform log's charge settings lines: the list the line belongs to, the location id and the latitude and longitude it carries, with the first and last time each was logged.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        },
+        {
+          "key": "ford_sync4_nav_searches",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Navigation Searches In Log",
+          "description": "Navigation searches named in the platform log's analytics lines, one row per search id, with the search type and options, the number of result lines, the provider and the logged duration.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        },
+        {
+          "key": "ford_sync4_positions",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Positions In Log",
+          "description": "Positions in the platform log's lbs component lines, each with its log time, the kind of line it came from and the result, altitude or heading the line states.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        },
+        {
+          "key": "ford_sync4_wifi_access_points",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Wi-Fi Access Points In Log",
+          "description": "Wi-Fi access points named in the platform log's CM component scan result lines, one row for each network name and address, with the first and last time it was logged, the number of lines, the strongest signal and the channels.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        },
+        {
+          "key": "ford_sync4_vehicle_signals",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Vehicle Signals In Log",
+          "description": "Vehicle signal lines in the platform log: door status, gear position, odometer value, current street, ignition with driver door, tire pressures, driver distraction state and the odometer in a vehicle data notification, each with its log time and the values the line states.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        },
+        {
+          "key": "ford_sync4_power_events",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Power Manager Events In Log",
+          "description": "Power manager lines in the platform log that name an event: ignition, engine off, door ajar and the other events the line names, CAN event lines, the ignition status and the remote start status, each with its log time and the value the line states.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        },
+        {
+          "key": "ford_sync4_battery_voltage",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Battery Voltage Lines In Log",
+          "description": "Battery voltage lines the power manager wrote to the platform log, each with its log time and the three numbers the line states.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        },
+        {
+          "key": "ford_sync4_phone_status",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Bluetooth Phone Status In Log",
+          "description": "Bluetooth phone status lines in the platform log: the phone status line with its seven numbers, the Bluetooth radio status event line, the connected phone notification and the number of phone devices, each with its log time.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        },
+        {
+          "key": "ford_sync4_sirius_channel",
+          "version": "v2",
+          "name": "Ford SYNC 4 - SiriusXM Channel Lines In Log",
+          "description": "SiriusXM lines in the platform log that name a channel: the current channel line and the connectivity banner line with its chn# value, each with its log time.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        },
+        {
+          "key": "ford_sync4_network_lines",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Network Lines In Log",
+          "description": "Network lines in the platform log: the wlan.dcs lines that state an interface name and a MAC address, and the network up and down lines with the IP address they state, each with its log time.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        },
+        {
+          "key": "ford_sync4_update_packages",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Package Transfers In Log",
+          "description": "Packages named in three lines of the platform log's cpm component, one row per package id, with the first and last log time, the total bytes and highest percentage of its transfer progress lines, the states logged and the number of checksum verified lines.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        },
+        {
+          "key": "ford_sync4_profile_lines",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Personal Profile Lines In Log",
+          "description": "Personal profile lines in the platform log, one row for each run of lines that state the same values, with the first and last log time of the run and the number of lines.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/rwdata/logs/*fdplog*.txt*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv",
+            "*/DiskImages/mmcblk0.img"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_sync4_power_logs.py",
+      "artifacts": [
+        {
+          "key": "ford_sync4_reset_history",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Reset History",
+          "description": "One row for each boot in the stability monitor's reset history: when the reset ended, when the previous shutdown was logged, the wake source text, and the reset type, initiator and reason the file states.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/fordlogs/sm/reset-history.txt*"
+          ]
+        },
+        {
+          "key": "ford_sync4_stability_events",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Stability Monitor Events",
+          "description": "Lines of the stability monitor's log: boot cycle starts, ignition and power level changes, suspends, shutdowns, resets and faults, each with its clock reading, seconds since boot and boot cycle.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/fordlogs/sm/smlog*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_sync4_web_app_storage.py",
+      "artifacts": [
+        {
+          "key": "ford_sync4_web_app_storage",
+          "version": "v2",
+          "name": "Ford SYNC 4 - Web Application Storage Use",
+          "description": "One row for each web application's storage bucket: the application folder, the use count and the last accessed and last modified times its quota database stores.",
+          "category": "Ford SYNC 4",
+          "paths": [
+            "*/system_handled/QuotaManager"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_sync_bluetooth.py",
+      "artifacts": [
+        {
+          "key": "ford_sync_bt_contacts",
+          "version": "v2",
+          "name": "Ford SYNC Gen3 - Bluetooth Phonebook",
+          "description": "Contacts in the head unit's numbered PhoneBook tables, with the names, the phone numbers the record carried, email and postal address as stored. One row per contact per table number, shown as Table Number.",
+          "category": "Ford SYNC Gen3",
+          "paths": [
+            "*/BT/btpbk*"
+          ]
+        },
+        {
+          "key": "ford_sync_bt_calls",
+          "version": "v2",
+          "name": "Ford SYNC Gen3 - Bluetooth Call History",
+          "description": "Rows of the head unit's numbered Combined tables, with the call time assembled from the stored components, the direction, and the name and number the record carried.",
+          "category": "Ford SYNC Gen3",
+          "paths": [
+            "*/BT/btpbk*"
+          ]
+        },
+        {
+          "key": "ford_sync_bt_paired_devices",
+          "version": "v2",
+          "name": "Ford SYNC Gen3 - Bluetooth Paired Devices",
+          "description": "Rows of the head unit's PairedDevInfo table, with the name, model, manufacturer, network name, software version, Bluetooth address and subscriber number stored in each.",
+          "category": "Ford SYNC Gen3",
+          "paths": [
+            "*/BT/btpersist*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_sync_policy_table.py",
+      "artifacts": [
+        {
+          "key": "ford_sync_policy_table_values",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Policy Table Snapshot Values",
+          "description": "Values the unit filled into its policy table snapshots: the module identity and exchange counters, vehicle make, model and year, usage and error counts for the module and for each application id, and the device entries with their consent records.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/syncP_Transfer/PolicyTableSnapShot_*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_sync_wince.py",
+      "artifacts": [
+        {
+          "key": "ford_sync_wince_call_history",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Call History",
+          "description": "Entries of the three call lists the module keeps for each handset, with the name and number stored in each entry, its position in the list, and the call time where the entry carries one.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/phonebook/CH*.xml*"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_phonebook",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Phonebook",
+          "description": "Contacts in the phonebook files the module keeps for each handset, with the name and the phone numbers stored for each contact.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/phonebook/PB*"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_persistent_phonebook",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Persistent Phonebook Names",
+          "description": "Contact names in the plain-text name list the module keeps for a handset, one name a line, with the handset address from the file name.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/phonebook/persistentPhonebook_*"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_text_messages",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Text Messages",
+          "description": "Text message records the module stored for each handset, with the message time, the phone number, the name and the message text held in each record.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/TextMsgApp/TextMessages_*"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_media_sources",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Media Sources",
+          "description": "The media source the module cached in each source slot: the source's name and the identifier string stored with it, such as a USB device's serial and manufacturer or a Bluetooth handset's address.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/MediaCache/Source_*.dat*"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_log_paired_devices",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Paired Devices In Log",
+          "description": "Paired device lines from the module's debug log, one row per distinct device line per log file, with the device name, handset address, device number, primary value, pair order and how many lines repeated it.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_log_phone_connections",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Phone Connections In Log",
+          "description": "Phone connect and disconnect lines from the module's debug log, with the device name and handset address in each line, its tick and line number, and the last log save clock reading above it.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_log_gps_positions",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - GPS Positions In Log",
+          "description": "GPS readings written into the module's message log (MsgLog), one row per line: the latitude and longitude fields as the line states them, a decimal value derived from each, and the altitude, heading, speed and satellite fields as stored.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_log_odometer",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Odometer Readings In Log",
+          "description": "Odometer values the module's debug log recorded, one row per distinct value per log file, with both numbers the line carries and how many lines repeated them.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_log_clock_readings",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Log Save Clock Readings",
+          "description": "The wall clock readings in the module's debug log: one row per 'start saving retailmsg' line, with the clock value the line states, its tick and its line number.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_unit_info",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Unit Information",
+          "description": "Identifying values the module's debug log states: the VIN in VinService lines and the software build string in Build Information lines, one row per distinct value per log file.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_sync_wince_events.py",
+      "artifacts": [
+        {
+          "key": "ford_sync_wince_log_events",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Log Events",
+          "description": "Door, gear position, park lamp, ignition, odometer, reboot source, USB attach and phone connection lines from the module's debug log, read from the log files and from the raw partition image, each with its tick count, a clock derived from the nearest line that states a date and time, and where in the image it was found.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL",
+            "*/DiskImages/partition*.img"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_log_phone_lines",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Phone Connection Lines In Log",
+          "description": "Lines of the module's log that name a phone connection attempt, a connected HFP port or a disconnected one, in the log's own terms, read from the log files and the raw partition image, each with its tick count, a clock derived from the nearest line that states a date and time, and where in the image it was found.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL",
+            "*/DiskImages/partition*.img"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_log_paired_device_lines",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Paired Device Lines In Log",
+          "description": "Entries of the paired device list the module writes into its log, read from the log files and the raw partition image: one row per distinct entry, with the device name, device address, device number, the active and primary values and pair order on the line, how many times its line was found across the sources and where in the image.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL",
+            "*/DiskImages/partition*.img"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_log_device_activity_lines",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Device Activity Lines In Log",
+          "description": "Lines of the module's log that record a Bluetooth device being activated or deactivated, a call list file being saved for a device, and the emergency assist code logging a phone connect or disconnect status event, read from the log files and the raw partition image, each with its tick count, a derived clock and where in the image it was found.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL",
+            "*/DiskImages/partition*.img"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_log_power_lines",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Power Lines In Log",
+          "description": "Lines of the module's log that record a power state being started and, on the tested SYNC Gen1 version 5 unit, a change in the system state the log spells out in six named fields (sysRunSt, HmiSt, SysReady, IgnSt, PwrMode and DrvDstr, as the log writes them), read from the log files and the raw partition image, each with its tick count, a derived clock and where in the image it was found.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL",
+            "*/DiskImages/partition*.img"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_log_clock_lines",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Clock Lines In Log",
+          "description": "Lines of the module's log that state a date and time, one row per line: the log save line and, on SYNC Gen2, the clock service line, read from the log files and the raw partition image, with the tick count and where in the image the line was found.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/LogFiles/MsgLog*.txt*",
+            "*/Windows/DumpFiles/*.RTL",
+            "*/DiskImages/partition*.img"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_flash_call_history",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Call History In Flash Image",
+          "description": "Call list entries read from the call list documents in the module's raw NAND image, with the list, name, number and call time of each entry and how many documents in the image hold it.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/LargeOutputFiles/image.nbo"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_partition_call_history",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Call History In Partition Image",
+          "description": "Call list entries read from the call list documents in an exFAT partition image of the module, with the list, name, number and call time of each entry, how many documents hold it, and whether those documents sit in a listed file, in an allocated cluster no listed file holds, or in a free cluster.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/DiskImages/partition*.img"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_sync_wince_gen2.py",
+      "artifacts": [
+        {
+          "key": "ford_sync_wince_gen2_text_messages",
+          "version": "v2",
+          "name": "Ford SYNC WinCE Gen2 - Text Messages",
+          "description": "Rows of the text message store the module keeps for each handset, with the message time, the address, name and body stored in each row and the read status as stored.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/UserData/SMS_*.db*"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_gen2_wifi_networks",
+          "version": "v2",
+          "name": "Ford SYNC WinCE Gen2 - Wi-Fi Network List",
+          "description": "Rows of the module's Wi-Fi network list, with the network name, access point address, stored location text, signal strength and priority of each network.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/UserData/WiFiList.db*"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_gen2_profile_settings",
+          "version": "v2",
+          "name": "Ford SYNC WinCE Gen2 - Profile Settings",
+          "description": "Rows of the module's profile settings table, with each feature name and stored value beside the value the DefaultUser.db in the same folder holds for that feature.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/UserData/Profiles/*.db*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_sync_wince_registry.py",
+      "artifacts": [
+        {
+          "key": "ford_sync_wince_registry_bt_devices",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Registry Bluetooth Devices",
+          "description": "Bluetooth devices named in the module's registry hive, one row per device address, with the device name, pair time, phone make and model strings and connection settings stored under it.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Documents and Settings/*.hv"
+          ]
+        },
+        {
+          "key": "ford_sync_wince_registry_values",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Registry Values",
+          "description": "Values read from the module's registry hive files, each with its key path, name, stored type number and data.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Documents and Settings/*.hv"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_sync_wince_voice_cache.py",
+      "artifacts": [
+        {
+          "key": "ford_sync_wince_voice_name_cache",
+          "version": "v2",
+          "name": "Ford SYNC WinCE - Voice Name Cache",
+          "description": "Names in the cache the module's speech recogniser keeps for person names, each with the string stored with it, its entry number and its position in the file.",
+          "category": "Ford SYNC WinCE",
+          "paths": [
+            "*/Windows/*_ddg2p_person_name_cache.cac"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/ford_vin_info.py",
+      "artifacts": [
+        {
+          "key": "get_info",
+          "version": "v2",
+          "name": "Ford - VIN",
+          "description": "Vehicle Identification Number(s) from a Ford vin.txt.",
+          "category": "Ford Vehicles",
+          "paths": [
+            "*/vin.txt"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/gm_bosch_hmi.py",
+      "artifacts": [
+        {
+          "key": "gm_bosch_hmi_bt_devices",
+          "version": "v2",
+          "name": "GM Bosch HMI - Bluetooth Devices",
+          "description": "Rows of the head unit's Bluetooth device table, with the device name and address, the paired and last connected clock readings, and the voice mail number and USB-style vendor and product identifiers the row carries.",
+          "category": "GM Bosch HMI",
+          "paths": [
+            "*/connectivity/connectivity_mw/bluetooth.db*",
+            "*/telematics/bluetoothdb/fc_bluetooth.db*"
+          ]
+        },
+        {
+          "key": "gm_bosch_hmi_contacts",
+          "version": "v2",
+          "name": "GM Bosch HMI - Phonebook Contacts",
+          "description": "Contacts in the head unit's per-device phonebook tables, with names, phone numbers, emails, postal addresses and the contact photo when the row holds one. Includes rows read from the database's freelist pages, marked in Record Source.",
+          "category": "GM Bosch HMI",
+          "paths": [
+            "*/connectivity/connectivity_mw/phonebook.db*",
+            "*/telematics/addressdb/phonebook.db*"
+          ]
+        },
+        {
+          "key": "gm_bosch_hmi_call_history",
+          "version": "v2",
+          "name": "GM Bosch HMI - Call History",
+          "description": "Call history rows from the head unit's phonebook database, with the call clock reading, the call type, and the name and number the row carried. On the six tested units the rows came from the database's freelist pages and the call tables themselves were empty.",
+          "category": "GM Bosch HMI",
+          "paths": [
+            "*/connectivity/connectivity_mw/phonebook.db*",
+            "*/telematics/addressdb/phonebook.db*"
+          ]
+        },
+        {
+          "key": "gm_bosch_hmi_media_devices",
+          "version": "v2",
+          "name": "GM Bosch HMI - Media Devices",
+          "description": "Rows of the media player's device table: USB, Bluetooth audio and other media sources the unit recorded, with the last connected clock reading, the device name, identifier, serial number and connection count.",
+          "category": "GM Bosch HMI",
+          "paths": [
+            "*/media/db/MyMedia.db*"
+          ]
+        },
+        {
+          "key": "gm_bosch_hmi_projection_devices",
+          "version": "v2",
+          "name": "GM Bosch HMI - Phone Projection Device History",
+          "description": "Rows of the smartphone-integration device history table, with the device name and manufacturer stored in each, and the category, type and support values as stored.",
+          "category": "GM Bosch HMI",
+          "paths": [
+            "*/spi/DeviceHistory.db*"
+          ]
+        },
+        {
+          "key": "gm_bosch_hmi_nav_recent_destinations",
+          "version": "v2",
+          "name": "GM Bosch HMI - Navigation Recent Destinations",
+          "description": "Rows of the navigation unit's recent destination memory, with the access clock reading as Timestamp, the destination name and address parts, and the stored coordinates.",
+          "category": "GM Bosch HMI",
+          "paths": [
+            "*/navstorage/navstore.db*"
+          ]
+        },
+        {
+          "key": "gm_bosch_hmi_nav_address_entries",
+          "version": "v2",
+          "name": "GM Bosch HMI - Navigation Address Entries",
+          "description": "Dated rows of the navigation unit's autocomplete table: address text with the access clock reading and the stored entry type.",
+          "category": "GM Bosch HMI",
+          "paths": [
+            "*/navstorage/navstore.db*"
+          ]
+        },
+        {
+          "key": "gm_bosch_hmi_custom_messages",
+          "version": "v2",
+          "name": "GM Bosch HMI - Added Predefined Messages",
+          "description": "Rows of the predefined text message table whose creation type differs from the value the unit's stock messages carry.",
+          "category": "GM Bosch HMI",
+          "paths": [
+            "*/connectivity/connectivity_mw/messaging.db*",
+            "*/telematics/messagingdb/fc_messaging.db*"
+          ]
+        },
+        {
+          "key": "gm_bosch_hmi_voice_recordings",
+          "version": "v2",
+          "name": "GM Bosch HMI - Voice Command Recordings",
+          "description": "Audio capture files the speech interaction logger left on the unit, with the clock reading in each file name, the file size and the audio wrapped so it can be played.",
+          "category": "GM Bosch HMI",
+          "paths": [
+            "*/interactionlogger/pcm_recordings/record*.pcm*"
+          ]
+        },
+        {
+          "key": "gm_bosch_hmi_iapps_devices",
+          "version": "v2",
+          "name": "GM Bosch HMI - Internet Apps Device Table",
+          "description": "Rows of the internet applications database's device table: a device address with the type, last connected value and phone number stored beside it.",
+          "category": "GM Bosch HMI",
+          "paths": [
+            "*/internet/database/IAdatabase.db*"
+          ]
+        },
+        {
+          "key": "gm_bosch_hmi_unit_info",
+          "version": "v2",
+          "name": "GM Bosch HMI - Unit Information",
+          "description": "Identifiers and software versions the head unit stores: the learned VIN, the unit's Bluetooth address, software and build version strings, the Bosch part number and the last connected network name.",
+          "category": "GM Bosch HMI",
+          "paths": [
+            "*/ffs/LearnedVIN*",
+            "*/bosch_gm_version.txt*",
+            "*/gm_version.txt*",
+            "*/rfs_version.txt*",
+            "*/lmm_pers/buildversion.reg*",
+            "*/boschpn.txt*",
+            "*/connectivity/connectivity_mw/bluetooth.db*",
+            "*/telematics/bluetoothdb/fc_bluetooth.db*",
+            "*/media/db/MyMedia.db*",
+            "*/internet/database/IAdatabase.db*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/gm_ga130.py",
+      "artifacts": [
+        {
+          "key": "gm_ga130_phonebook",
+          "version": "v2",
+          "name": "GM GA-130 - Bluetooth Phonebook",
+          "description": "Contacts in the radio's numbered Bluetooth phonebook tables and on the database's freelist pages, with the sort name, first and last name, the phone numbers and their stored types, the postal address the row carries, and whether the row is a table row or a freelist row.",
+          "category": "GM GA-130",
+          "paths": [
+            "*/storage/NPS/BT_MID/phonebook*"
+          ]
+        },
+        {
+          "key": "gm_ga130_call_history",
+          "version": "v2",
+          "name": "GM GA-130 - Bluetooth Call History",
+          "description": "Rows of the radio's numbered received, dialled and missed call tables, with the call clock reading, the name and number the row carries, and which table it came from.",
+          "category": "GM GA-130",
+          "paths": [
+            "*/storage/NPS/BT_MID/phonebook*"
+          ]
+        },
+        {
+          "key": "gm_ga130_address_book",
+          "version": "v2",
+          "name": "GM GA-130 - Address Book",
+          "description": "Entries of the radio's numbered address book databases, with the name, the cell, home, work and other phone numbers and the postal address each entry carries.",
+          "category": "GM GA-130",
+          "paths": [
+            "*/HMI_DB/pasa_addressbook_data*.db*"
+          ]
+        },
+        {
+          "key": "gm_ga130_media_stores",
+          "version": "v2",
+          "name": "GM GA-130 - Media Stores",
+          "description": "Rows of the media engine's media store table: the phones, players and USB storage the radio registered, with the name and identifier of each and the last seen and last sync times.",
+          "category": "GM GA-130",
+          "paths": [
+            "*/storage/bk*/mme*"
+          ]
+        },
+        {
+          "key": "gm_ga130_played_media",
+          "version": "v2",
+          "name": "GM GA-130 - Played Media",
+          "description": "Tracks in the media engine's library that carry a last played time or a play count, with the title, file name, the media store they belong to and those values.",
+          "category": "GM GA-130",
+          "paths": [
+            "*/storage/bk*/mme*"
+          ]
+        },
+        {
+          "key": "gm_ga130_library_entry_times",
+          "version": "v2",
+          "name": "GM GA-130 - Media Library Entry Times",
+          "description": "Times the media engine stamped on its library entries, grouped: one row per database file, media store and date_added second, with how many entries carry it and the earliest and latest last_sync among them.",
+          "category": "GM GA-130",
+          "paths": [
+            "*/storage/bk*/mme*"
+          ]
+        },
+        {
+          "key": "gm_ga130_media_index",
+          "version": "v2",
+          "name": "GM GA-130 - Media Name Index",
+          "description": "Song names with the artist, album and genre the index links them to, and playlist names, from the radio's numbered media name databases.",
+          "category": "GM GA-130",
+          "paths": [
+            "*/HMI_DB/pasa_media_data*.db*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/gm_onstar_flash_image.py",
+      "artifacts": [
+        {
+          "key": "gm_onstar_flash_gps_track",
+          "version": "v2",
+          "name": "GM OnStar Flash Image - GPS Track",
+          "description": "Position records found in a GM OnStar module's raw flash image, one per second, with the time, latitude, longitude, speed and heading of each record.",
+          "category": "GM OnStar Flash Image",
+          "paths": [
+            "*/LargeOutputFiles/image.bin"
+          ]
+        },
+        {
+          "key": "gm_onstar_flash_nav_destinations",
+          "version": "v2",
+          "name": "GM OnStar Flash Image - Navigation Destinations",
+          "description": "Navigation destination lines found in a GM OnStar module's raw flash image, with the log time and the latitude and longitude each line states.",
+          "category": "GM OnStar Flash Image",
+          "paths": [
+            "*/LargeOutputFiles/image.bin"
+          ]
+        },
+        {
+          "key": "gm_onstar_flash_nav_guidance",
+          "version": "v2",
+          "name": "GM OnStar Flash Image - Navigation Guidance Prompts",
+          "description": "Turn-by-turn guidance prompt lines found in a GM OnStar module's raw flash image, with the log time, the maneuver, the street named and the distance text of each prompt.",
+          "category": "GM OnStar Flash Image",
+          "paths": [
+            "*/LargeOutputFiles/image.bin"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/gm_onstar_lg.py",
+      "artifacts": [
+        {
+          "key": "gm_onstar_lg_bt_devices",
+          "version": "v2",
+          "name": "GM OnStar LG Gen9 - Bluetooth Devices",
+          "description": "The Bluetooth device slots the telematics module stores, with the device number, name and Bluetooth address held in each occupied slot.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/sysinfo/BT.dat*",
+            "*/$Deleted/*/BT.dat.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_phonebook",
+          "version": "v2",
+          "name": "GM OnStar LG Gen9 - Phonebook",
+          "description": "Contacts in the phonebook file the telematics module keeps for each Bluetooth device number, with the last name, first name and the home, work, mobile and other numbers stored for each contact.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/var/BTfeature/phone*.pb*",
+            "*/BTpb/phone*.pb*",
+            "*/$Deleted/*/phone*.pb.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_gps_reports",
+          "version": "v2",
+          "name": "GM OnStar LG Gen10 - GPS Reports",
+          "description": "GPS reports the telematics module stored, with the UTC time, latitude and longitude of each report and the elevation, speed, course, dilution of precision and satellite count stored with it.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/sysinfo/*.dat*",
+            "*/DiskImages/NORimage.bin",
+            "*/$Deleted/*/*.dat.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_power_off_log",
+          "version": "v2",
+          "name": "GM OnStar LG - Power Off Log",
+          "description": "Power-off records the telematics module wrote, one per poweroff.log file, with the clock reading in the record and the two numbers that follow it.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/log/poweroff.log*",
+            "*/$Deleted/*/poweroff.log.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_stored_values",
+          "version": "v2",
+          "name": "GM OnStar LG Gen10 - Stored Values",
+          "description": "Selected values from the generation 10 module's text state files: the redial and recall numbers, the module's own mobile numbers, destination coordinates and text, stolen-vehicle and dealer values, and the unit expiry date, each with the save time of the document it came from.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/sysinfo/*.dat*",
+            "*/DiskImages/NORimage.bin",
+            "*/$Deleted/*/*.dat.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_gps_track",
+          "version": "v2",
+          "name": "GM OnStar LG Gen9 - GPS Track",
+          "description": "Position records the telematics module's navigation storage holds, one per second, with the time, latitude, longitude, speed and heading of each record.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/storage/gps*",
+            "*/$Deleted/*/gps.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_nav_destinations",
+          "version": "v2",
+          "name": "GM OnStar LG Gen9 - Navigation Destinations",
+          "description": "Destination lines from the telematics module's turn-by-turn navigation log, with the log time and the latitude and longitude the line states.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/storage/flight*",
+            "*/$Deleted/*/flight.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_nav_guidance",
+          "version": "v2",
+          "name": "GM OnStar LG Gen9 - Navigation Guidance Prompts",
+          "description": "Guidance prompt lines from the telematics module's turn-by-turn navigation log, with the log time, the maneuver, the street named and the distance text of each prompt.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/storage/flight*",
+            "*/$Deleted/*/flight.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_nav_clip_names",
+          "version": "v2",
+          "name": "GM OnStar LG Gen9 - Navigation Clip Names",
+          "description": "Clip names listed in the Dyn Clips lines of the telematics module's turn-by-turn navigation log: the clip number and the text stored for it, with the line's log time and the clip's position in the line.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/storage/flight*",
+            "*/$Deleted/*/flight.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_embedded_phone_numbers",
+          "version": "v2",
+          "name": "GM OnStar LG Gen9 - Embedded Phone Stored Numbers",
+          "description": "Phone numbers held in two fixed fields of the telematics module's phone state file: one single-number field and one list of up to twenty numbers.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/sysinfo/phone.dat*",
+            "*/$Deleted/*/phone.dat.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_trouble_codes",
+          "version": "v2",
+          "name": "GM OnStar LG Gen10 - Trouble Code Entries",
+          "description": "Entries of the trouble code table in a generation 10 module's dtc.dat state file, one row for each index, code, symptom and state stored together, with the earliest and latest TimeStamp of the documents that held it.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/dtc.dat*",
+            "*/DiskImages/NORimage.bin",
+            "*/$Deleted/*/dtc.dat.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_unit_info",
+          "version": "v2",
+          "name": "GM OnStar LG - Unit Information",
+          "description": "Identifiers and versions the telematics module stores: the VIN, the device id, the assembly label code, the software version lines and the network interface address.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/var/ver.txt*",
+            "*/var/fac/ver_*.txt*",
+            "*/DevInfo/DevId*",
+            "*/DevInfo/Ext/VIN*",
+            "*/sysinfo/vifdata.dat*",
+            "*/sysinfo/tcuid.dat*",
+            "*/rr_db.dat*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_route_destinations",
+          "version": "v2",
+          "name": "GM OnStar LG Gen9 - Route File Destinations",
+          "description": "The address block of a downloaded route file: a position with the house number and street name stored after it.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/obn/storage/ViamotoRoute.mem*",
+            "*/route/ViamotoRoute.mem*",
+            "*/$Deleted/*/ViamotoRoute.mem.deleted-*"
+          ]
+        },
+        {
+          "key": "gm_onstar_lg_route_maneuvers",
+          "version": "v2",
+          "name": "GM OnStar LG Gen9 - Route File Maneuver Points",
+          "description": "Positions with road names from a downloaded route file, in file order, with the two numbers stored between each position and its name.",
+          "category": "GM OnStar LG",
+          "paths": [
+            "*/obn/storage/ViamotoRoute.mem*",
+            "*/route/ViamotoRoute.mem*",
+            "*/$Deleted/*/ViamotoRoute.mem.deleted-*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/gnss_receiver_files.py",
+      "artifacts": [
+        {
+          "key": "gnss_receiver_stored_position",
+          "version": "v2",
+          "name": "GNSS Receiver Files - Stored Position",
+          "description": "The position stored in the GNSS receiver's position file, with the time in the file's header.",
+          "category": "GNSS Receiver Files",
+          "paths": [
+            "*/NAV/gnss/GPSPosFile"
+          ]
+        },
+        {
+          "key": "gnss_receiver_file_times",
+          "version": "v2",
+          "name": "GNSS Receiver Files - File Header Times",
+          "description": "The header time of each GNSS receiver state file: almanac, ephemeris, clock, ionosphere, UTC, oscillator, position and health files.",
+          "category": "GNSS Receiver Files",
+          "paths": [
+            "*/NAV/gnss/*File"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/hyundai_callHistory.py",
+      "artifacts": [
+        {
+          "key": "hyundaiCallHistory",
+          "version": "v2",
+          "name": "Hyundai - Call History",
+          "description": "Bluetooth call history per connected phone from Hyundai/Kia infotainment CH_{mac}.db databases.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/bluetooth/DB_BMS/CH_*.db*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/hyundai_contacts.py",
+      "artifacts": [
+        {
+          "key": "hyundaiContacts",
+          "version": "v2",
+          "name": "Hyundai - Bluetooth Contacts",
+          "description": "Bluetooth contacts per connected phone from Hyundai/Kia infotainment MC_{mac}.db databases.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/bluetooth/DB_BMS/MC_*.db*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/hyundai_devices.py",
+      "artifacts": [
+        {
+          "key": "hyundaiDevices",
+          "version": "v2",
+          "name": "Hyundai - Bluetooth Paired Devices",
+          "description": "Bluetooth device MAC addresses and friendly names from Hyundai/Kia wireless_dev_list.dat.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/wireless_dev_list.dat"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/hyundai_infotainment.py",
+      "artifacts": [
+        {
+          "key": "hyundaiInfotainment",
+          "version": "v2",
+          "name": "Hyundai - Infotainment Data",
+          "description": "Key=value lines from a Hyundai wifi/settings file. Lines containing a square bracket and lines that do not hold exactly one \"=\" are not reported.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/wifi/settings"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/logparser.py",
+      "artifacts": [
+        {
+          "key": "logparser",
+          "version": "v2",
+          "name": "RAM - GPS Locations from Logs",
+          "description": "GPS locations (KONA-LIB LocationDistributor) parsed from RAM 1500 persistent logs.",
+          "category": "RAM Vehicles",
+          "paths": [
+            "*/persistentLogs/*/Log*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/mediaService.py",
+      "artifacts": [
+        {
+          "key": "mediaService",
+          "version": "v2",
+          "name": "Ford - Media Service",
+          "description": "Rows of the mediastores table in a Ford SYNC mediaservice_db. The attached, active_onshutdown and remote columns are shown as Yes for 1, No for 0 and \"Not Specified\" otherwise.",
+          "category": "Ford Vehicles",
+          "paths": [
+            "*/mediaservice_db*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/nissan_08it.py",
+      "artifacts": [
+        {
+          "key": "nissan_08it_call_logs",
+          "version": "v2",
+          "name": "Nissan 08IT - Call Logs",
+          "description": "Entries of the incoming, outgoing and missed call files the head unit keeps for each handset, with the call clock reading, the phone number and, on generation 8000, the name stored in each entry.",
+          "category": "Nissan 08IT",
+          "paths": [
+            "*/TEL/CALLLOGS/f_*"
+          ]
+        },
+        {
+          "key": "nissan_08it_phone_memory",
+          "version": "v2",
+          "name": "Nissan 08IT - Handset Phonebook",
+          "description": "Entries of the phonebook file the head unit keeps for each handset, with the name and the phone numbers stored in each entry.",
+          "category": "Nissan 08IT",
+          "paths": [
+            "*/TEL/HF_MEMORY/f_hf_memory*"
+          ]
+        },
+        {
+          "key": "nissan_08it_devices",
+          "version": "v2",
+          "name": "Nissan 08IT - Bluetooth Device Table",
+          "description": "Slots of the head unit's Bluetooth device table, with the handset address stored in each occupied slot and, on generation 8000, the device name.",
+          "category": "Nissan 08IT",
+          "paths": [
+            "*/TEL/INFO/f_info.txt*",
+            "*/TEL/INFO/f_phonebookinfo.txt*"
+          ]
+        },
+        {
+          "key": "nissan_08it_gps_track",
+          "version": "v2",
+          "name": "Nissan 08IT - GPS Track",
+          "description": "Position records from the head unit's compressed location logs, one per second while a log was being written, with the time, latitude and longitude of each record.",
+          "category": "Nissan 08IT",
+          "paths": [
+            "*/DEBUG/LOC/LOC_DS*.log*"
+          ]
+        },
+        {
+          "key": "nissan_08it_gps_logs",
+          "version": "v2",
+          "name": "Nissan 08IT - GPS Log Summary",
+          "description": "One row per compressed location log, with the time and position of its first and last position record and the number of position records it holds.",
+          "category": "Nissan 08IT",
+          "paths": [
+            "*/DEBUG/LOC/LOC_DS*.log*"
+          ]
+        },
+        {
+          "key": "nissan_08it_media_file_list",
+          "version": "v2",
+          "name": "Nissan 08IT - Media File List",
+          "description": "File names in the fixed-record media file lists the unit keeps under its USBA, USBV and DATACD folders, with each name's position and the number stored after it.",
+          "category": "Nissan 08IT",
+          "paths": [
+            "*/USBA/file.lst*",
+            "*/USBV/file.lst*",
+            "*/DATACD/file.lst*"
+          ]
+        },
+        {
+          "key": "nissan_08it_music_library",
+          "version": "v2",
+          "name": "Nissan 08IT - Music Library Tracks",
+          "description": "Track records of the unit's music library file: the title, the path of the audio file on the hard disk, a stored date and time and a second stored date with the number that follows it.",
+          "category": "Nissan 08IT",
+          "paths": [
+            "*/USER/CLIB/cl.dtb*"
+          ]
+        },
+        {
+          "key": "nissan_08it_music_library_albums",
+          "version": "v2",
+          "name": "Nissan 08IT - Music Library Albums",
+          "description": "Album records of the unit's music library file: the album name, a stored date and time and the count the record stores.",
+          "category": "Nissan 08IT",
+          "paths": [
+            "*/USER/CLIB/cl.dtb*"
+          ]
+        },
+        {
+          "key": "nissan_08it_disc_titles",
+          "version": "v2",
+          "name": "Nissan 08IT - Disc Title Records",
+          "description": "Disc records of the unit's title store: the album, album artist and year stored for a disc and the title and artist stored for each of its tracks.",
+          "category": "Nissan 08IT",
+          "paths": [
+            "*/USER/CUSTOM/*.edb*"
+          ]
+        },
+        {
+          "key": "nissan_08it_navigation_backup_records",
+          "version": "v2",
+          "name": "Nissan 08IT - Navigation Backup Records",
+          "description": "Named records of the unit's navigation backup files: the text stored in each record, which on the tested unit read as place names and street addresses, the date the record carries, and three numeric fields of the record, shown as stored, whose meaning is not established.",
+          "category": "Nissan 08IT",
+          "paths": [
+            "*/BUP/*BACKUP.CUR*",
+            "*/BUP/*BACKUP.PRE*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/nuance_vca_devices.py",
+      "artifacts": [
+        {
+          "key": "nuance_vca_devices",
+          "version": "v2",
+          "name": "Nuance VCA - Devices",
+          "description": "Rows of the voice-control device table, with the device name and Bluetooth address stored in each row and the type, media type and status values as stored.",
+          "category": "Nuance VCA",
+          "paths": [
+            "*/Nuance/VCA/device.sqlite*"
+          ]
+        },
+        {
+          "key": "nuance_vca_phonebook",
+          "version": "v2",
+          "name": "Nuance VCA - Handset Phonebook",
+          "description": "Contacts in the voice-control phonebook database kept for each handset, with the first name, last name, email, phone number and the number type text the database stores.",
+          "category": "Nuance VCA",
+          "paths": [
+            "*/Nuance/VCA/PhoneBook_*.sqlite*",
+            "*/$Deleted/*/PhoneBook_*.sqlite.deleted-*",
+            "*/Nuance/VCA/phone????????????_*.sqlite*"
+          ]
+        },
+        {
+          "key": "nuance_vca_media_library",
+          "version": "v2",
+          "name": "Nuance VCA - Media Library Entries",
+          "description": "Track, artist, album and playlist names in the voice-control media databases kept for each media source, with the source number from the file name.",
+          "category": "Nuance VCA",
+          "paths": [
+            "*/Nuance/VCA/[Mm]edia[0-9]*"
+          ]
+        },
+        {
+          "key": "nuance_vca_media_sources",
+          "version": "v2",
+          "name": "Nuance VCA - Media Source Info",
+          "description": "The info row of a voice-control media database: the media source's name, identifier, manufacturer, firmware and the item counts stored for it.",
+          "category": "Nuance VCA",
+          "paths": [
+            "*/Nuance/VCA/[Mm]edia[0-9]*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/nvcaContacts.py",
+      "artifacts": [
+        {
+          "key": "nvcaContacts",
+          "version": "v2",
+          "name": "Nuance VCA - Contacts",
+          "description": "Contacts with phone numbers from a Nuance VCA phone database (NuanceVCAdb/Phone*.sqlite).",
+          "category": "Nuance VCA",
+          "paths": [
+            "*/Nuance/NuanceVCAdb/Phone*.sqlite*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/pasDeGeo.py",
+      "artifacts": [
+        {
+          "key": "pasDeGeoDevLoc",
+          "version": "v2",
+          "name": "PAS Debug Log - Dev Loc Results",
+          "description": "Latitude, longitude, altitude and heading from NAV_FRAMEWORK_IF dev_loc_results lines (altitude as logged; its unit is not established) in a Ford pas_debug.log.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/fordlogs/pas_debug.log*"
+          ]
+        },
+        {
+          "key": "pasDeGeoSpeed",
+          "version": "v2",
+          "name": "PAS Debug Log - Road Speed Limits",
+          "description": "Road speed limits from a Ford pas_debug.log.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/fordlogs/pas_debug.log*"
+          ]
+        },
+        {
+          "key": "pasDeGeoApInfo",
+          "version": "v2",
+          "name": "PAS Debug Log - Access Point List",
+          "description": "Wi-Fi SSID and signal lines from a Ford pas_debug.log, each shown with the BSSID from the most recent \"Extracted BSSID\" line before it. That pairing is by line order.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/fordlogs/pas_debug.log*"
+          ]
+        },
+        {
+          "key": "pasDeGeoVSpeed",
+          "version": "v2",
+          "name": "PAS Debug Log - Vehicle Speed",
+          "description": "Vehicle speed readings from a Ford pas_debug.log.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/fordlogs/pas_debug.log*"
+          ]
+        },
+        {
+          "key": "pasDeGeoTransm",
+          "version": "v2",
+          "name": "PAS Debug Log - Transmission Status",
+          "description": "Transmission status readings from a Ford pas_debug.log.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/fordlogs/pas_debug.log*"
+          ]
+        },
+        {
+          "key": "pasDeGeoTemp",
+          "version": "v2",
+          "name": "PAS Debug Log - Outside Temperature",
+          "description": "Outside air temperature readings from a Ford pas_debug.log.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/fordlogs/pas_debug.log*"
+          ]
+        },
+        {
+          "key": "pasDeGeoOdometer",
+          "version": "v2",
+          "name": "PAS Debug Log - Odometer",
+          "description": "Odometer readings from a Ford pas_debug.log.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/fordlogs/pas_debug.log*"
+          ]
+        },
+        {
+          "key": "pasDeGeoVehicle",
+          "version": "v2",
+          "name": "PAS Debug Log - Vehicle Info",
+          "description": "Vehicle identity (VIN/make/model/platform) from a Ford pas_debug.log.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/fordlogs/pas_debug.log*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/pasDeGeoTarGz.py",
+      "artifacts": [
+        {
+          "key": "pasDeGeoTarGzGps",
+          "version": "v2",
+          "name": "PAS Debug Log (RAM archive) - GPS Locations",
+          "description": "GPS locations from a RAM pas_debug.log.1 inside an archivedata tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/archivedata/*.tar.gz"
+          ]
+        },
+        {
+          "key": "pasDeGeoTarGzSpeed",
+          "version": "v2",
+          "name": "PAS Debug Log (RAM archive) - Road Speed Limits",
+          "description": "Speed limit values (no road name is reported) from a RAM pas_debug.log.1 (tar.gz).",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/archivedata/*.tar.gz"
+          ]
+        },
+        {
+          "key": "pasDeGeoTarGzApInfo",
+          "version": "v2",
+          "name": "PAS Debug Log (RAM archive) - Access Point List",
+          "description": "Wi-Fi SSID and signal lines, each shown with the BSSID from the most recent \"Extracted BSSID\" line before it, from a RAM pas_debug.log.1 (tar.gz).",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/archivedata/*.tar.gz"
+          ]
+        },
+        {
+          "key": "pasDeGeoTarGzVSpeed",
+          "version": "v2",
+          "name": "PAS Debug Log (RAM archive) - Vehicle Speed",
+          "description": "Vehicle speed (kmph) from a RAM pas_debug.log.1 (tar.gz).",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/archivedata/*.tar.gz"
+          ]
+        },
+        {
+          "key": "pasDeGeoTarGzTransm",
+          "version": "v2",
+          "name": "PAS Debug Log (RAM archive) - Transmission Status",
+          "description": "Transmission status from a RAM pas_debug.log.1 (tar.gz).",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/archivedata/*.tar.gz"
+          ]
+        },
+        {
+          "key": "pasDeGeoTarGzTemp",
+          "version": "v2",
+          "name": "PAS Debug Log (RAM archive) - Outside Temperature",
+          "description": "Outside air temperature from a RAM pas_debug.log.1 (tar.gz).",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/archivedata/*.tar.gz"
+          ]
+        },
+        {
+          "key": "pasDeGeoTarGzOdometer",
+          "version": "v2",
+          "name": "PAS Debug Log (RAM archive) - Odometer",
+          "description": "Odometer values (each shown with the time of the most recent CAppLinkService line before it, not the time of the odometer line itself) from a RAM pas_debug.log.1 (tar.gz).",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/archivedata/*.tar.gz"
+          ]
+        },
+        {
+          "key": "pasDeGeoTarGzCurRoad",
+          "version": "v2",
+          "name": "PAS Debug Log (RAM archive) - Current Road",
+          "description": "Current road from a RAM pas_debug.log.1 (tar.gz).",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/archivedata/*.tar.gz"
+          ]
+        },
+        {
+          "key": "pasDeGeoTarGzVehicle",
+          "version": "v2",
+          "name": "PAS Debug Log (RAM archive) - Vehicle Info",
+          "description": "Vehicle identity (VIN/make/model/platform) from a RAM pas_debug.log.1 (tar.gz).",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/archivedata/*.tar.gz"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/phoneconfigAltima.py",
+      "artifacts": [
+        {
+          "key": "phoneConfigAltima",
+          "version": "v2",
+          "name": "Nissan - Phone Config",
+          "description": "Phone configuration (INI-style key/value sections) from a Nissan Altima ffs/phone_config.dat.",
+          "category": "Nissan Vehicles",
+          "paths": [
+            "*/ffs/phone_config.dat"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/phonedbAltima.py",
+      "artifacts": [
+        {
+          "key": "phoneBookAltima",
+          "version": "v2",
+          "name": "Nissan - Phone Book Contacts",
+          "description": "Phonebook contacts (per numbered phonebook table) from a Nissan Altima ffs/phone_db.db.",
+          "category": "Nissan Vehicles",
+          "paths": [
+            "*/ffs/phone_db.db*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/qnx_mmsync.py",
+      "artifacts": [
+        {
+          "key": "qnx_mmsync_media_stores",
+          "version": "v2",
+          "name": "QNX Media Sync - Media Stores",
+          "description": "One row for each media sync database: the store type and mount path, the device identifier it carries, when it was last synced, the first and last time a file was added and the number of files and playlists.",
+          "category": "QNX Media Sync",
+          "paths": [
+            "*/bk[0-9]*/Media*.db"
+          ]
+        },
+        {
+          "key": "qnx_mmsync_files",
+          "version": "v2",
+          "name": "QNX Media Sync - Media Files",
+          "description": "Files in each media sync database with the artist, album and genre its metadata links to, the year and track number, and the time the file was added to the database.",
+          "category": "QNX Media Sync",
+          "paths": [
+            "*/bk[0-9]*/Media*.db"
+          ]
+        },
+        {
+          "key": "qnx_mmsync_playlists",
+          "version": "v2",
+          "name": "QNX Media Sync - Playlists",
+          "description": "Playlists in each media sync database with the name, the number of entries and the modified time the database stores.",
+          "category": "QNX Media Sync",
+          "paths": [
+            "*/bk[0-9]*/Media*.db"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/sal_data.py",
+      "artifacts": [
+        {
+          "key": "get_proj_ctrl_devices",
+          "version": "v2",
+          "name": "Chrysler - Proj Ctrl Devices",
+          "description": "Device list (type, name, serial, BT MAC, port, attach count) from a Chrysler sal_bkup/proj_ctrl SQLite database.",
+          "category": "Chrysler Vehicles",
+          "paths": [
+            "*/sal_bkup/proj_ctrl"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/sdl_policy_db.py",
+      "artifacts": [
+        {
+          "key": "sdl_policy_devices",
+          "version": "v2",
+          "name": "SDL Policy - Devices",
+          "description": "Rows of the policy database's device table: the stored device identifier with the hardware, operating system, version and carrier text recorded for it.",
+          "category": "SDL Policy",
+          "paths": [
+            "*/sdl/policy"
+          ]
+        },
+        {
+          "key": "sdl_policy_app_usage",
+          "version": "v2",
+          "name": "SDL Policy - Application Usage",
+          "description": "Rows of the policy database's application usage table: the application id, the nicknames and types the policy lists for it, and the minutes and counts the component tallied.",
+          "category": "SDL Policy",
+          "paths": [
+            "*/sdl/policy"
+          ]
+        },
+        {
+          "key": "sdl_policy_consents",
+          "version": "v2",
+          "name": "SDL Policy - Consent Records",
+          "description": "Consent records of the policy database: the functional group, the consent value and input, the application and device identifiers and the stored time stamp.",
+          "category": "SDL Policy",
+          "paths": [
+            "*/sdl/policy"
+          ]
+        },
+        {
+          "key": "sdl_policy_module_values",
+          "version": "v2",
+          "name": "SDL Policy - Module Values",
+          "description": "The values the policy database holds about the module itself: identity and exchange counters, vehicle make, model and year, and the module's usage and error counts.",
+          "category": "SDL Policy",
+          "paths": [
+            "*/sdl/policy"
+          ]
+        },
+        {
+          "key": "sdl_app_resumption",
+          "version": "v2",
+          "name": "SDL - Application Resumption Data",
+          "description": "The app-link component's resumption file: the last ignition-off time it stores and, for each application kept for resumption, its time stamp, application and device identifiers, level and ignition-off count.",
+          "category": "SDL Policy",
+          "paths": [
+            "*/sdl/app_info.dat"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/siriusxm_app_storage.py",
+      "artifacts": [
+        {
+          "key": "siriusxm_app_session_times",
+          "version": "v2",
+          "name": "SiriusXM App - Session Times",
+          "description": "Times stored in the single-value files lastRebootTimeKey, lastOnlineTimeKey and lastHeartbeatTime in the head unit's persistence volume; what each time marks is taken from the file name only.",
+          "category": "SiriusXM App",
+          "paths": [
+            "*localStorage/private/shared/lastOnlineTimeKey",
+            "*localStorage/private/shared/lastRebootTimeKey",
+            "*localStorage/private/shared/lastHeartbeatTime"
+          ]
+        },
+        {
+          "key": "siriusxm_app_account_and_device",
+          "version": "v2",
+          "name": "SiriusXM App - Account and Device",
+          "description": "Values of eight single-value files (lastUserLoggedIn, lastAvailableUsername, LastEpisodeDownloadUser, DeviceIdKey, ClientDeviceIdKey, vehicle_info_metric_id, appRegion, freeToAir) in the head unit's persistence volume.",
+          "category": "SiriusXM App",
+          "paths": [
+            "*localStorage/private/shared/lastUserLoggedIn",
+            "*localStorage/private/shared/lastAvailableUsername",
+            "*localStorage/private/shared/LastEpisodeDownloadUser",
+            "*localStorage/private/shared/DeviceIdKey",
+            "*localStorage/private/shared/ClientDeviceIdKey",
+            "*localStorage/private/shared/vehicle_info_metric_id",
+            "*localStorage/private/shared/vehicle_5Finfo_5Fmetric_5Fid",
+            "*localStorage/private/shared/appRegion",
+            "*localStorage/private/shared/freeToAir"
+          ]
+        },
+        {
+          "key": "siriusxm_app_recently_played",
+          "version": "v2",
+          "name": "SiriusXM App - Recently Played",
+          "description": "Entries of the SiriusXM application's recently played lists, with the start and end times each entry stores, its play, content and asset types and the channel it names.",
+          "category": "SiriusXM App",
+          "paths": [
+            "*localStorage/private/user/*/recentlyPlayedMap/*",
+            "*localStorage/private/user/*/lastServerRecentsMap/*",
+            "*.unallocated.bin",
+            "*.unallocated.tsv"
+          ]
+        },
+        {
+          "key": "siriusxm_app_favorites",
+          "version": "v2",
+          "name": "SiriusXM App - Favorites",
+          "description": "Entries of the SiriusXM application's favorites lists, with the asset name, type, channel id and short description each entry stores.",
+          "category": "SiriusXM App",
+          "paths": [
+            "*localStorage/private/user/*/favoritesListMap/*",
+            "*localStorage/private/user/*/lastFavoritesMap/*"
+          ]
+        },
+        {
+          "key": "siriusxm_app_listener_profiles",
+          "version": "v2",
+          "name": "SiriusXM App - Listener Profiles",
+          "description": "The listener profiles in the SiriusXM application's vehicle profile file, with the first login and switch login times each stores and its name, username and phone fields.",
+          "category": "SiriusXM App",
+          "paths": [
+            "*localStorage/private/user/*/vehicleProfiles/*/*"
+          ]
+        },
+        {
+          "key": "siriusxm_app_satellite_history",
+          "version": "v2",
+          "name": "SiriusXM App - Satellite Listening History",
+          "description": "The SATRfyListeningHistory document of the SiriusXM application: its lastTunedTime and its sidList.",
+          "category": "SiriusXM App",
+          "paths": [
+            "*localStorage/public/user/*/SATRfyListeningHistory/*"
+          ]
+        },
+        {
+          "key": "siriusxm_app_account_record",
+          "version": "v2",
+          "name": "SiriusXM App - Account Record",
+          "description": "The values that are not empty in the SiriusXM application's non_pii_information file, one row per key, with the key's path in the document.",
+          "category": "SiriusXM App",
+          "paths": [
+            "*localStorage/private/shared/non_pii_information",
+            "*localStorage/private/shared/non_5Fpii_5Finformation"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/system_manager_logs.py",
+      "artifacts": [
+        {
+          "key": "system_manager_log_events",
+          "version": "v2",
+          "name": "System Manager Log - Events",
+          "description": "Lines of the system manager's event log: boot cycles, wake-ups, suspends, shutdowns and process failures, each with its clock reading and the boot cycle number of the nearest boot line above it.",
+          "category": "System Manager Logs",
+          "paths": [
+            "*/logs/sys_error.log*"
+          ]
+        },
+        {
+          "key": "system_manager_log_powered_sessions",
+          "version": "v2",
+          "name": "System Manager Log - CPU Sample Sessions",
+          "description": "One row for each block of CPU usage samples in the usage log, with the boot count the block is headed by, the clock readings of its first and last sample and the number of samples.",
+          "category": "System Manager Logs",
+          "paths": [
+            "*/logs/sys_cpu_usage*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/systemappwtf.py",
+      "artifacts": [
+        {
+          "key": "systemappwtfGps",
+          "version": "v2",
+          "name": "Kia - System App GPS Detail",
+          "description": "GPS fixes (GpsLocationProvider reportLocation) scraped from Kia system_app_wtf / tombstone logs.",
+          "category": "Kia Vehicles",
+          "paths": [
+            "*/system_app_wtf@*.txt.gz",
+            "*/tombstones/tombstone_*",
+            "*/system_app_crash@*.txt.gz",
+            "*/SYSTEM_TOMBSTONE@*.txt.gz"
+          ]
+        },
+        {
+          "key": "systemappwtfBtCalls",
+          "version": "v2",
+          "name": "Kia - System App BT Calls",
+          "description": "Bluetooth call tracker events scraped from Kia system_app_wtf / tombstone logs.",
+          "category": "Kia Vehicles",
+          "paths": [
+            "*/system_app_wtf@*.txt.gz",
+            "*/tombstones/tombstone_*",
+            "*/system_app_crash@*.txt.gz",
+            "*/SYSTEM_TOMBSTONE@*.txt.gz"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/tar_checker.py",
+      "artifacts": [
+        {
+          "key": "chryslerTarGps",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - GPS Locations",
+          "description": "Latitude, longitude and heading from lines carrying \"lat:\", \"lon:\" and \"heading:\" in a pas_debug log inside a Chrysler [H-M]_*.tar.gz archive.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarSpeed",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Road Speed Limits",
+          "description": "Speed limit values (no road name is reported) from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarApInfo",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Access Point List",
+          "description": "Wi-Fi SSID and signal lines, each shown with the BSSID and time of the most recent \"Extracted BSSID\" line before it, from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarVSpeed",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Vehicle Speed",
+          "description": "Vehicle speed (kmph) from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarTransm",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Transmission Status",
+          "description": "Transmission status from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarBrake",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Brake Status",
+          "description": "eBrakePedalStatus values, shown as Brake Pedal Pressed for 1 and Brake Pedal Released for 0 with no source recorded for that mapping, each with the coordinates last logged before it, from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarEngineTemp",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Engine Temperature",
+          "description": "The first two characters of the logged engine coolant temperature value, each with the coordinates last logged before it, from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarInteriorTemp",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Interior Temperature",
+          "description": "Vehicle interior temperature value as logged (unit not established), each with the coordinates last logged before it, from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarTirePressure",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Tire Pressure",
+          "description": "Tire pressure readings for the position tokens the parser recognises (REAR_LEFT, REAR_REAR, FRONT_LEFT, FRONT_REAR as logged), each with the coordinates last logged before it, from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarGearState",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Gear State",
+          "description": "eGearState values (shown as Park for 1, Neutral for 2, Drive for 3 and Reverse for 4; no source for that mapping is recorded and other values are not listed), each with the coordinates last logged before it, from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarOutTemp",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Outside Temperature",
+          "description": "Outside air temperature from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarDoor",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Door Status",
+          "description": "Driver door and trunk lift gate ajar status (0 shown as Closed, 1 as Open; no source for that mapping is recorded, and other doors are not reported), each with the coordinates last logged before it, from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarOdometer",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Odometer",
+          "description": "Odometer values (each shown with the time of the most recent CAppLinkService line before it, not the time of the odometer line itself) from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarCurRoad",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Current Road",
+          "description": "Current road from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        },
+        {
+          "key": "chryslerTarVehicle",
+          "version": "v2",
+          "name": "PAS Debug Log (Chrysler archive) - Vehicle Info",
+          "description": "Vehicle identity (make/model/year/VIN/platform) from a pas_debug log inside a Chrysler [H-M]_*.tar.gz.",
+          "category": "PAS Debug Log",
+          "paths": [
+            "*/[H-M]_*.tar.gz"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/telematicsHyundai.py",
+      "artifacts": [
+        {
+          "key": "hyundaiTelematicsGps",
+          "version": "v2",
+          "name": "Hyundai - Telematics GPS Detail",
+          "description": "Rows from initLastGpsDetail lines in a Hyundai telematics.log. Timestamp is the log line's own month, day and time with the year shown as XXXX because the line carries none. Date is the time inside the line, stored as if it were UTC; the Date Offset value on the same line is reported and not applied.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/telematics.log*"
+          ]
+        },
+        {
+          "key": "hyundaiTelematicsWdw",
+          "version": "v2",
+          "name": "Hyundai - Telematics WdwStatus",
+          "description": "WdwStatus parsed from a Hyundai telematics.log.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/telematics.log*"
+          ]
+        },
+        {
+          "key": "hyundaiTelematicsWeather",
+          "version": "v2",
+          "name": "Hyundai - Telematics Weather Waypoint",
+          "description": "Address_name values parsed from a Hyundai telematics.log.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/telematics.log*"
+          ]
+        },
+        {
+          "key": "hyundaiTelematicsEngineIdle",
+          "version": "v2",
+          "name": "Hyundai - Telematics Engine Idle Alarm",
+          "description": "EngineIdleAlarmTask log lines parsed from a Hyundai telematics.log.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/telematics.log*"
+          ]
+        },
+        {
+          "key": "hyundaiTelematicsDriving",
+          "version": "v2",
+          "name": "Hyundai - Telematics Driving Events",
+          "description": "Driving events parsed from a Hyundai telematics.log.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/telematics.log*"
+          ]
+        },
+        {
+          "key": "hyundaiTelematicsCan",
+          "version": "v2",
+          "name": "Hyundai - Telematics CAN Events",
+          "description": "CAN bus events parsed from a Hyundai telematics.log.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/telematics.log*"
+          ]
+        },
+        {
+          "key": "hyundaiTelematicsProvisioning",
+          "version": "v2",
+          "name": "Hyundai - Telematics Provisioning",
+          "description": "Provisioning records (VIN/MDM/MIN) parsed from a Hyundai telematics.log.",
+          "category": "Hyundai Vehicles",
+          "paths": [
+            "*/telematics.log*"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "scripts/artifacts/vehicleInfo.py",
+      "artifacts": [
+        {
+          "key": "vehicleInfo",
+          "version": "v2",
+          "name": "Ford - Vehicle Info",
+          "description": "Vehicle info (name::value pairs: VIN, odometer, fuel level, etc.) from a Ford SYNC ppsp reconn/vehicle file.",
+          "category": "Ford Vehicles",
+          "paths": [
+            "*/ppsp/services/reconn/vehicle"
+          ]
+        }
+      ]
+    }
+  ],
+  "files": {
+    "LICENSE": "79d810346bfad252c5c223af0db8689e5612e211bf12c15649cfc8ae6e952e7b",
+    "leapp_functions/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "leapp_functions/app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "leapp_functions/app/artifact_result.py": "c05fbaf784d3d13ad29b6b0ec731b0ee51a209f833acc1aa719f72f72b722880",
+    "leapp_functions/app/history.py": "ed96d4d0a6d911ae59ea7199f3f535525b9c21a94067475c4845b65cbc0d6aca",
+    "leapp_functions/app/output.py": "bd66ffd3279c0a107400cdaddf1eb3ea9087ae80abab3c7d12c74acaf196eefa",
+    "leapp_functions/app/platform.py": "9289aae030d0baecf194039092c8d64f6b3029e746b2adc098354c48b825ad5e",
+    "leapp_functions/app/screen_log.py": "d59b1202833e3cbe036018b7dd247ed52b8f6b85f19e83a88c5f0e7dfc2dc7d2",
+    "leapp_functions/data_sources/json_files.py": "08064bf703f116ee5a3d02b11b3e5207a759d0aaea3dc7905e1a8a8593bda029",
+    "leapp_functions/data_sources/text_files.py": "4d674f139839f8162c4ef0f92ec7f7eae4680cb2c339ae6917149b2f0d2254be",
+    "leapp_functions/lava_launcher.py": "e90220f907b05c440532c6e5cd0f66d40a4d7e98ec8dc93348a2b62f2577a5f0",
+    "requirements.txt": "3d39f24096c46f63b4551386de462c22d86ea8af10d64d42a4923008fb604519",
+    "scripts/artifact_report.py": "88003fa28c37f6706b036065e4bbe77a914e2d764eca99ffde954b9be4013fa7",
+    "scripts/artifacts/AlfaRomeo_agenda_BT.py": "ca8995d606ef1943e07cf4af246625dc6b2d0d31571cf12447328deb1e160644",
+    "scripts/artifacts/AlfaRomeo_agenda_contacts.py": "1fda5dc61cc24d4ecd26bfa581ce3634b611d44390fd7f644ca1926ae2344202",
+    "scripts/artifacts/AlfaRomeo_sdars.py": "1ce4ef6975884f8b729b7ec0b8701163659e764b2b654b8bc076a7ac0b5a6158",
+    "scripts/artifacts/Ford_Model.py": "3afe0a652d1d277850b6d0f5aca27ef9a5c229f60747f8006a8ad44b75805d64",
+    "scripts/artifacts/berla_ive_export.py": "8f4f816c328f39f8f14c5abae6c20a1bc4dab97228a418c51b3aec104b06a100",
+    "scripts/artifacts/bluetooth_hci_snoop.py": "54dfc658ce46d82769555dcff4aa30b54fc1f80907578f0bc0256223e0923944",
+    "scripts/artifacts/bmw_connected_devices.py": "abb25452b812774c999515a950865f19356214b7c41321af3705228f929ec3a0",
+    "scripts/artifacts/bmw_mgu_request_documents.py": "818d279b51482480e3609bd821ba021fdf630cc00d13a96bb4a0de291f9fb15f",
+    "scripts/artifacts/btDevices.py": "2d31f1d0f642c75d8202ab0db70e103c9cd5d4851079374c273e16e13d504c8a",
+    "scripts/artifacts/chrysler_accessories.py": "b879331fd4c336f92add01a4f2075bb461aac16071acbd311232fdbec31c267f",
+    "scripts/artifacts/chrysler_bt.py": "72cbc23a632286137495c6cf3c844beb14d5026e2e8a56f46e1b3a93cbe6983a",
+    "scripts/artifacts/chrysler_contacts.py": "a9dd55f8d66102bba2203ed97ddcd0102cb2491a299eeba77b4c8d8a43c9f5d6",
+    "scripts/artifacts/chrysler_devices.py": "cbe0ed1a5cf5b614c3db7a7239b8d2253b512036fad204f9623f7d9fc79204df",
+    "scripts/artifacts/chrysler_diag.py": "50e42a96b2629b9b2f6cbf7306d3bed8aad5bd874a51cdc40a43f556e2a2c34c",
+    "scripts/artifacts/chrysler_gps.py": "327a184b6819831e27e2ceda94133c66af2b208077153a3d2ec8c36d82138e1d",
+    "scripts/artifacts/chrysler_logs.py": "37be082a11c03ff4cac5950944bbf731ab228ccd8b9d4edc8d0d9953ebb43d75",
+    "scripts/artifacts/chrysler_phonebook.py": "3adc29347afb20456b06127bc6815030f1471b8b386b7d20313a982cf0045759",
+    "scripts/artifacts/connDevices.py": "9c0b34a3001e3c4749153bc07e601e4fac55eb63e03804e030fd226f55a90d66",
+    "scripts/artifacts/contactsInfo.py": "e93de1f9e3d0f9fff96947f4073839032100deef27f41a33c47017944c713c2f",
+    "scripts/artifacts/dipoAudio.py": "8fdb331c511033285d73466922019b5405f52ae909d4f3cee2c9dc759be85c30",
+    "scripts/artifacts/ford_Phonebook.py": "d82d8fc70228a26f7ef793038653f7b54c42b7385246ee19c1a34fefdfc93c72",
+    "scripts/artifacts/ford_btdevices_history.py": "5cfeb331f5702336288dfe2292c4f7465d51e25a7e444003db45faa5cc13a80e",
+    "scripts/artifacts/ford_devices_json.py": "bbd9b8cbdc34b8c3354cb151181e2246c520157989427647a8ea2ca43b3efdd9",
+    "scripts/artifacts/ford_diagnostics.py": "3ccb1831d9fd1389d4ce01f6d064174474c21bc660c3b8f54320cc41f91b0fa7",
+    "scripts/artifacts/ford_fav_places.py": "1088bdab31fa0d40412b27bd0808bb132cdbf6e210ab7cc86faa922bd1fbc0cf",
+    "scripts/artifacts/ford_gps_speed_data.py": "b6c2c8fc8a9dc34c61dea4c48f8401416c29f82aa71aba7db1e181b6d55e6ee9",
+    "scripts/artifacts/ford_hmi_indexeddb.py": "47222aca34b95d55ecc713fc488b6bb82718b617318f00aec262f5c031dc8592",
+    "scripts/artifacts/ford_hmi_localstorage.py": "46e2060cbbdfae6dc0f68b6c2498d4d55c55e4928ee910e44ec071e92abaf9ef",
+    "scripts/artifacts/ford_installed_software.py": "ca567775b9c0ae274eae56ef37f4c714d31b7c772227339ae5834ec6e89a20c5",
+    "scripts/artifacts/ford_nav_pim.py": "4f28a2667ac31d472556a6a0ef619d8d95d47b49ba8f59ca332a31130e722d72",
+    "scripts/artifacts/ford_nav_settings.py": "4a7e2e46c3934086f6fcaf2189e843a6deee3df892cce5d89fbba67a98597e7b",
+    "scripts/artifacts/ford_positioning_logs.py": "4f3efb08be7150bad483564fd7a258030394e48337ca65b67116983d58d3a5ee",
+    "scripts/artifacts/ford_power_history.py": "3e1bce615fcdf0946efe5f4b283da3d6f679768843905f66c76b8d0fb4f236b4",
+    "scripts/artifacts/ford_sync4_platform_log.py": "3dc72659a70ad2ecdf21ead07aa9a67c6b6d111d19217a10265b9fd9afa022f5",
+    "scripts/artifacts/ford_sync4_power_logs.py": "90230411fc5a6e926a667ed4fd2927c6325cbc8fcd1177698a3ab4a197c70e3b",
+    "scripts/artifacts/ford_sync4_web_app_storage.py": "9184f4ea58773672997ba2d07650b99b4fbe97266b1d4f5e1e62c248f8b15766",
+    "scripts/artifacts/ford_sync_bluetooth.py": "8b4629dc202466ca6b7f0fce110bdaba25216bf280f11495c260eeda50dfe0a5",
+    "scripts/artifacts/ford_sync_policy_table.py": "dfcbdd81ce622c153c500d2a7a71743c982e41a7a53f5435a7f219a2796dde45",
+    "scripts/artifacts/ford_sync_wince.py": "33ca7217f8c6b520e9fa6ba6c4301e520d7dc681732f80472114b004a74476c4",
+    "scripts/artifacts/ford_sync_wince_events.py": "5cc6b568537d18debcb1de8898598fc5cf7d26c0a9e665414ae3f8505668ce30",
+    "scripts/artifacts/ford_sync_wince_gen2.py": "0676570fce153a2ce507c1e43105a7795479c50b896e3d1cc8f5e03fff6d8d94",
+    "scripts/artifacts/ford_sync_wince_registry.py": "63c53b3d5dc06a4730cdedc9c7033727c081cbb41a93b0fb9968aa2e7b5cfebb",
+    "scripts/artifacts/ford_sync_wince_voice_cache.py": "ea40e5a97382aa115a6c5f3965eac26f98bba7711b5184a6560ba554bf997c04",
+    "scripts/artifacts/ford_vin_info.py": "2bffcb7cd62d055b0945ebb526fda8370126000ae2dcba76b78ff77eb3401756",
+    "scripts/artifacts/gm_bosch_hmi.py": "53499511a1bb836f750c311a99fbb5e594bf6622d51dc331bc5632aa75493cf0",
+    "scripts/artifacts/gm_ga130.py": "ec1415013c6166453d985e0d412e9fd00a48f3a95703ae3b3b430183128e1e38",
+    "scripts/artifacts/gm_onstar_flash_image.py": "8c62c5a7e3e4c88cc72146690524fb55fa2ba6d0bf23e922aecda006252378a9",
+    "scripts/artifacts/gm_onstar_lg.py": "98582aa64301a9fa4a96c0d3ee80d202984e30485c6816d6953f93789f4a91bc",
+    "scripts/artifacts/gnss_receiver_files.py": "8d0f68bcba8fb4cfd88eacd4624c75a492b77a4fcef4c33d7bc63ebc7d8427fb",
+    "scripts/artifacts/hyundai_callHistory.py": "f1ad0566d83b22af5e5f93d1adac53925de1dce2233b471d599497d17fcc6543",
+    "scripts/artifacts/hyundai_contacts.py": "ab3294b3acc7d33362ecc1ee36dc4f5a68a728da857732c272d1ca4867743365",
+    "scripts/artifacts/hyundai_devices.py": "c2dbafab3fc298ed7f2f6c90e2381c24615cee002b0ad2a2427b2c4f1463f9db",
+    "scripts/artifacts/hyundai_infotainment.py": "1920d17808eeccd367fade24caccdc072073ee76c8e96547359acb93aad05249",
+    "scripts/artifacts/logparser.py": "3986c78e1df8748298053c110fb1188653a6c2461d7198c06f59eda91bbeaa0b",
+    "scripts/artifacts/mediaService.py": "82dafd1f5503ab1d85ad2387315bab8601ffc8c8f239983757f8ccb169fb8bef",
+    "scripts/artifacts/nissan_08it.py": "ac5472f97cfddf3a7bcd186fafb53083b2f91c1aeb636fcc7aed4ca41a4613e1",
+    "scripts/artifacts/nuance_vca_devices.py": "d87367e573af662d1931d49fe85e1c4a6ec1002bdf4a5be4a523825e8fce4047",
+    "scripts/artifacts/nvcaContacts.py": "efafbc639443b1bb35c8fcbe7c2958884276dbfad64b5684e03d86b11dd3a371",
+    "scripts/artifacts/pasDeGeo.py": "72bed9e8eabfc5579de06d7d2862b23b97ce811a3d055ce883a7f4a0a749f4af",
+    "scripts/artifacts/pasDeGeoTarGz.py": "dbbb0069baf9a3695614d03fba481712ef8bb1ac15506335a764deccbcc2cc94",
+    "scripts/artifacts/phoneconfigAltima.py": "d5b0ec601a8096513eac0b37d8aac9f346e1f93572e202fc2e9fe8a68885a5b8",
+    "scripts/artifacts/phonedbAltima.py": "5655b2df6a9e58ddbeca383633aa23c49523198ef8a84943e42c65c53edd632c",
+    "scripts/artifacts/qnx_mmsync.py": "cd1f03875085b7f089afa1b40886005ce5386fb711e4cb2206e12f6cc31143a9",
+    "scripts/artifacts/sal_data.py": "d8b2555dd3f28d187eb7e62864693e4ca5d8a11825bd1569a20cdc53e891bb43",
+    "scripts/artifacts/sdl_policy_db.py": "f6ea1a79cdf9f8cebfa104d94b1dd89da52f11c047634d8171d393a98c59fd77",
+    "scripts/artifacts/siriusxm_app_storage.py": "50c68ad3069f22098af1ecbfb6901c589a50301e6c9cc9b22cd609ae4294ca7e",
+    "scripts/artifacts/system_manager_logs.py": "f4f42d9a1b8c2fb4a2ad8f1cbfc66b239575ad5c6911d53574470d00a5039d89",
+    "scripts/artifacts/systemappwtf.py": "07639e9f50c8b3310b452184a5a8435bb1df1103f4ee4777a8eaeef2f8fd7fa7",
+    "scripts/artifacts/tar_checker.py": "161bc1a9643cbe752f6a1a65ec5f920c410a44045795b5dff27032abf428453c",
+    "scripts/artifacts/telematicsHyundai.py": "45f6040058b130333007fcd05742ffa708672847691b9e49db36260c099c6ded",
+    "scripts/artifacts/vehicleInfo.py": "e523c22dafa49ece67ec0140ea7e129c4cd731cf031d8596a82eb14d2adb7045",
+    "scripts/ccl/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "scripts/ccl/ccl_blink_value_deserializer.py": "95b4fb60c8a1782224a1bc56f4a80ccf5e323a9bfbbb94688634586abd831163",
+    "scripts/ccl/ccl_chromium_indexeddb.py": "a88ba7852b6bddd6ca845573d698110d85538458c311e5a0954bd6c965f07285",
+    "scripts/ccl/ccl_leveldb.py": "25afe8ea8760c388decba4bf8778aa6041d7bf28edfb1a0891b8320a6c7f138f",
+    "scripts/ccl/ccl_simplesnappy.py": "d9a862dc79e11c66fecae73ffcde481f6eabd31d3c73712871ce1a0f7e0f1131",
+    "scripts/ccl/ccl_structures.py": "3b52ea0ed0add293af6efc84a2275c2adcd13f4fc4955ea7868a8c52556e3f50",
+    "scripts/ccl/ccl_v8_value_deserializer.py": "b715c511a2ba683c7ebd3e2c95c21dd134e0394c3feb6635b35670e39bbe6d8e",
+    "scripts/context.py": "4757c8c4995b4a2b243b928c5b493c50b5a93614f8ed6cfaec0d20958186888a",
+    "scripts/data/feather_to_tabler_icon_names.json": "8d4052415902ba9555f4d884e523979d7f99f1c3ab4325688bb827c0d97d2914",
+    "scripts/data/tabler_icon_correction.json": "ba535b0315cebf86934df7e901e626928db9e78ea34c4402918518870e190eee",
+    "scripts/filetype.py": "08a38443734a0069963b0e3e8e55912ae5771519e7e5138a28eeb6809107f1a7",
+    "scripts/filetypes/__init__.py": "44a56418c5432a8c7a9c75be5084aa7db35af6abdd235fa2e08c04cefd7b703e",
+    "scripts/filetypes/application.py": "fbb4d07e638acf0b1aecaa5a7c694d0a4b6b74e7032f40450100dceda07caa12",
+    "scripts/filetypes/archive.py": "c5f8dcbe675f96dab42e97d9b7dfb6d061e1d5b23c6f3e4232ffe5fae15a7a7e",
+    "scripts/filetypes/audio.py": "58552c4684ca1ddaf3ff2a4135d048ff8b9e592fff17e0cbb5b3eeccc79fe396",
+    "scripts/filetypes/base.py": "a6427c5acf7a44442a84d17c26b2390119dfab286a1c09d7441f6d2fc1a797b2",
+    "scripts/filetypes/document.py": "cb385e93a38cea0776d9c92fbabcf379a1156eda695a1336d1db3b169e7e0288",
+    "scripts/filetypes/font.py": "84de2efb2323db739264860988206c7a34f62861c3951238b3454536d052cc55",
+    "scripts/filetypes/image.py": "5b269af1ff4c11f677e7fed35b98b7a57bbb34633a0817e4ae8f366e78deb41f",
+    "scripts/filetypes/isobmff.py": "fcc0c8c01a2d986c862135cd67afbaae462f63b037f3ee2adf81c0fdd03576d2",
+    "scripts/filetypes/text.py": "fffe8723d9af04246b04aac3dce88c079a4deb6e054a202ba5576344452fb2aa",
+    "scripts/filetypes/video.py": "9ccd740b398ce0804b361209c5bf77bd072514adbf88507717d4ebec48e2f83e",
+    "scripts/html_parts.py": "d11e10de4460e7a1c678d1f34239c267c8f7edead81ee2e67952660617a95195",
+    "scripts/html_safe.py": "a6cec3064429a0d5b292595d96516985e4121ff06f33d1bee493cd22ee575a58",
+    "scripts/ilapfuncs.py": "1aad3420607275493885c3aa2c33559c1cd842ddf00e2c0950bfe5fdbcd63df1",
+    "scripts/lavafuncs.py": "7b1ba7adfb7fbf8d8d7d4c8cce7acdcd8f2fe1b3b59b85940e910aca3bbbad8b",
+    "scripts/modules_to_exclude.py": "156a5549da0821fe2b5329eea5d349d554a68904b9490d57d85e50b7574ac182",
+    "scripts/parse3.py": "7e8674f687da3f4d1e0e2c006fad264eaa5ccdb4cd530c2bafb50fb6710b0c77",
+    "scripts/plugin_loader.py": "2e7796386a14a11ef88e6c1927ce653648114baf6884affcd63d093d9b1db7af",
+    "scripts/raw_image.py": "8afddeb7ddcfd4c5c77b75eaa458c6fcfa8bbe5651a662eb23f5dfc9fc118b20",
+    "scripts/report.py": "89aaa5df2c5d74a91636652d1a67e8f43abc2341cdffd5962424c334ebcab1f2",
+    "scripts/report_icons.py": "50bd32de9854fc303458d88a2787264c73da2993975158d3d5fb3d786c21c2c0",
+    "scripts/search_files.py": "200618a823974071feb8a32d85cff114048a06ef0a8212171dc2c3670cfd5eb6",
+    "scripts/vendor/LICENSE-ewfprobe": "401585b66a0a9270ea55491ab4e6f666ef57c0c1b4d27f74a93e9629ed53142a",
+    "scripts/vendor/LICENSE-qnxprobe": "401585b66a0a9270ea55491ab4e6f666ef57c0c1b4d27f74a93e9629ed53142a",
+    "scripts/vendor/README.md": "c8bb5443bb2c41bb025f75f17f421986fed6831b6501fcc5c91060ecc1b6bbb2",
+    "scripts/vendor/ewfprobe.py": "e4a3bb2c51cf7375c1040776a410b74ef0cffffe0308b660de9b679e5b34fd20",
+    "scripts/vendor/qnxprobe.py": "f91ed52420a04e1bd61a480d6cacb4fbd791770d2942a5ff6f3721b9d497c8c3",
+    "scripts/vendor/vendored.json": "19103fb7044fb95cfd2383d06843c8169391e0ccc0a62b6513e95b30e16511ea",
+    "scripts/version_info.py": "f0144209dad43b46258a6edfab387322a77233fa4524c5d7870e720eeef5194d",
+    "vleapp.py": "ecf8334471c19b0f9147ba1a42f6efb4caefd178937e6dd1cc91158692c7c70b"
+  },
+  "packaging": {
+    "profile": "cultivator-headless",
+    "excludedDirectories": [
+      "assets",
+      "scripts/_elements"
+    ]
+  }
+}
