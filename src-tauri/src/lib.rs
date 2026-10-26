@@ -25,6 +25,7 @@ use std::{
 use tauri::Emitter;
 
 mod jobs;
+mod drone;
 mod plugins;
 pub mod preview;
 mod scripting;
@@ -2420,6 +2421,10 @@ pub fn run() {
             list_plugin_jobs,
             list_plugin_logs,
             list_plugin_artifacts,
+            drone::list_drone_flights,
+            drone::open_drone_flight,
+            drone::drone_csv_page,
+            drone::export_drone_csv,
             delete_plugin_artifact,
             delete_plugin_artifacts,
             list_media_gallery,
