@@ -18,6 +18,7 @@ import { CaseProvider, useCases } from "@/features/cases";
 import { EvidenceProvider } from "@/features/evidence";
 import { FilesPage } from "@/features/files/pages/FilesPage";
 import { MediaPage } from "@/features/media/pages/MediaPage";
+import { DronePage } from "@/features/drone/pages/DronePage";
 import { PluginsPage } from "@/features/plugins/pages/PluginsPage";
 import { usePluginJobMonitor } from "@/features/plugins/hooks/usePluginJobMonitor";
 import { SearchPage } from "@/features/search/pages/SearchPage";
@@ -26,6 +27,7 @@ import { SettingsPage } from "@/features/settings/SettingsPage";
 import { initializePerformanceSettings } from "@/features/settings/performanceSettings";
 
 const workspaceRoutes = [
+  { path: "/drone", element: <DronePage /> },
   { path: "/settings", element: <SettingsPage /> },
   {
     path: "/case",

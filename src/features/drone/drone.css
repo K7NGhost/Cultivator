@@ -1,0 +1,57 @@
+/* This workspace can fit narrower windows without changing other workspaces. */
+body:has([data-drone-active="true"]) {
+  min-width: 0;
+}
+
+.drone-map .maplibregl-popup-content {
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 4px 8px;
+}
+.drone-map [class*="maplibregl-popup-anchor-bottom"] .maplibregl-popup-tip {
+  border-top-color: var(--card);
+}
+.drone-map [class*="maplibregl-popup-anchor-top"] .maplibregl-popup-tip {
+  border-bottom-color: var(--card);
+}
+.drone-map .maplibregl-ctrl-scale {
+  background: var(--card);
+  color: var(--card-foreground);
+  border-color: var(--foreground);
+}
+
+.drone-map .flight-start-popup {
+  --endpoint-color: var(--color-success);
+  --endpoint-content: var(--color-success-content);
+}
+
+.drone-map .flight-end-popup {
+  --endpoint-color: var(--color-error);
+  --endpoint-content: var(--color-error-content);
+}
+
+.drone-map .flight-endpoint-popup .maplibregl-popup-content {
+  background: var(--endpoint-color);
+  color: var(--endpoint-content);
+  border: 0;
+  border-radius: var(--radius-field);
+  padding: 8px 12px;
+}
+
+.drone-map .flight-endpoint-popup[class*="maplibregl-popup-anchor-bottom"] .maplibregl-popup-tip {
+  border-top-color: var(--endpoint-color);
+}
+
+.drone-map .flight-endpoint-popup[class*="maplibregl-popup-anchor-top"] .maplibregl-popup-tip {
+  border-bottom-color: var(--endpoint-color);
+}
+
+.drone-map .flight-endpoint-popup.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: var(--endpoint-color);
+}
+
+.drone-map .flight-endpoint-popup.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: var(--endpoint-color);
+}
