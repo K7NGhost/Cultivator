@@ -1308,7 +1308,14 @@ async fn run_builtin_plugin_stage(
     let manifest = plugin.manifest();
     let plugin_id = manifest.id.clone();
 
-    let execution_paths = datasource.paths.clone();
+    let execution_paths = if plugin_id == "image-metadata" {
+        media_scan_paths(
+            &datasource.paths,
+            &archive_extractor_output_root(case_folder_path, &datasource.id),
+        )
+    } else {
+        datasource.paths.clone()
+    };
     let output_root = plugin
         .output_directory_name()
         .map(|directory| builtin_plugin_output_root(case_folder_path, directory, &datasource.id));
@@ -3768,6 +3775,28 @@ fn unix_millis() -> u128 {
         .unwrap_or(0)
 }
 
+fn media_scan_paths(paths: &[String], extracted_root: &Path) -> Vec<String> {
+    // Archive extraction retains the original containers as provenance alongside
+    // its case-owned output. Media scanning consumes the extracted files; an
+    // offline archive must not prevent scanning that registered output.
+    let extracted_root = fs::canonicalize(extracted_root).ok();
+    let has_extracted_files = extracted_root.as_ref().is_some_and(|root| {
+        root.is_dir()
+            && paths
+                .iter()
+                .any(|path| fs::canonicalize(path).ok().as_ref() == Some(root))
+    });
+    paths
+        .iter()
+        .filter(|path| {
+            !has_extracted_files
+                || Path::new(path).is_dir()
+                || !builtin::is_archive_path(Path::new(path))
+        })
+        .cloned()
+        .collect()
+}
+
 fn archive_extractor_output_root(case_folder_path: &str, datasource_id: &str) -> PathBuf {
     builtin_plugin_output_root(case_folder_path, "extracted", datasource_id)
 }
@@ -3807,6 +3836,85 @@ fn sanitize_path_segment(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn media_scan_uses_registered_extraction_when_archive_is_offline() {
+        let case = tempfile::tempdir().unwrap();
+        let extracted = archive_extractor_output_root(case.path().to_str().unwrap(), "source");
+        fs::create_dir_all(&extracted).unwrap();
+        let photo = extracted.join("photo.png");
+        image::RgbImage::new(2, 2).save(&photo).unwrap();
+        let direct_photo = case.path().join("direct.png");
+        image::RgbImage::new(3, 3).save(&direct_photo).unwrap();
+        // A directory whose name ends in .zip remains a valid scan root.
+        let zip_directory = case.path().join("folder.zip");
+        fs::create_dir(&zip_directory).unwrap();
+        image::RgbImage::new(4, 4).save(zip_directory.join("third.png")).unwrap();
+        let paths = vec![
+            case.path()
+                .join("offline.ZIP")
+                .to_string_lossy()
+                .into_owned(),
+            extracted.to_string_lossy().into_owned(),
+            direct_photo.to_string_lossy().into_owned(),
+            zip_directory.to_string_lossy().into_owned(),
+        ];
+        let execution_paths = media_scan_paths(&paths, &extracted);
+        assert_eq!(execution_paths, paths[1..]);
+        let mut progress = |_: builtin::BuiltinPluginProgress| {};
+        let mut context = builtin::BuiltinPluginContext::new(
+            execution_paths,
+            None,
+            serde_json::json!({"hashMedia": true}),
+            Vec::new(),
+            &mut progress,
+            &|| false,
+        );
+        builtin::plugin("image-metadata")
+            .unwrap()
+            .run(&mut context)
+            .unwrap();
+        let gallery = context.into_effects().media.unwrap();
+        assert_eq!(gallery.photos.len(), 3);
+        assert_eq!(gallery.scanned_files, 3);
+        assert!(gallery
+            .photos
+            .iter()
+            .any(|item| Path::new(&item.path) == fs::canonicalize(&photo).unwrap()));
+    }
+
+    #[test]
+    fn media_scan_preserves_missing_sources_without_registered_extraction() {
+        let case = tempfile::tempdir().unwrap();
+        let extracted = archive_extractor_output_root(case.path().to_str().unwrap(), "source");
+        let offline = case
+            .path()
+            .join("offline.zip")
+            .to_string_lossy()
+            .into_owned();
+        let paths = vec![offline.clone(), extracted.to_string_lossy().into_owned()];
+        assert_eq!(media_scan_paths(&paths, &extracted), paths);
+        fs::create_dir_all(&extracted).unwrap();
+        // An existing but unregistered folder cannot justify ignoring a source.
+        assert_eq!(
+            media_scan_paths(&[offline.clone()], &extracted),
+            vec![offline.clone()]
+        );
+        let missing_photo = case
+            .path()
+            .join("missing.jpg")
+            .to_string_lossy()
+            .into_owned();
+        let paths = vec![
+            offline,
+            extracted.to_string_lossy().into_owned(),
+            missing_photo.clone(),
+        ];
+        assert_eq!(
+            media_scan_paths(&paths, &extracted),
+            vec![paths[1].clone(), missing_photo]
+        );
+    }
 
     #[test]
     fn legacy_demo_manifests_are_skipped_before_schema_validation() {

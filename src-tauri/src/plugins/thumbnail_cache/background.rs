@@ -218,10 +218,19 @@ async fn discover(case: &Arc<CaseCache>) -> Result<(), String> {
                     .map_err(|e| e.to_string())?,
                 );
             }
-            // Match plugin loading: saved case paths replace the original
-            // source, which may be an archive that is no longer available.
             if roots.is_empty() {
                 roots.push(source.get::<String, _>("path"));
+            }
+            // Share Image Metadata's archive/extraction selection so an offline
+            // original ZIP cannot stop preparation of the case-owned files.
+            if let Some(case_folder) = Path::new(&case.database_path).parent() {
+                roots = crate::plugins::media_scan_paths(
+                    &roots,
+                    &crate::plugins::archive_extractor_output_root(
+                        &case_folder.to_string_lossy(),
+                        &id,
+                    ),
+                );
             }
             roots.sort();
             let mut covered = Vec::<PathBuf>::new();

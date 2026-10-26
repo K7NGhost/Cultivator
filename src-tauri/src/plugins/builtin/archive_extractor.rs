@@ -587,6 +587,10 @@ fn archive_entry_count(
     }
 }
 
+pub(crate) fn is_archive_path(path: &Path) -> bool {
+    archive_kind(path).is_some()
+}
+
 fn archive_kind(path: &Path) -> Option<ArchiveKind> {
     let name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
     if name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".gz") {
