@@ -21,7 +21,7 @@ use tauri::Emitter;
 mod access;
 pub(crate) use access::{
     ensure_family, ensure_family_checked, ensure_local, ensure_local_checked, indexed_entries,
-    indexed_metadata, read_prefix, visit_files, EvidenceReader,
+    indexed_metadata, read_prefix, source_images, visit_files, EvidenceReader,
 };
 
 fn display_path(path: &Path) -> String {

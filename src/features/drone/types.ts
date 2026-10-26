@@ -37,6 +37,12 @@ export type FlightEvent = {
 };
 
 export type ConversionMetadata = {
+  carving?: {
+    imagePath: string;
+    imageOffset: number;
+    recoveredBytes: number;
+    stoppedAtSizeLimit: boolean;
+  } | null;
   id: string;
   sourceName: string;
   sourcePath: string;

@@ -1,14 +1,23 @@
+const CRC_TABLE: [u16; 256] = {
+    let mut table = [0; 256];
+    let mut index = 0;
+    while index < 256 {
+        let mut value = index as u16;
+        let mut bit = 0;
+        while bit < 8 {
+            value = (value >> 1) ^ if value & 1 != 0 { 0x8408 } else { 0 };
+            bit += 1;
+        }
+        table[index] = value;
+        index += 1;
+    }
+    table
+};
+
 pub fn crc16(bytes: &[u8]) -> u16 {
     let mut crc = 0x3692u16;
     for &byte in bytes {
-        crc ^= byte as u16;
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 {
-                (crc >> 1) ^ 0x8408
-            } else {
-                crc >> 1
-            };
-        }
+        crc = (crc >> 8) ^ CRC_TABLE[((crc ^ byte as u16) & 0xff) as usize];
     }
     crc
 }
@@ -126,6 +135,20 @@ mod tests {
     fn crc_matches_datcon_table_seed_vector() {
         // Independently calculated using DatCon's table-driven algorithm.
         assert_eq!(crc16(b"123456789"), 0x7109);
+    }
+    #[test]
+    fn table_crc_matches_bitwise_reference_for_all_byte_values() {
+        let bytes: Vec<u8> = (0..1024).map(|index| (index % 256) as u8).collect();
+        for length in [0, 1, 2, 31, 255, 256, 1024] {
+            let mut reference = 0x3692u16;
+            for byte in &bytes[..length] {
+                reference ^= *byte as u16;
+                for _ in 0..8 {
+                    reference = (reference >> 1) ^ if reference & 1 != 0 { 0x8408 } else { 0 };
+                }
+            }
+            assert_eq!(crc16(&bytes[..length]), reference);
+        }
     }
     #[test]
     fn recovers_after_bad_crc_and_decodes_final_packet() {

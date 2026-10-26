@@ -169,6 +169,29 @@ export function FlightWorkspace({
           </TabsContent>
           <TabsContent value="source" className="min-h-0 overflow-auto p-2">
             <dl className="grid grid-cols-[130px_minmax(0,1fr)] gap-x-2 gap-y-2 text-xs">
+              {metadata.carving && (
+                <>
+                  <dt className="text-muted-foreground">Original image</dt>
+                  <dd className="break-all font-mono">
+                    {metadata.carving.imagePath}
+                  </dd>
+                  <dt className="text-muted-foreground">
+                    Decoded image offset
+                  </dt>
+                  <dd className="font-mono">
+                    0x{metadata.carving.imageOffset.toString(16)}
+                  </dd>
+                  <dt className="text-muted-foreground">Carved bytes</dt>
+                  <dd>
+                    {metadata.carving.recoveredBytes.toLocaleString()}{" "}
+                    (contiguous recovery
+                    {metadata.carving.stoppedAtSizeLimit
+                      ? "; size limit reached"
+                      : ""}
+                    )
+                  </dd>
+                </>
+              )}
               <dt className="text-muted-foreground">Source DAT</dt>
               <dd className="break-all font-mono">{metadata.sourcePath}</dd>
               <dt className="text-muted-foreground">Source SHA-256</dt>

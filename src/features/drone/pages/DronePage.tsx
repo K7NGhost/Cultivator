@@ -50,9 +50,11 @@ function DroneWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
   const [paging, setPaging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const flight = flights.find((item) => item.id === flightId);
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const refresh = useCallback(async (showLoading = true) => {
+    if (showLoading) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const next = await listDroneFlights(caseRecord.databasePath);
       setFlights(next);
@@ -64,7 +66,7 @@ function DroneWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
     } catch (caught) {
       setError(message(caught));
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, [caseRecord.databasePath]);
   useEffect(() => {
@@ -72,10 +74,16 @@ function DroneWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
     const listener = listen("plugin-run-finished", () => {
       void refresh();
     });
+    // Flights can finish before other plugins in the same run. Show their
+    // persisted results without waiting for that entire run to finish.
+    const timer = window.setInterval(() => {
+      if (active) void refresh(false);
+    }, 5000);
     return () => {
+      window.clearInterval(timer);
       void listener.then((unlisten) => unlisten()).catch(() => {});
     };
-  }, [refresh]);
+  }, [refresh, active]);
   useEffect(() => {
     let disposed = false;
     setDetail(null);

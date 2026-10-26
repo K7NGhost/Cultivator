@@ -52,9 +52,10 @@ impl Reporter {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
+        let first = state.last.is_none();
         state.sequence += 1;
         state.last = Some(event.clone());
-        if state.last_sent.elapsed() < Duration::from_millis(100) {
+        if !first && state.last_sent.elapsed() < Duration::from_millis(100) {
             return;
         }
         state.last_sent = Instant::now();

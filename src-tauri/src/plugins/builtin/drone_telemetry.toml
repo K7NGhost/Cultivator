@@ -9,3 +9,10 @@ mode = "path_regex"
 path_regex = "(?i).*\\.dat$"
 entry = "builtin:drone-telemetry"
 function = "parse"
+
+[[options]]
+id = "carveDat"
+label = "Carve DAT logs from disk images"
+description = "Scan the original decoded disk-image bytes for CRC-validated DAT headers, including logs absent from the filesystem index. Saves contiguous recovered fragments with image offsets. This scans the entire image; fragmented or overwritten logs may be incomplete."
+type = "checkbox"
+defaultValue = "false"

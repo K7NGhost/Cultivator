@@ -1,4 +1,5 @@
 //! Native DJI DAT -> CSV conversion, based on the local DatCon source.
+pub(crate) mod carving;
 mod packet;
 mod schema;
 mod telemetry;
@@ -17,7 +18,7 @@ use std::{
 };
 use telemetry::{CoordinateSource, Telemetry};
 
-const MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_EVENTS: usize = 1_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,6 +80,8 @@ pub struct RecordType {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Metadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carving: Option<CarvingProvenance>,
     #[serde(default)]
     pub decoder_version: u32,
     pub id: String,
@@ -101,6 +104,15 @@ pub struct Metadata {
     pub route_distance_meters: Option<f64>,
     pub unmapped_record_types: Vec<RecordType>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CarvingProvenance {
+    pub image_path: String,
+    pub image_offset: u64,
+    pub recovered_bytes: u64,
+    pub stopped_at_size_limit: bool,
 }
 
 #[derive(Serialize)]
@@ -428,6 +440,7 @@ fn convert(
         warnings.push(format!("The event preview is limited to {MAX_EVENTS} entries; {events_omitted} additional messages were omitted."));
     }
     let metadata = Metadata {
+        carving: None,
         decoder_version: 2,
         id: id.into(),
         source_name: source
@@ -487,6 +500,18 @@ fn checkpoint(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
 }
 
 impl Dataset {
+    pub(crate) fn save_metadata(&self) -> Result<(), String> {
+        let path = self
+            .csv_path()
+            .parent()
+            .ok_or("Missing conversion directory")?
+            .join("conversion.json");
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&self.metadata).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())
+    }
     fn load(mut metadata: Metadata, events: Vec<FlightEvent>) -> Result<Self, String> {
         let mut reader = csv::Reader::from_path(&metadata.csv_path).map_err(|e| e.to_string())?;
         let columns: Vec<String> = reader

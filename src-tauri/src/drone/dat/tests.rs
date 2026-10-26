@@ -242,7 +242,8 @@ fn preserves_every_gps_fix_without_mixing_position_sources() {
 }
 
 fn with_fixture(data: &[u8], check: impl FnOnce(Dataset)) {
-    let directory = std::env::temp_dir().join(format!("cultivator-dat-test-{}", uuid::Uuid::new_v4()));
+    let directory =
+        std::env::temp_dir().join(format!("cultivator-dat-test-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).unwrap();
     let source = directory.join("source.DAT");
     fs::write(&source, data).unwrap();
