@@ -2465,6 +2465,8 @@ dependencies = [
 [[package]]
 name = "inodex"
 version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "272544dcbebf6b929282487bbfefa242a239269fd81ccaf58e5c223e4c443e5b"
 dependencies = [
  "adler2",
  "aes 0.8.4",

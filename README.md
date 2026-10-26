@@ -58,7 +58,7 @@ The plugin architecture is designed to minimize the amount of boilerplate requir
 
 ## Evidence importing
 
-Cultivator uses the sibling [Inodex](../inodex) Rust library to import logical
+Cultivator uses the [Inodex](https://crates.io/crates/inodex) Rust crate to import logical
 files/directories and supported disk images and filesystems. Image imports index
 the filesystem; case-owned working files are created only when plugins or viewers
 need local paths. Rust metadata and hashing consumers can read directly through
