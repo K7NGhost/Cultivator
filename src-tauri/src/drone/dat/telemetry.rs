@@ -11,6 +11,10 @@ pub struct Telemetry {
     relative_height: Option<f64>,
     barometric: Option<f64>,
     gps_msl: Option<f64>,
+    gps_acquired: bool,
+    gps_fix_type: Option<u8>,
+    gps_horizontal_accuracy: Option<f64>,
+    gps_vertical_accuracy: Option<f64>,
     velocity_n: Option<f64>,
     velocity_e: Option<f64>,
     velocity_d: Option<f64>,
@@ -59,6 +63,12 @@ fn position_payload(id: u16, bytes: &[u8]) -> Option<(CoordinateSource, Option<f
         )),
         _ => None,
     }
+}
+
+// GPS receiver fix type is a float in these DJI records (0 = no fix).
+fn gps_has_fix(bytes: &[u8]) -> bool {
+    matches!(f32_at(bytes, 40), Some(v) if (2.0..=5.0).contains(&v) && v.fract() == 0.0)
+        && u16_at(bytes, 64).is_some_and(|satellites| satellites > 0)
 }
 
 fn f32_at(bytes: &[u8], offset: usize) -> Option<f64> {
@@ -125,6 +135,9 @@ impl Telemetry {
     }
 
     pub fn valid_position_source(id: u16, bytes: &[u8]) -> Option<CoordinateSource> {
+        if matches!(id, 5 | 2096) && !gps_has_fix(bytes) {
+            return None;
+        }
         position_payload(id, bytes).and_then(|(source, latitude, longitude)| {
             valid_coordinates(latitude, longitude).then_some(source)
         })
@@ -148,8 +161,14 @@ impl Telemetry {
         tick: u64,
         offset: usize,
     ) -> bool {
-        if let Some((_, latitude, longitude)) = position_payload(id, bytes)
-            .filter(|(source, _, _)| self.coordinate_source == Some(*source))
+        if Self::valid_position_source(id, bytes) == Some(CoordinateSource::Gps) {
+            self.gps_acquired = true;
+        }
+        if let Some((_, latitude, longitude)) =
+            position_payload(id, bytes).filter(|(source, _, _)| {
+                self.coordinate_source == Some(*source)
+                    && (*source != CoordinateSource::Gps || self.gps_acquired)
+            })
         {
             self.coords(latitude, longitude);
             self.coordinate_tick = Some(tick);
@@ -168,6 +187,30 @@ impl Telemetry {
                 return true;
             }
             (5, 68) | (2096, 66 | 68 | 72) => {
+                let fix = f32_at(bytes, 40);
+                self.gps_fix_type = fix
+                    .filter(|v| *v >= 0.0 && *v <= 5.0 && v.fract() == 0.0)
+                    .map(|v| v as u8);
+                self.satellites = u16_at(bytes, 64);
+                self.gps_horizontal_accuracy = gps_has_fix(bytes)
+                    .then(|| f32_at(bytes, 32).map(|v| v / 100.0))
+                    .flatten();
+                self.gps_vertical_accuracy = gps_has_fix(bytes)
+                    .then(|| f32_at(bytes, 36).map(|v| v / 100.0))
+                    .flatten();
+                // A coordinate in range is not evidence of a receiver fix. Before
+                // acquisition this log contains plausible coordinates thousands of
+                // kilometres away and altitude above 13 km with fix type zero.
+                if !self.gps_acquired {
+                    self.gps_msl = None;
+                    if self.coordinate_source == Some(CoordinateSource::Gps) {
+                        self.coords(None, None);
+                        self.velocity_n = None;
+                        self.velocity_e = None;
+                        self.velocity_d = None;
+                    }
+                    return true;
+                }
                 self.gps_msl = i32_at(bytes, 16).map(|v| v / 1000.0);
                 self.velocity_n = f32_at(bytes, 20).map(|v| v / 100.0);
                 self.velocity_e = f32_at(bytes, 24).map(|v| v / 100.0);
@@ -206,7 +249,7 @@ impl Telemetry {
                 self.battery = (bytes[12] <= 100).then_some(bytes[12] as f64);
                 self.voltage = i16_at(bytes, 0).map(|v| v / 1000.0);
                 self.current = i32_at(bytes, 2).map(|v| -v / 1000.0);
-                self.temperature = Some(bytes[10] as i8 as f64);
+                self.temperature = i16_at(bytes, 10).map(|v| v / 10.0);
                 return true;
             }
             (5000, 38) => {
@@ -249,21 +292,20 @@ impl Telemetry {
         offset: usize,
     ) -> FlightRow {
         let elapsed_seconds = tick.saturating_sub(first_tick) as f64 / clock;
-        let (altitude, reference) =
-            if self.coordinate_source == Some(CoordinateSource::Gps) && self.gps_msl.is_some() {
-                (self.gps_msl, Some("gps_msl"))
-            } else if self.relative_height.is_some() {
-                (self.relative_height, Some("relative_to_home"))
-            } else if self.gps_msl.is_some() {
-                (self.gps_msl, Some("gps_msl"))
-            } else if self.barometric.is_some() {
-                (self.barometric, Some("barometric"))
-            } else {
-                (None, None)
-            };
-        let speed = match (self.velocity_n, self.velocity_e, self.velocity_d) {
-            (Some(n), Some(e), Some(d)) => {
-                let value = (n * n + e * e + d * d).sqrt();
+        let (altitude, reference) = if self.coordinate_source == Some(CoordinateSource::Gps) {
+            (self.gps_msl, self.gps_msl.map(|_| "gps_msl"))
+        } else if self.relative_height.is_some() {
+            (self.relative_height, Some("relative_to_home"))
+        } else if self.gps_msl.is_some() {
+            (self.gps_msl, self.gps_msl.map(|_| "gps_msl"))
+        } else if self.barometric.is_some() {
+            (self.barometric, Some("barometric"))
+        } else {
+            (None, None)
+        };
+        let speed = match (self.velocity_n, self.velocity_e) {
+            (Some(n), Some(e)) => {
+                let value = (n * n + e * e).sqrt();
                 value.is_finite().then_some(value)
             }
             _ => None,
@@ -296,6 +338,9 @@ impl Telemetry {
             mode: self.mode.clone(),
             satellites: self.satellites,
             gps_utc: self.gps_utc.clone(),
+            gps_fix_type: self.gps_fix_type,
+            gps_horizontal_accuracy: self.gps_horizontal_accuracy,
+            gps_vertical_accuracy: self.gps_vertical_accuracy,
             source_offset: offset,
         }
     }

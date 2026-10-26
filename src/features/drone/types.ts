@@ -22,6 +22,9 @@ export type FlightRecord = {
   gpsAltitudeMsl?: number | null;
   controllerRelativeAltitude?: number | null;
   gpsUtc?: string | null;
+  gpsFixType?: number | null;
+  gpsHorizontalAccuracy?: number | null;
+  gpsVerticalAccuracy?: number | null;
 };
 
 export type FlightEvent = {

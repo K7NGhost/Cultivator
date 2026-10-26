@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { Drone, Flag, MapPin } from "lucide-react";
+import { Flag, MapPin } from "lucide-react";
+import quadcopterIcon from "../assets/quadcopter.svg";
 import type {
   Marker,
   Popup,
@@ -17,6 +18,8 @@ import {
   type GpsRecord,
 } from "../lib/mapData";
 import type { FlightRecord } from "../types";
+
+const FLIGHT_PATH_COLOR = "#f97316";
 
 export type MapHandle = {
   zoomIn: () => void;
@@ -210,7 +213,6 @@ export const MapCanvas = forwardRef<MapHandle, Props>(
 
       function addFlightLayers() {
         if (!map) return;
-        const primary = themeColor("--color-primary");
         const data = flightGeoJson(latest.current.records);
         for (const [id, geojson] of Object.entries(data))
           if (!map.getSource(`flight-${id}`))
@@ -226,7 +228,7 @@ export const MapCanvas = forwardRef<MapHandle, Props>(
             type: "line",
             source: "flight-route",
             layout: { "line-cap": "round", "line-join": "round" },
-            paint: { "line-color": primary, "line-width": 3.5 },
+            paint: { "line-color": FLIGHT_PATH_COLOR, "line-width": 3.5 },
           });
         updateData();
       }
@@ -246,12 +248,19 @@ export const MapCanvas = forwardRef<MapHandle, Props>(
           mapRef.current = map;
           const droneElement = document.createElement("div");
           droneElement.className =
-            "flex size-10 items-center justify-center rounded-full border border-border bg-card text-primary shadow-md";
+            "flex size-7 items-center justify-center text-primary";
           droneElement.setAttribute("role", "img");
           droneElement.setAttribute("aria-label", "Drone position");
           markerRoot = createRoot(droneElement);
           markerRoot.render(
-            <Drone size={26} strokeWidth={2} aria-hidden="true" />,
+            <span
+              className="block size-7 bg-current"
+              style={{
+                mask: `url("${quadcopterIcon}") center / contain no-repeat`,
+                WebkitMask: `url("${quadcopterIcon}") center / contain no-repeat`,
+              }}
+              aria-hidden="true"
+            />,
           );
           markerRef.current = new library.Marker({
             element: droneElement,
@@ -370,7 +379,7 @@ export const MapCanvas = forwardRef<MapHandle, Props>(
               map.setPaintProperty(
                 "flight-route",
                 "line-color",
-                themeColor("--color-primary"),
+                FLIGHT_PATH_COLOR,
               );
             else loadBasemap();
           });

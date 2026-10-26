@@ -134,9 +134,9 @@ fn parse_artifact(
         kind: "journey".into(),
         label: dataset.metadata.source_name.clone(),
         payload: json!({"kind":"journey","category":"journeys","label":dataset.metadata.source_name,
-            "provider":"Samara DJI DAT", "metadata":dataset.metadata, "durationSeconds":duration,
+            "provider":"Cultivator DJI DAT", "metadata":dataset.metadata, "durationSeconds":duration,
             "maxAltitude":altitude,"maxSpeed":speed,"conversionRoot":output,
-            "source":{"filePath":path,"parser":"samara-dat"}}),
+            "source":{"filePath":path,"parser":"cultivator-dat"}}),
     })
 }
 
@@ -197,7 +197,7 @@ mod tests {
         let artifacts = effects.artifacts.unwrap();
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].payload["metadata"]["rowCount"], 2);
-        assert_eq!(artifacts[0].payload["source"]["parser"], "samara-dat");
+        assert_eq!(artifacts[0].payload["source"]["parser"], "cultivator-dat");
         assert_eq!(artifacts[0].payload["durationSeconds"], 1.0);
         assert!(effects
             .logs

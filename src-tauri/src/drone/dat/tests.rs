@@ -61,8 +61,116 @@ fn gps(latitude_e7: i32, longitude_e7: i32, altitude_mm: i32) -> Vec<u8> {
     bytes[16..20].copy_from_slice(&altitude_mm.to_le_bytes());
     bytes[20..24].copy_from_slice(&300f32.to_le_bytes());
     bytes[24..28].copy_from_slice(&400f32.to_le_bytes());
+    bytes[40..44].copy_from_slice(&3f32.to_le_bytes());
     bytes[64..66].copy_from_slice(&12u16.to_le_bytes());
     bytes
+}
+
+#[test]
+fn gps_acquisition_excludes_startup_coordinates_and_preserves_fix_loss_quality() {
+    let mut data = header_bytes(true);
+    let mut invalid = gps(443_291_004, -1_296_740_355, 13_752_200);
+    invalid[40..44].copy_from_slice(&0f32.to_le_bytes());
+    invalid[64..66].copy_from_slice(&0u16.to_le_bytes());
+    data.extend(fixture_packet(2096, 4_500_000, &invalid));
+    let mut imu_fallback = header_bytes(true);
+    imu_fallback.extend(fixture_packet(2048, 4_500_000, &imu(39.92, -105.11)));
+    imu_fallback.extend(fixture_packet(2096, 4_500_000, &invalid));
+    with_fixture(&imu_fallback, |dataset| {
+        assert_eq!(dataset.metadata.coordinate_source, "imu");
+        assert_eq!(dataset.route.len(), 1);
+        assert!((dataset.route[0].latitude.unwrap() - 39.92).abs() < 1e-9);
+        assert_eq!(dataset.route[0].speed, Some(5.0));
+    });
+    let mut acquired = gps(399_201_716, -1_051_129_505, 1_692_357);
+    acquired[20..24].copy_from_slice(&9f32.to_le_bytes());
+    acquired[24..28].copy_from_slice(&(-8f32).to_le_bytes());
+    acquired[28..32].copy_from_slice(&2f32.to_le_bytes());
+    acquired[32..36].copy_from_slice(&244f32.to_le_bytes());
+    acquired[36..40].copy_from_slice(&435f32.to_le_bytes());
+    data.extend(fixture_packet(2096, 9_000_000, &acquired));
+    let mut lost = acquired.clone();
+    lost[40..44].copy_from_slice(&0f32.to_le_bytes());
+    lost[64..66].copy_from_slice(&0u16.to_le_bytes());
+    data.extend(fixture_packet(2096, 13_500_000, &lost));
+    with_fixture(&data, |dataset| {
+        let page = dataset.page(0, 100, "", "").unwrap();
+        let startup = &page.rows[0].telemetry;
+        assert_eq!(startup.latitude, None);
+        assert_eq!(startup.altitude, None);
+        assert_eq!(startup.speed, None);
+        assert_eq!(startup.gps_fix_type, Some(0));
+        assert_eq!(dataset.route.len(), 2);
+        let fix = &dataset.route[0];
+        assert_eq!(fix.altitude, Some(1692.357));
+        assert!((fix.speed.unwrap() - 0.1204159458).abs() < 1e-9);
+        assert_eq!(fix.gps_horizontal_accuracy, Some(2.44));
+        assert_eq!(fix.gps_vertical_accuracy, Some(4.35));
+        assert_eq!(dataset.route[1].gps_fix_type, Some(0));
+        assert_eq!(dataset.route[1].gps_horizontal_accuracy, None);
+        assert_eq!(dataset.metadata.route_distance_meters, Some(0.0));
+    });
+}
+
+/// Optional evidence check: no private DAT/CSV files are required in the repository.
+#[test]
+fn real_dat_matches_reference_csv_when_supplied() {
+    let (Some(source), Some(reference)) = (
+        std::env::var_os("CULTIVATOR_TEST_DAT"),
+        std::env::var_os("CULTIVATOR_TEST_TRACK_CSV"),
+    ) else {
+        return;
+    };
+    let output = tempfile::tempdir().unwrap();
+    let source = PathBuf::from(source);
+    let original = sha256(&fs::read(&source).unwrap());
+    let dataset = convert_file(&source, output.path()).unwrap();
+    let mut reference = csv::ReaderBuilder::new()
+        .comment(Some(b'#'))
+        .from_path(reference)
+        .unwrap();
+    let headers = reference.headers().unwrap().clone();
+    let expected: Vec<_> = reference.records().map(Result::unwrap).collect();
+    assert_eq!(dataset.route.len(), expected.len());
+    for (row, record) in dataset.route.iter().zip(&expected) {
+        let value = |name: &str| {
+            record[headers.iter().position(|h| h == name).unwrap()]
+                .parse::<f64>()
+                .unwrap()
+        };
+        for (actual, name, tolerance) in [
+            (row.latitude, "latitude", 0.00000051),
+            (row.longitude, "longitude", 0.00000051),
+            (row.gps_altitude_msl, "abs_alt_m", 0.00051),
+            (row.speed, "ground_speed_ms", 0.00051),
+            (row.velocity_n, "vel_n_ms", 0.00051),
+            (row.velocity_e, "vel_e_ms", 0.00051),
+            (row.velocity_d, "vel_d_ms", 0.00051),
+        ] {
+            assert!(
+                (actual.unwrap() - value(name)).abs() <= tolerance,
+                "{name} mismatch at row {}: {:?} versus {}",
+                row.id,
+                actual,
+                value(name)
+            );
+        }
+        assert_eq!(row.satellites.unwrap() as f64, value("sats_used"));
+        assert_eq!(row.gps_fix_type.unwrap() as f64, value("gps_fix_type"));
+        for (actual, name) in [
+            (row.gps_horizontal_accuracy, "h_acc_m"),
+            (row.gps_vertical_accuracy, "v_acc_m"),
+        ] {
+            let text = &record[headers.iter().position(|h| h == name).unwrap()];
+            if text.is_empty() {
+                assert_eq!(actual, None);
+            } else {
+                assert!((actual.unwrap() - text.parse::<f64>().unwrap()).abs() <= 0.0051);
+            }
+        }
+    }
+    assert_eq!(sha256(&fs::read(&source).unwrap()), original);
+    println!("Reference CSV matched {} receiver positions: coordinates, MSL altitude, horizontal speed, N/E/D velocity, satellites, fix type and accuracy. Distance: {:.3} m; source unchanged.", expected.len(), dataset.metadata.route_distance_meters.unwrap());
 }
 
 #[test]
@@ -134,7 +242,7 @@ fn preserves_every_gps_fix_without_mixing_position_sources() {
 }
 
 fn with_fixture(data: &[u8], check: impl FnOnce(Dataset)) {
-    let directory = std::env::temp_dir().join(format!("samara-dat-test-{}", uuid::Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("cultivator-dat-test-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).unwrap();
     let source = directory.join("source.DAT");
     fs::write(&source, data).unwrap();
@@ -225,11 +333,11 @@ fn missing_gps_does_not_create_a_fictitious_route() {
 
 #[test]
 fn real_dat_round_trip_when_sample_is_supplied() {
-    let Some(source) = std::env::var_os("SAMARA_TEST_DAT") else {
+    let Some(source) = std::env::var_os("CULTIVATOR_TEST_DAT") else {
         return;
     };
     let directory = PathBuf::from(
-        std::env::var_os("SAMARA_TEST_OUTPUT")
+        std::env::var_os("CULTIVATOR_TEST_OUTPUT")
             .unwrap_or_else(|| std::env::temp_dir().into_os_string()),
     );
     let source = PathBuf::from(source);
@@ -239,7 +347,7 @@ fn real_dat_round_trip_when_sample_is_supplied() {
     assert_eq!(dataset.metadata.source_sha256, original_hash);
     assert!(dataset.metadata.row_count > 100);
     assert!(!dataset.route.is_empty());
-    if let Some(reference_path) = std::env::var_os("SAMARA_REFERENCE_TRACK") {
+    if let Some(reference_path) = std::env::var_os("CULTIVATOR_REFERENCE_TRACK") {
         let reference: serde_json::Value =
             serde_json::from_slice(&fs::read(reference_path).unwrap()).unwrap();
         let expected = reference["gps"].as_array().unwrap();
@@ -300,6 +408,16 @@ fn saved_conversion_reopens_without_dat_and_rejects_changed_csv() {
         assert_eq!(restored.page(1, 1, "", "").unwrap().rows[0].telemetry.id, 2);
         assert_eq!(restored.route[0].latitude, dataset.route[0].latitude);
         assert!(restore_file(root, "../source.DAT").is_err());
+        let metadata_path = csv_path.parent().unwrap().join("conversion.json");
+        let metadata_bytes = fs::read(&metadata_path).unwrap();
+        let mut legacy: serde_json::Value = serde_json::from_slice(&metadata_bytes).unwrap();
+        legacy.as_object_mut().unwrap().remove("decoderVersion");
+        fs::write(&metadata_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert!(restore_file(root, &id)
+            .err()
+            .unwrap()
+            .contains("Run Drone Telemetry again"));
+        fs::write(&metadata_path, metadata_bytes).unwrap();
         let original_csv = fs::read(&csv_path).unwrap();
         fs::write(&csv_path, [original_csv.as_slice(), b"changed"].concat()).unwrap();
         let error = restore_file(root, &id).err().unwrap();

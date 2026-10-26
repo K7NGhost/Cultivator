@@ -1,4 +1,4 @@
-//! Case-owned flight conversions using the DAT decoder and map model from Samara.
+//! Case-owned flight conversions using the native DJI DAT decoder and map model.
 pub(crate) mod dat;
 
 use crate::plugins::{self, PluginArtifactRecord};

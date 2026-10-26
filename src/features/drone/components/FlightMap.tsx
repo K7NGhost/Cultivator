@@ -56,21 +56,21 @@ export function FlightMap({
   }, [playing, points, speed, onSelect]);
   return (
     <section
-      className="flex min-h-[440px] flex-col overflow-hidden rounded-xl border bg-card shadow-sm"
+      className="flex min-h-[400px] flex-1 flex-col overflow-hidden bg-background"
       aria-label="Flight path and playback"
     >
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <MapPin className="size-4 text-teal-500" /> Flight path{" "}
+      <div className="flex items-center justify-between border-b px-2 py-1">
+        <div className="flex items-center gap-2 text-xs font-medium">
+          <MapPin className="size-4 text-muted-foreground" /> Flight path{" "}
           <span className="ml-2 text-xs font-normal text-muted-foreground">
-            {actualPointCount.toLocaleString()} GPS fixes
+            {actualPointCount.toLocaleString()} receiver positions
           </span>
         </div>
         <div className="flex items-center gap-2">
           <Satellite className="size-3.5 text-muted-foreground" />
           <select
             aria-label="Map basemap"
-            className="rounded-md border bg-background px-2 py-1 text-xs"
+            className="select select-xs rounded-sm border-border bg-background"
             value={basemap}
             onChange={(e) => setBasemap(e.target.value as Basemap)}
           >
@@ -89,18 +89,18 @@ export function FlightMap({
           showPath={showPath}
           onStatus={setStatus}
         />
-        <div className="pointer-events-none absolute left-3 top-3 rounded-lg border bg-background/95 px-3 py-2 text-xs shadow-sm backdrop-blur">
+        <div className="pointer-events-none absolute left-2 top-2 rounded-sm border bg-background/95 px-2 py-1 text-xs">
           <div className="flex items-center gap-2 font-medium">
-            <span className="size-1.5 rounded-full bg-teal-500" />
+            <span className="size-1.5 rounded-full bg-primary" />
             {points[0]?.coordinateSource?.toUpperCase() ?? "GPS"} track
           </div>
           <p className="mt-1 text-[10px] text-muted-foreground">
             {points.length < actualPointCount
-              ? `${points.length.toLocaleString()} fixes rendered · full track retained in CSV`
+              ? `${points.length.toLocaleString()} positions rendered · full track retained in CSV`
               : "Coordinates decoded from DAT"}
           </p>
         </div>
-        <div className="absolute right-3 top-3 flex flex-col gap-1.5">
+        <div className="absolute right-2 top-2 flex flex-col gap-1.5">
           <Button
             size="icon"
             variant="outline"
@@ -151,7 +151,7 @@ export function FlightMap({
         {status.phase === "loading" && (
           <div
             role="status"
-            className="absolute bottom-3 left-3 rounded-md bg-background/95 px-3 py-2 text-xs shadow-sm"
+            className="absolute bottom-3 left-3 rounded-md bg-background/95 px-2 py-1 text-xs"
           >
             Loading map…
           </div>
@@ -159,27 +159,28 @@ export function FlightMap({
         {(status.offline || status.phase === "failed") && (
           <div
             role="status"
-            className="absolute bottom-3 left-3 right-3 rounded-lg border bg-background/95 p-3 text-xs shadow-sm"
+            className="absolute bottom-3 left-3 right-3 rounded-sm border bg-background/95 p-3 text-xs"
           >
             {status.message}
-            <button
-              className="ml-2 underline"
+            <Button
+              variant="link"
+              className="ml-2 h-auto p-0 text-xs"
               onClick={() => {
                 setVersion((v) => v + 1);
                 setStatus({ phase: "loading" });
               }}
             >
               Retry map
-            </button>
+            </Button>
           </div>
         )}
         {!points.length && status.phase === "ready" && (
           <div className="absolute inset-0 grid place-items-center bg-background/70 text-sm text-muted-foreground">
-            No valid GPS fixes. Telemetry is available below.
+            No valid receiver positions. Telemetry is available below.
           </div>
         )}
       </div>
-      <div className="space-y-3 border-t px-4 py-3">
+      <div className="space-y-1 border-t px-2 py-1">
         <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
           <span>Flight playback</span>
           <span className="font-mono normal-case">{selected.time} elapsed</span>
@@ -187,7 +188,7 @@ export function FlightMap({
         <div className="flex items-center gap-3">
           <Button
             size="icon"
-            className="size-8 shrink-0 bg-teal-600 text-white hover:bg-teal-700"
+            className="size-8 shrink-0"
             aria-label={playing ? "Pause playback" : "Play flight"}
             disabled={points.length < 2}
             onClick={() => {
@@ -208,7 +209,7 @@ export function FlightMap({
             max={Math.max(0, points.length - 1)}
             value={index}
             disabled={!points.length}
-            className="min-w-0 flex-1 accent-teal-600"
+            className="min-w-0 flex-1 range range-xs"
             onChange={(e) => {
               setPlaying(false);
               const point = points[Number(e.target.value)];
@@ -217,7 +218,7 @@ export function FlightMap({
           />
           <select
             aria-label="Playback speed"
-            className="rounded border bg-background p-1 text-xs"
+            className="select select-xs w-16 rounded-sm border-border bg-background"
             value={speed}
             onChange={(e) => {
               setPlaying(false);
@@ -232,7 +233,7 @@ export function FlightMap({
             {elapsedLabel(points[points.length - 1]?.elapsedSeconds ?? 0)}
           </span>
         </div>
-        <div className="grid grid-cols-3 border-t pt-3 text-xs">
+        <div className="grid grid-cols-3 border-t pt-1 text-xs">
           <div>
             <p className="text-[10px] text-muted-foreground">Latitude</p>
             <p className="mt-1 font-mono">

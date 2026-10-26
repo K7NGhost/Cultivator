@@ -59,7 +59,7 @@ export function TelemetryChart({
     ),
   );
   return (
-    <div className="rounded-xl border bg-card px-4 pb-2 pt-3">
+    <div className="border-r bg-background p-2">
       <div className="flex justify-between text-xs">
         <span className="text-muted-foreground">{title}</span>
         <span className="font-mono font-medium">

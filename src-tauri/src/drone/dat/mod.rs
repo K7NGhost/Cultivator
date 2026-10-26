@@ -48,6 +48,12 @@ pub struct FlightRow {
     pub mode: Option<String>,
     pub satellites: Option<u16>,
     pub gps_utc: Option<String>,
+    #[serde(default)]
+    pub gps_fix_type: Option<u8>,
+    #[serde(default)]
+    pub gps_horizontal_accuracy: Option<f64>,
+    #[serde(default)]
+    pub gps_vertical_accuracy: Option<f64>,
     pub source_offset: usize,
 }
 
@@ -73,6 +79,8 @@ pub struct RecordType {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Metadata {
+    #[serde(default)]
+    pub decoder_version: u32,
     pub id: String,
     pub source_name: String,
     pub source_path: String,
@@ -420,6 +428,7 @@ fn convert(
         warnings.push(format!("The event preview is limited to {MAX_EVENTS} entries; {events_omitted} additional messages were omitted."));
     }
     let metadata = Metadata {
+        decoder_version: 2,
         id: id.into(),
         source_name: source
             .file_name()
@@ -623,6 +632,9 @@ pub fn restore_file(root: &Path, import_id: &str) -> Result<Dataset, String> {
             .map_err(|e| format!("Cannot reopen saved conversion: {e}"))?,
     )
     .map_err(|e| format!("Cannot read saved conversion metadata: {e}"))?;
+    if metadata.decoder_version < 2 {
+        return Err("This flight was converted with an older DAT decoder that accepted GPS data before acquisition. Run Drone Telemetry again to rebuild it with corrected GPS validation.".into());
+    }
     if metadata.id != id.to_string() {
         return Err("Saved conversion ID does not match its directory.".into());
     }
