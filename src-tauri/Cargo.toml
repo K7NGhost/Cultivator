@@ -23,6 +23,8 @@ default = ["python-plugins"]
 python-plugins = []
 
 [dependencies]
+csv = "1.3"
+uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ctor = "0.8.0"
 tauri = { version = "2", features = ["protocol-asset"] }

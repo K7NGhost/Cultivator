@@ -2881,7 +2881,7 @@ fn validate_manifest(manifest: &PythonPluginManifest, plugin_dir: &Path) -> Resu
     Ok(())
 }
 
-async fn open_case_database(database_path: &str) -> Result<SqlitePool, String> {
+pub(crate) async fn open_case_database(database_path: &str) -> Result<SqlitePool, String> {
     let options = SqliteConnectOptions::new()
         .filename(database_path)
         .create_if_missing(false)
@@ -2949,7 +2949,7 @@ async fn ensure_datasource_tables(pool: &SqlitePool) -> Result<(), String> {
     Ok(())
 }
 
-async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
+pub(crate) async fn ensure_plugin_tables(pool: &SqlitePool) -> Result<(), String> {
     media_classifications::ensure_table(pool).await?;
     sqlx::query(
         r#"

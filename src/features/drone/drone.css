@@ -1,0 +1,23 @@
+/* This workspace can fit narrower windows without changing other workspaces. */
+body:has([data-drone-active="true"]) {
+  min-width: 0;
+}
+
+.drone-map .maplibregl-popup-content {
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.drone-map [class*="maplibregl-popup-anchor-bottom"] .maplibregl-popup-tip {
+  border-top-color: var(--card);
+}
+.drone-map [class*="maplibregl-popup-anchor-top"] .maplibregl-popup-tip {
+  border-bottom-color: var(--card);
+}
+.drone-map .maplibregl-ctrl-scale {
+  background: var(--card);
+  color: var(--card-foreground);
+  border-color: var(--foreground);
+}

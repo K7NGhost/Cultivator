@@ -1,4 +1,5 @@
 mod archive_extractor;
+mod drone_telemetry;
 mod image_metadata;
 mod face_detection;
 mod clip_classification;

@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Clock3,
   Database,
+  Drone,
   FileSearch,
   FolderTree,
   Images,
@@ -41,6 +42,7 @@ const navGroups = [
       { label: "Files", path: "/files", icon: FolderTree },
       { label: "Search", path: "/search", icon: Search },
       { label: "Media", path: "/media", icon: Images },
+      { label: "Drone", path: "/drone", icon: Drone },
     ],
   },
   {
