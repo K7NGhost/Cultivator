@@ -2,7 +2,6 @@ use crate::scripting::runtime::{self, PythonRuntime};
 #[cfg(feature = "python-plugins")]
 use globset::{GlobBuilder, GlobMatcher};
 #[cfg(feature = "python-plugins")]
-use ignore::WalkBuilder;
 #[cfg(feature = "python-plugins")]
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -26,6 +25,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 mod builtin;
+mod artifact_spool;
 mod bundle;
 mod cancellation;
 mod execution;
@@ -1050,6 +1050,7 @@ pub async fn remove_datasource(
         &case_folder.to_string_lossy(),
         &datasource_id,
     ));
+    generated_artifact_paths.insert(artifacts_root.join("evidence").join(&datasource_id));
 
     let mut cleanup_paths = HashSet::new();
 
@@ -1156,6 +1157,9 @@ pub async fn remove_datasource(
     .execute(&mut *transaction)
     .await
     .map_err(|error| format!("Failed to remove datasource paths: {error}"))?;
+
+    sqlx::query("DELETE FROM evidence_sources WHERE data_source_id = $1")
+        .bind(&datasource_id).execute(&mut *transaction).await.map_err(|e| e.to_string())?;
 
     sqlx::query(
         r#"
@@ -1388,6 +1392,10 @@ async fn run_builtin_plugin_stage(
                 replace_plugin_results(pool, &job.id, &datasource.id, &plugin_id, &records).await?;
             }
 
+            if let Some(spool) = effects.artifact_spool {
+                artifact_spool::replace(pool, &job.id, &datasource.id, &plugin_id, &spool).await?;
+            }
+
             if let Some(gallery) = effects.media {
                 replace_media_gallery_items(pool, &job.id, &datasource.id, &gallery).await?;
                 let thumbnail_app = app_handle.clone();
@@ -1497,6 +1505,11 @@ fn execute_python_plugin_process(
         return Err("Plugin run cancelled.".to_string());
     }
 
+    for task in &plan.tasks {
+        if is_plugin_job_cancelled(Some(cancel_id))? { return Err("Plugin run cancelled".into()); }
+        crate::evidence::ensure_family_checked(Path::new(&task.file_path), &|| is_plugin_job_cancelled(Some(cancel_id)).unwrap_or(true))?;
+    }
+
     let input = PythonPluginProcessInput {
         protocol_version: 1,
         plugin: &plugin.manifest,
@@ -1533,7 +1546,8 @@ fn execute_python_plugin_process(
         .stdin
         .take()
         .ok_or("Failed to open Python worker stdin")?;
-    let input_writer = std::thread::spawn(move || stdin.write_all(&input_json));
+    stdin.write_all(&input_json).and_then(|_| stdin.write_all(b"\n")).and_then(|_| stdin.flush()).map_err(|e| e.to_string())?;
+    let input_replies = Arc::new(Mutex::new(stdin));
 
     let stderr = child
         .stderr
@@ -1542,10 +1556,20 @@ fn execute_python_plugin_process(
     let reporter = reporter.clone();
     let progress_run_id = run_id.unwrap_or_default().to_string();
     let progress_plugin_id = plugin.manifest.id.clone();
+    let evidence_cancel_id = cancel_id.to_owned();
     let stderr_reader = std::thread::spawn(move || {
         let mut diagnostics = Vec::new();
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if let Some(payload) = line.strip_prefix("__CULTIVATOR_PROGRESS__") {
+            if let Some(payload) = line.strip_prefix("__CULTIVATOR_EVIDENCE__") {
+                let result = serde_json::from_str::<JsonValue>(payload).map_err(|e| e.to_string()).and_then(|value| {
+                    let path = value["path"].as_str().ok_or("Missing evidence request path")?;
+                    crate::evidence::ensure_family_checked(Path::new(path), &|| is_plugin_job_cancelled(Some(&evidence_cancel_id)).unwrap_or(true))
+                });
+                let reply = match result { Ok(path) => serde_json::json!({"path": path}), Err(error) => serde_json::json!({"error": error}) };
+                if let Ok(mut input) = input_replies.lock() {
+                    let _ = writeln!(input, "{reply}").and_then(|_| input.flush());
+                }
+            } else if let Some(payload) = line.strip_prefix("__CULTIVATOR_PROGRESS__") {
                 if let Ok(mut progress) = serde_json::from_str::<PluginProgressEvent>(payload) {
                     progress.run_id = progress_run_id.clone();
                     progress.plugin_id = progress_plugin_id.clone();
@@ -1591,14 +1615,10 @@ fn execute_python_plugin_process(
         .map_err(|error| format!("Failed to read Python output: {error}"))?;
     let stderr = stderr_reader.join().unwrap_or_default();
 
-    let input_result = input_writer
-        .join()
-        .map_err(|_| "Python input writer failed")?;
     if cancelled || is_plugin_job_cancelled(Some(cancel_id))? {
         return Err("Plugin run cancelled.".to_string());
     }
 
-    input_result.map_err(|error| format!("Failed to send plugin input: {error}"))?;
     if !status.success() {
         let message = stderr.trim();
 
@@ -1714,44 +1734,12 @@ fn enumerate_datasource_files(
     let mut seen_paths = HashSet::new();
 
     for source_path in &datasource.paths {
-        cancellation::checkpoint(cancelled)?;
-        let path = PathBuf::from(source_path);
-
-        if path.is_file() {
-            if let Ok(target_file) = target_file_from_path(&path) {
-                if seen_paths.insert(normalize_case_database_path(&target_file.path)) {
-                    files.push(target_file);
-                }
-            }
-            continue;
-        }
-
-        if !path.is_dir() {
-            continue;
-        }
-
-        let mut walker = WalkBuilder::new(&path);
-
-        walker
-            .hidden(false)
-            .ignore(false)
-            .parents(false)
-            .git_global(false)
-            .git_ignore(false)
-            .git_exclude(false);
-
-        for entry in walker.build().filter_map(Result::ok) {
-            let entry_path = entry.into_path();
-
-            if entry_path.is_file() {
-                cancellation::checkpoint(cancelled)?;
-                if let Ok(target_file) = target_file_from_path(&entry_path) {
-                    if seen_paths.insert(normalize_case_database_path(&target_file.path)) {
-                        files.push(target_file);
-                    }
-                }
-            }
-        }
+        crate::evidence::visit_files(Path::new(source_path), |path| {
+            cancellation::checkpoint(cancelled)?;
+            let target_file = target_file_from_path(path)?;
+            if seen_paths.insert(normalize_case_database_path(&target_file.path)) { files.push(target_file); }
+            Ok(())
+        })?;
     }
 
     files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -1761,8 +1749,9 @@ fn enumerate_datasource_files(
 
 #[cfg(feature = "python-plugins")]
 fn target_file_from_path(path: &Path) -> Result<TargetFile, String> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("Failed to read metadata '{}': {error}", path.display()))?;
+    let size = if let Some(file) = crate::evidence::indexed_metadata(path)? { file.metadata.size } else {
+        fs::metadata(path).map_err(|e| e.to_string())?.len()
+    };
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -1776,7 +1765,7 @@ fn target_file_from_path(path: &Path) -> Result<TargetFile, String> {
         path: path.to_string_lossy().to_string(),
         name,
         extension,
-        size: metadata.len(),
+        size,
     })
 }
 
@@ -2406,6 +2395,8 @@ def system_artifact(label: str, **fields: Any) -> SystemArtifact: ...
 
 def timeline_event(label: str, **fields: Any) -> TimelineArtifact: ...
 
+def ensure_local(path: str) -> str: ...
+
 def read_bytes(path: str, max_bytes: Optional[int] = None) -> bytes: ...
 
 def read_text(
@@ -2945,6 +2936,8 @@ async fn ensure_datasource_tables(pool: &SqlitePool) -> Result<(), String> {
     .execute(pool)
     .await
     .map_err(|error| format!("Failed to create data_source_paths table: {error}"))?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS evidence_sources (data_source_id TEXT PRIMARY KEY, original_paths TEXT NOT NULL, manifest_path TEXT NOT NULL, FOREIGN KEY (data_source_id) REFERENCES data_sources(id) ON DELETE CASCADE)")
+        .execute(pool).await.map_err(|e| e.to_string())?;
 
     Ok(())
 }

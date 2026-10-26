@@ -15,11 +15,17 @@ WORKER = Path(__file__).resolve().parents[2] / "src-tauri/src/scripting/worker/p
 
 
 class WorkerTests(unittest.TestCase):
-    def run_plugin(self, script, *, protocol=1):
+    def run_plugin(self, script, *, protocol=1, with_provenance=False):
         with tempfile.TemporaryDirectory(prefix="cultivator-worker-") as directory:
             root = Path(directory)
             evidence = root / "evidence café.txt"
             evidence.write_text("hello evidence\n", encoding="utf-8")
+            if with_provenance:
+                manifest = root / "artifacts" / "evidence" / "source-1" / "manifest.ndjson"
+                manifest.parent.mkdir(parents=True)
+                manifest.write_text(json.dumps({"source": "disk.E01", "partition": 3,
+                    "evidencePath": "/Users/example/message.txt", "localPath": str(evidence),
+                    "metadata": {"id": 42, "size": evidence.stat().st_size}}) + "\n", encoding="utf-8")
             (root / "plugin.py").write_text(script, encoding="utf-8")
             task = {
                 "plugin_id": "fixture", "file_path": str(evidence),
@@ -94,6 +100,52 @@ def run(context):
         result = self.run_plugin('def run(context):\n    return None\n', protocol=999)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"Unsupported Cultivator worker protocol", result.stderr)
+
+    def test_image_working_path_keeps_original_evidence_reference(self):
+        result = self.run_plugin('''
+import cultivator_api as api
+def run(context):
+    assert context["file"]["evidence"]["source"] == "disk.E01"
+    assert "hello evidence" in api.read_text(context["file"]["path"])
+    return api.note("Imported message")
+''', with_provenance=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        source = json.loads(result.stdout)["records"][0]["payload"]["evidenceSource"]
+        self.assertEqual(source["partition"], 3)
+        self.assertEqual(source["evidencePath"], "/Users/example/message.txt")
+
+    def test_api_requests_a_missing_working_file_from_the_parent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "working.txt"
+            (root / "plugin.py").write_text('''
+import cultivator_api as api
+def run(context):
+    return api.note(api.read_text(context["file"]["path"]))
+''', encoding="utf-8")
+            request = {
+                "protocol_version": 1, "plugin": {"id":"test", "name":"Test", "entry":"plugin.py", "function":"run", "target":"other", "mode":"each_file"},
+                "plugin_directory": str(root), "case_folder_path": str(root), "case_database_path": str(root / "case.sqlite"),
+                "datasource": {"id":"test", "case_id":"case", "name":"Test", "paths":[str(root)]},
+                "tasks":[{"plugin_id":"test", "file_path":str(target), "datasource_id":"test", "case_id":"case", "target_file":{"path":str(target), "name":"working.txt", "extension":"txt", "size":14}}],
+                "scanned_files": 1,
+            }
+            worker = subprocess.Popen([sys.executable, "-I", "-B", str(WORKER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                worker.stdin.write(json.dumps(request).encode() + b"\n")
+                worker.stdin.flush()
+                message = worker.stderr.readline()
+                target.write_text("requested file", encoding="utf-8")
+                worker.stdin.write(json.dumps({"path":str(target)}).encode() + b"\n")
+                worker.stdin.flush()
+                output, errors = worker.communicate(timeout=15)
+                self.assertEqual(worker.returncode, 0, errors.decode())
+                self.assertTrue(message.startswith(b"__CULTIVATOR_EVIDENCE__"), message)
+                self.assertEqual(json.loads(output)["records"][0]["label"], "requested file")
+            finally:
+                if worker.poll() is None:
+                    worker.kill()
+                    worker.communicate()
 
 
 class ModelDownloadTests(unittest.TestCase):

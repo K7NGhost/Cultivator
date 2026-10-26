@@ -114,7 +114,7 @@ pub(super) fn classify(
         "openclip-accelerated-v2",
         runtime::DEFAULT_PYTHON,
         &dependencies,
-        &|| context.is_cancelled(),
+        context.cancelled,
     )?;
     let mut worker = PythonWorker::start(
         &python.executable,
@@ -154,6 +154,9 @@ pub(super) fn classify(
     for (chunk_index, chunk) in gallery.photos.chunks_mut(128).enumerate() {
         if context.is_cancelled() {
             return Err("Plugin run cancelled.".into());
+        }
+        for item in chunk.iter() {
+            crate::evidence::ensure_local_checked(std::path::Path::new(&item.media_path), context.cancelled)?;
         }
         worker.send(&serde_json::json!({"paths": chunk.iter().map(|item| &item.media_path).collect::<Vec<_>>()}))?;
         let response = worker.receive(context, Duration::from_secs(300))?;

@@ -259,6 +259,23 @@ async fn discover_files(
             ))
         });
         for root in roots {
+            match crate::evidence::indexed_entries(Path::new(&root), true) {
+                Ok(Some(entries)) => {
+                    for entry in entries {
+                        if scan_case.stopped.load(Ordering::Acquire) { return; }
+                        if entry.metadata.kind != inodex::filesystem::FileKind::File { continue; }
+                        let Some(path) = entry.local_path else { continue; };
+                        let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
+                        if !crate::IMAGE_EXTENSIONS.contains(&extension.as_str()) { continue; }
+                        let path = path.to_string_lossy().into_owned();
+                        batch.push((path.clone(), path));
+                        if batch.len() == 256 && sender.blocking_send(Ok(std::mem::take(&mut batch))).is_err() { return; }
+                    }
+                    continue;
+                }
+                Ok(None) => {},
+                Err(error) => { let _ = sender.blocking_send(Err(error)); return; }
+            }
             let excluded = excluded.clone();
             let walk = ignore::WalkBuilder::new(root)
                 .hidden(false)

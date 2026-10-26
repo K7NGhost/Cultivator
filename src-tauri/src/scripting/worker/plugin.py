@@ -10,6 +10,7 @@ import re
 import sys
 import types
 import traceback
+import threading
 
 # The protocol and diagnostics have the same encoding on every platform.
 sys.stdout.reconfigure(encoding="utf-8")
@@ -60,6 +61,25 @@ ARTIFACT_CATEGORIES = {
 logs = []
 artifacts = []
 search_roots = []
+evidence_sources = {}
+evidence_requests = threading.Lock()
+
+
+def evidence_path_key(path):
+    return os.path.normcase(os.path.normpath(path)).removeprefix("\\\\?\\")
+
+
+def load_evidence_sources(input_data):
+    manifest = os.path.join(input_data["case_folder_path"], "artifacts", "evidence",
+                            input_data["datasource"]["id"], "manifest.ndjson")
+    if not os.path.isfile(manifest):
+        return
+    with open(manifest, encoding="utf-8") as source:
+        for line in source:
+            record = json.loads(line)
+            path = record.get("localPath")
+            if path:
+                evidence_sources[evidence_path_key(path)] = record
 
 
 def artifact_category_for_kind(kind):
@@ -107,8 +127,24 @@ def normalize_result(result, file_path):
     return [json_record(result, file_path)]
 
 
+def ensure_local(path):
+    """Return a readable working path, extracting indexed evidence only on demand."""
+    path = os.path.abspath(path)
+    if os.path.isfile(path):
+        return path
+    with evidence_requests:
+        print("__CULTIVATOR_EVIDENCE__" + json.dumps({"path": os.fspath(path)}), file=sys.stderr, flush=True)
+        response = sys.stdin.buffer.readline()
+        if not response:
+            raise OSError("Evidence reader connection closed")
+        response = json.loads(response)
+        if response.get("error"):
+            raise OSError(response["error"])
+        return response["path"]
+
+
 def read_bytes(path, max_bytes=None):
-    with open(path, "rb") as file:
+    with open(ensure_local(path), "rb") as file:
         return file.read() if max_bytes is None else file.read(max_bytes)
 
 
@@ -118,12 +154,12 @@ def read_text(path, max_bytes=None, encoding="utf-8", errors="replace"):
 
 
 def read_lines(path, encoding="utf-8", errors="replace"):
-    return open(path, "r", encoding=encoding, errors=errors)
+    return open(ensure_local(path), "r", encoding=encoding, errors=errors)
 
 
 def sha256(path):
     digest = hashlib.sha256()
-    with open(path, "rb") as file:
+    with open(ensure_local(path), "rb") as file:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -282,7 +318,11 @@ def search_files(root_path, query, regex=False, case_sensitive=False, binary_fil
 
     if max_matches is not None and max_matches <= 0:
         return matches
-    paths = ([root_path] if os.path.isfile(root_path) else
+    root_key = evidence_path_key(root_path).rstrip(os.sep)
+    indexed = [record["localPath"] for key, record in evidence_sources.items()
+               if record.get("metadata", {}).get("kind") == "file"
+               and (key == root_key or key.startswith(root_key + os.sep))]
+    paths = indexed if indexed else ([root_path] if os.path.isfile(root_path) else
              (os.path.join(root, name) for root, _, files in os.walk(root_path) for name in files))
     for path in paths:
         try:
@@ -319,7 +359,7 @@ def search(query, regex=False, case_sensitive=False, binary_files=False, max_mat
 api = types.ModuleType("cultivator_api")
 for name, value in list(globals().items()):
     if name in {
-        "read_bytes", "read_text", "read_lines", "sha256", "log", "progress", "create_artifact",
+        "ensure_local", "read_bytes", "read_text", "read_lines", "sha256", "log", "progress", "create_artifact",
         "create_table_artifact", "add_table_row", "add_artifact", "create_group",
         "datetime_from_unix", "datetime_from_iso", "datetime_from_datetime", "account",
         "application", "browser_history", "call", "contact", "credential",
@@ -377,6 +417,7 @@ def build_context(input_data, task, matched_files):
             "name": target_file["name"],
             "extension": target_file["extension"],
             "size": target_file["size"],
+            "evidence": evidence_sources.get(evidence_path_key(target_file["path"])),
         },
         "task": {
             "plugin_id": task["plugin_id"],
@@ -388,10 +429,11 @@ def build_context(input_data, task, matched_files):
 
 
 def main():
-    input_data = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+    input_data = json.loads(sys.stdin.buffer.readline().decode("utf-8"))
     if input_data.get("protocol_version") != 1:
         raise ValueError("Unsupported Cultivator worker protocol")
     search_roots[:] = list(input_data["datasource"]["paths"])
+    load_evidence_sources(input_data)
     with contextlib.redirect_stdout(sys.stderr):
         module = load_plugin(input_data["plugin"], input_data["plugin_directory"])
         function = getattr(module, input_data["plugin"]["function"])
@@ -407,6 +449,11 @@ def main():
         file_path = artifact.get("filePath") or ""
         records.append(json_record(artifact.get("payload"), file_path))
 
+    for record in records:
+        evidence = evidence_sources.get(evidence_path_key(record["filePath"]))
+        if evidence:
+            record["payload"].setdefault("evidenceSource", evidence)
+
     json.dump({
         "scannedFiles": input_data["scanned_files"],
         "matchedFiles": len(input_data["tasks"]),
@@ -415,8 +462,9 @@ def main():
     }, sys.stdout, separators=(",", ":"))
 
 
-try:
-    main()
-except Exception:
-    traceback.print_exc(file=sys.stderr)
-    sys.exit(1)
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)

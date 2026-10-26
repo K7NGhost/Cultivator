@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
-mock.module("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => path }));
+mock.module("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => path, invoke: async () => undefined }));
 const { getVideoThumbnail } = await import("../src/features/media/utils/videoThumbnails");
 
 const originalDocument = globalThis.document;

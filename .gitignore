@@ -12,6 +12,29 @@ dist
 dist-ssr
 *.local
 .cache/
+__pycache__/
+*.py[cod]
+
+# Local Python environments and tool caches
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Generated profiling output; retain the benchmark scripts and Markdown reports
+/docs/performance/*.svg
+*.cpuprofile
+*.heapprofile
+*.speedscope.json
+*.folded
+*.etl
+
+# Retired iLEAPP plugin conversion output and tooling
+/scripts/ileapp_port/
 
 # Editor directories and files
 .vscode/*

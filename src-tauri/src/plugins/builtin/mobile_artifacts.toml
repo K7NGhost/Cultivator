@@ -1,0 +1,32 @@
+id = "mobile-artifacts"
+name = "Mobile Artifacts"
+author = "Cultivator / LEAPP contributors"
+version = "1.0.0"
+python = "3.12"
+description = "Built-in mobile artifact parsers."
+type = "other"
+target = "other"
+mode = "path_glob"
+entry = "builtin:mobile-artifacts"
+function = "parse"
+
+[[options]]
+id = "timezone"
+label = "Timezone"
+description = "Timezone for iOS parser output, such as UTC or America/New_York."
+type = "text"
+defaultValue = "UTC"
+
+[[options]]
+id = "backupPasswordFile"
+label = "iTunes backup password file"
+description = "Optional local UTF-8 file containing the encrypted backup password. Password contents are not stored in plugin options."
+type = "text"
+defaultValue = ""
+
+[[options]]
+id = "keychainPath"
+label = "iOS keychain file"
+description = "Optional separately acquired keychain file for parsers that require app keys."
+type = "text"
+defaultValue = ""

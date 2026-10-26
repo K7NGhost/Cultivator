@@ -1,6 +1,7 @@
 use crate::plugins::cancellation::{self, Check};
 use crate::plugins::PythonPluginManifest;
-use ignore::WalkBuilder;
+#[cfg(test)]
+use std::time::UNIX_EPOCH;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -9,7 +10,7 @@ use std::{
     io::{BufRead, BufReader, Read, Seek},
     path::{Path, PathBuf},
     sync::OnceLock,
-    time::{Duration, Instant, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 const MAX_HEADER_BYTES: usize = 64;
@@ -254,6 +255,7 @@ where
     let chunk_size =
         (worker_pool.current_num_threads() * SCAN_CHUNK_FILES_PER_WORKER).clamp(64, 256);
     // Normalize overlapping roots once; do not retain every discovered file path.
+    let evidence_roots = paths.clone();
     let roots = scan_roots(paths);
     let mut chunk = Vec::with_capacity(chunk_size);
     let mut process_chunk = |chunk: &mut Vec<PathBuf>| -> Result<(), String> {
@@ -289,24 +291,12 @@ where
         Ok(())
     };
     for root in roots {
-        let mut walker = WalkBuilder::new(root);
-        walker
-            .hidden(false)
-            .ignore(false)
-            .parents(false)
-            .git_global(false)
-            .git_ignore(false)
-            .git_exclude(false);
-        for entry in walker.build() {
+        crate::evidence::visit_files(&root, |path| {
             cancellation::checkpoint(cancelled)?;
-            let entry = entry.map_err(|error| format!("Failed to discover media: {error}"))?;
-            if entry.file_type().is_some_and(|kind| kind.is_file()) {
-                chunk.push(entry.into_path());
-                if chunk.len() == chunk_size {
-                    process_chunk(&mut chunk)?;
-                }
-            }
-        }
+            chunk.push(path.to_path_buf());
+            if chunk.len() == chunk_size { process_chunk(&mut chunk)?; }
+            Ok(())
+        })?;
     }
     if !chunk.is_empty() {
         process_chunk(&mut chunk)?;
@@ -314,6 +304,7 @@ where
     // Presentation order remains stable regardless of traversal order.
     photos.sort_by(|a, b| a.path.cmp(&b.path));
     videos.sort_by(|a, b| a.path.cmp(&b.path));
+    attach_evidence_metadata(&evidence_roots, &mut photos, &mut videos)?;
     let total_files = scanned_files;
 
     progress(MediaScanProgress {
@@ -328,6 +319,29 @@ where
         videos,
         scanned_files,
     })
+}
+
+fn attach_evidence_metadata(roots: &[String], photos: &mut [MediaItem], videos: &mut [MediaItem]) -> Result<(), String> {
+    use std::collections::{HashMap, HashSet};
+    fn key(path: &str) -> String { path.replace('\\', "/").trim_start_matches("//?/").to_lowercase() }
+    let manifests: HashSet<_> = roots.iter().filter_map(|root| Path::new(root).ancestors()
+        .find(|p| p.parent().and_then(Path::file_name).is_some_and(|n| n == "evidence"))
+        .map(|p| p.join("manifest.ndjson"))).filter(|p| p.is_file()).collect();
+    if manifests.is_empty() { return Ok(()); }
+    let mut items: HashMap<_, _> = photos.iter_mut().chain(videos.iter_mut()).map(|item| (key(&item.path), item)).collect();
+    for manifest in manifests {
+        for line in BufReader::new(fs::File::open(manifest).map_err(|e| e.to_string())?).lines() {
+            let record: serde_json::Value = serde_json::from_str(&line.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            let Some(path) = record["localPath"].as_str() else { continue; };
+            if let Some(item) = items.get_mut(&key(path)) {
+                for (label, field) in [("Evidence source", "source"), ("Evidence path", "evidencePath")] {
+                    if let Some(value) = record[field].as_str() { item.metadata.push(MediaMetadataField { label: label.into(), value: value.into() }); }
+                }
+                if let Some(partition) = record["partition"].as_u64() { item.metadata.push(MediaMetadataField { label: "Evidence partition".into(), value: partition.to_string() }); }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn media_scan_worker_count() -> usize {
@@ -345,7 +359,7 @@ fn media_scan_worker_count() -> usize {
 fn scan_roots(paths: Vec<String>) -> Vec<PathBuf> {
     let mut roots = paths
         .into_iter()
-        .filter_map(|path| fs::canonicalize(path).ok())
+        .map(|path| fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(path)))
         .collect::<Vec<_>>();
     roots.sort();
     roots.dedup();
@@ -393,26 +407,13 @@ fn process_media_item(
     hash_media: bool,
     cancelled: Check<'_>,
 ) -> Result<Option<MediaItem>, String> {
-    let file = fs::File::open(path)
-        .map_err(|error| format!("Failed to open '{}': {error}", path.display()))?;
-    let mut reader = BufReader::with_capacity(4096, file);
+    let mut reader = BufReader::with_capacity(4096, crate::evidence::EvidenceReader::open(path)?);
     let mut header = [0u8; MAX_HEADER_BYTES];
-    let bytes_read = reader
-        .read(&mut header)
-        .map_err(|error| format!("Failed to read '{}': {error}", path.display()))?;
-    let header = &header[..bytes_read];
-    let Some(format) = detect_media_format(path, header) else {
-        return Ok(None);
-    };
-    let file_metadata = reader
-        .get_ref()
-        .metadata()
-        .map_err(|error| format!("Failed to read metadata '{}': {error}", path.display()))?;
-    let modified_ms = file_metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis());
+    let count = reader.read(&mut header).map_err(|e| e.to_string())?;
+    let header = &header[..count];
+    let Some(format) = detect_media_format(path, header) else { return Ok(None); };
+    let file_metadata = crate::build_directory_entry(path)?;
+    let modified_ms = file_metadata.modified_ms;
     let media_path = path.to_string_lossy().to_string();
 
     let (width, height) = image_dimensions(format, &mut reader, header);
@@ -425,13 +426,8 @@ fn process_media_item(
             hash_media_reader(&mut reader, cancelled)
                 .map_err(|error| format!("Failed to hash '{}': {error}", path.display()))?,
         );
-        let after = reader
-            .get_ref()
-            .metadata()
-            .map_err(|error| error.to_string())?;
-        if after.len() != file_metadata.len()
-            || after.modified().ok() != file_metadata.modified().ok()
-        {
+        let after = crate::build_directory_entry(path)?;
+        if after.size != file_metadata.size || after.modified_ms != file_metadata.modified_ms {
             return Err(format!(
                 "Media file changed while hashing '{}'.",
                 path.display()
@@ -444,7 +440,7 @@ fn process_media_item(
         name: display_name(path),
         path: media_path.clone(),
         format: format.format.to_string(),
-        size: file_metadata.len(),
+        size: file_metadata.size.unwrap_or(0),
         modified_ms,
         width,
         height,
@@ -816,7 +812,7 @@ fn format_supports_exif(format: &str) -> bool {
 
 pub fn load_metadata(mut item: MediaItem) -> Result<MediaItem, String> {
     if !item.metadata_loaded {
-        let file = fs::File::open(&item.path).map_err(|error| error.to_string())?;
+        let file = crate::evidence::EvidenceReader::open(Path::new(&item.path))?;
         let mut reader = BufReader::new(file);
         item.metadata.extend(read_exif_metadata(&mut reader));
         item.metadata_loaded = true;
@@ -1077,6 +1073,25 @@ mod tests {
             "MEDIA_BENCH exif_pass_ms={}",
             exif_started.elapsed().as_millis()
         );
+    }
+
+    #[test]
+    fn imported_media_retains_original_image_and_partition_in_gallery() {
+        let case = tempfile::tempdir().unwrap();
+        let root = case.path().join("artifacts/evidence/source-1");
+        let volume = root.join("source-0-partition-3");
+        fs::create_dir_all(&volume).unwrap();
+        let photo = volume.join("photo.gif");
+        fs::write(&photo, b"GIF89a").unwrap();
+        fs::write(root.join("manifest.ndjson"), serde_json::to_string(&serde_json::json!({
+            "source": "disk.E01", "partition": 3, "evidencePath": "/Pictures/photo.gif", "localPath": photo
+        })).unwrap() + "\n").unwrap();
+        let gallery = execute_with_progress(vec![volume.to_string_lossy().into_owned()], |_| {}).unwrap();
+        assert_eq!(gallery.photos.len(), 1);
+        let metadata = &gallery.photos[0].metadata;
+        assert!(metadata.iter().any(|field| field.label == "Evidence source" && field.value == "disk.E01"));
+        assert!(metadata.iter().any(|field| field.label == "Evidence path" && field.value == "/Pictures/photo.gif"));
+        assert!(metadata.iter().any(|field| field.label == "Evidence partition" && field.value == "3"));
     }
 
     fn png_header_bytes(is_cgbi: bool, interlace: u8, width: u32, height: u32) -> Vec<u8> {

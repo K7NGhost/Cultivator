@@ -1,5 +1,11 @@
+async fn local_evidence(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || crate::evidence::ensure_family(std::path::Path::new(&path), &std::sync::atomic::AtomicBool::new(false))
+        .map(|path| path.to_string_lossy().into_owned())).await.map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn read_text_preview(path: String, line: u64) -> Result<Vec<String>, String> {
+    let path = local_evidence(path).await?;
     crate::preview::text::preview(path, line).await
 }
 
@@ -7,6 +13,7 @@ pub async fn read_text_preview(path: String, line: u64) -> Result<Vec<String>, S
 pub async fn open_text_preview(
     path: String,
 ) -> Result<crate::preview::text::TextPreviewSummary, String> {
+    let path = local_evidence(path).await?;
     crate::preview::text::open(path).await
 }
 
@@ -16,11 +23,13 @@ pub async fn read_text_preview_lines(
     start_line: usize,
     line_count: usize,
 ) -> Result<Vec<crate::preview::text::TextPreviewLine>, String> {
+    let path = local_evidence(path).await?;
     crate::preview::text::read_lines(path, start_line, line_count).await
 }
 
 #[tauri::command]
 pub async fn read_hex_preview(path: String) -> Result<Vec<String>, String> {
+    let path = local_evidence(path).await?;
     crate::preview::hex::preview(path).await
 }
 
@@ -28,6 +37,7 @@ pub async fn read_hex_preview(path: String) -> Result<Vec<String>, String> {
 pub async fn open_hex_preview(
     path: String,
 ) -> Result<crate::preview::hex::HexPreviewSummary, String> {
+    let path = local_evidence(path).await?;
     crate::preview::hex::open(path).await
 }
 
@@ -36,6 +46,7 @@ pub async fn read_hex_preview_page(
     path: String,
     page_index: u64,
 ) -> Result<crate::preview::hex::HexPreviewPage, String> {
+    let path = local_evidence(path).await?;
     crate::preview::hex::read_page(path, page_index).await
 }
 
@@ -43,6 +54,7 @@ pub async fn read_hex_preview_page(
 pub async fn read_file_format_preview(
     path: String,
 ) -> Result<Option<crate::preview::FileFormatPreview>, String> {
+    let path = local_evidence(path).await?;
     crate::preview::file_format_preview(path).await
 }
 #[tauri::command]

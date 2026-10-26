@@ -453,6 +453,8 @@ export function FilesPage() {
 
     let isCurrent = true;
     let deferredSelectedViewRenderId: string | null = null;
+    const requestId = crypto.randomUUID();
+    let scanPending = true;
     setEntriesError(null);
     if (selectedFileViewRef.current) {
       setIsEntriesLoading(true);
@@ -460,6 +462,7 @@ export function FilesPage() {
 
     invoke<FileViewIndex>("build_file_view_index", {
       roots: fileViewRoots,
+      requestId,
     })
       .then((index) => {
         if (!isCurrent) {
@@ -517,6 +520,7 @@ export function FilesPage() {
         );
       })
       .finally(() => {
+        scanPending = false;
         if (isCurrent) {
           if (
             selectedFileViewRef.current &&
@@ -527,8 +531,16 @@ export function FilesPage() {
         }
       });
 
-    return () => {
+    const cancelScan = () => {
       isCurrent = false;
+      if (scanPending) {
+        void invoke("cancel_file_view_index", { requestId }).catch(() => undefined);
+      }
+    };
+    window.addEventListener("pagehide", cancelScan);
+    return () => {
+      window.removeEventListener("pagehide", cancelScan);
+      cancelScan();
     };
   }, [fileViewRoots]);
 

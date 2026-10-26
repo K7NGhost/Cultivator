@@ -4,7 +4,10 @@ mod image_metadata;
 mod face_detection;
 mod clip_classification;
 mod python_worker;
+mod mobile_artifacts;
 mod visual_screening;
+#[cfg(test)]
+mod media_benchmark;
 
 use crate::plugins::PythonPluginManifest;
 use serde_json::Value as JsonValue;
@@ -17,6 +20,7 @@ pub use archive_extractor::manifest as archive_extractor_manifest;
 pub(crate) use image_metadata::load_metadata;
 pub use image_metadata::{manifest as image_metadata_manifest, MediaGallery, MediaItem, MediaType, MediaMetadataField};
 
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct BuiltinArtifact {
     pub file_path: String,
     pub kind: String,
@@ -27,6 +31,7 @@ pub struct BuiltinArtifact {
 pub(crate) struct BuiltinPluginEffects {
     pub logs: Vec<(String, String)>,
     pub artifacts: Option<Vec<BuiltinArtifact>>,
+    pub artifact_spool: Option<PathBuf>,
     pub media: Option<MediaGallery>,
     pub derived_paths: Vec<String>,
 }
@@ -69,6 +74,7 @@ impl<'a> BuiltinPluginContext<'a> {
             effects: BuiltinPluginEffects {
                 logs: Vec::new(),
                 artifacts: None,
+                artifact_spool: None,
                 media: None,
                 derived_paths: Vec::new(),
             },
@@ -94,6 +100,7 @@ impl<'a> BuiltinPluginContext<'a> {
 
     #[allow(dead_code)]
     pub fn add_artifact(&mut self, artifact: BuiltinArtifact) {
+        self.effects.artifact_spool = None;
         self.effects
             .artifacts
             .get_or_insert_with(Vec::new)
@@ -102,7 +109,13 @@ impl<'a> BuiltinPluginContext<'a> {
 
     #[allow(dead_code)]
     pub fn replace_artifacts(&mut self, artifacts: Vec<BuiltinArtifact>) {
+        self.effects.artifact_spool = None;
         self.effects.artifacts = Some(artifacts);
+    }
+
+    pub(crate) fn spool_artifacts(&mut self, path: PathBuf) {
+        self.effects.artifacts = None;
+        self.effects.artifact_spool = Some(path);
     }
 
     pub fn replace_media(&mut self, gallery: MediaGallery) {
@@ -145,6 +158,64 @@ pub trait BuiltinPlugin: Send + Sync {
 
 struct ArchiveExtractorPlugin;
 struct ImageMetadataPlugin;
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+    #[test]
+    fn media_hashing_streams_from_image_and_analysis_extracts_only_photos() {
+        let case = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        image::RgbImage::new(8, 8).save(source.path().join("photo.png")).unwrap();
+        std::fs::write(source.path().join("notes.txt"), b"unrelated notes").unwrap();
+        let image = case.path().join("logical.inodex");
+        inodex::acquisition::acquire(source.path(), &image, inodex::filesystem::Limits::default()).unwrap();
+        let imported = crate::evidence::import_for_test(crate::evidence::ImportRequest {
+            case_folder_path: case.path().to_string_lossy().into_owned(), datasource_id: "test-media".into(),
+            source_type: "diskImage".into(), paths: vec![image.to_string_lossy().into_owned()], partition: None,
+        }).unwrap();
+        let root = std::path::Path::new(&imported.paths[0]);
+        let mut progress = |_| {};
+        let mut context = BuiltinPluginContext::new(imported.paths.clone(), None, serde_json::json!({"hashMedia":true}), vec![], &mut progress, &|| false);
+        ImageMetadataPlugin.run(&mut context).unwrap();
+        assert_eq!(context.into_effects().media.unwrap().photos.len(), 1);
+        assert!(!root.join("photo.png").exists(), "metadata and hashing should stream");
+        assert!(!root.join("notes.txt").exists());
+        let mut context = BuiltinPluginContext::new(imported.paths.clone(), None, serde_json::json!({"hashMedia":true,"screenSkin":true}), vec![], &mut progress, &|| false);
+        ImageMetadataPlugin.run(&mut context).unwrap();
+        assert!(root.join("photo.png").exists(), "native image analysis requested a working copy");
+        assert!(!root.join("notes.txt").exists(), "unrelated documents must not be extracted");
+    }
+}
+
+#[cfg(test)]
+mod benchmarks {
+    use super::*;
+    #[test]
+    #[ignore = "manual end-to-end media plugin benchmark"]
+    fn benchmark_media_plugin() {
+        let path = std::env::var("CULTIVATOR_MEDIA_BENCH_PATH").expect("benchmark source path");
+        let python = std::env::var("CULTIVATOR_MEDIA_BENCH_PYTHON_ROOT").expect("existing Python runtime/models root");
+        let mut progress = |_event: BuiltinPluginProgress| {};
+        let mut context = BuiltinPluginContext::new(vec![path], None, serde_json::json!({
+            "hashMedia": true, "screenSkin": true, "groupSimilar": true,
+            "detectFaces": true, "classifyClip": true, "classifyNsfw": true,
+            "clipModel": "openclip-vit-b-32", "clipThreshold": "0.22", "analysisMode": "balanced"
+        }), vec![], &mut progress, &|| false);
+        context.python_root = Some(python.into());
+        let start = std::time::Instant::now();
+        ImageMetadataPlugin.run(&mut context).expect("run full media plugin");
+        let elapsed = start.elapsed().as_millis();
+        let effects = context.into_effects();
+        for (level, message) in effects.logs { eprintln!("MEDIA_PLUGIN_LOG {level}: {message}"); }
+        let gallery = effects.media.expect("gallery");
+        eprintln!("MEDIA_PLUGIN_BENCH elapsed_ms={elapsed} scanned_files={} photos={} videos={} faces_analyzed={} clip_analyzed={} nsfw_analyzed={}",
+            gallery.scanned_files, gallery.photos.len(), gallery.videos.len(),
+            gallery.photos.iter().filter(|i| i.face_count.is_some()).count(),
+            gallery.photos.iter().filter(|i| !i.clip_classifications.is_empty()).count(),
+            gallery.photos.iter().filter(|i| i.nsfw_score.is_some()).count());
+    }
+}
 
 impl BuiltinPlugin for ArchiveExtractorPlugin {
     fn manifest(&self) -> PythonPluginManifest {
