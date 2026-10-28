@@ -1,51 +1,16 @@
-# Windows wheels kept in whl_files/, for the Python versions and machines PyPI
-# has no wheel for, so a Windows install needs no compiler. Built by
-# .github/workflows/build_windows_wheels.yml. A local wheel is used only when its
-# line comes before the bare requirement of the same name, so these lines stay
-# at the top. lz4, zstd and Brotli are not named below: the ccl readers that
-# mister_skinnylegs installs from git pin them, and these wheels match those pins.
-whl_files/sqlcipher3-0.6.2-cp315-cp315-win_amd64.whl; python_version == "3.15" and platform_system == "Windows" and platform_machine == "AMD64"
-whl_files/sqlcipher3-0.6.2-cp315-cp315-win_arm64.whl; python_version == "3.15" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/lz4-4.3.3-cp313-cp313-win_amd64.whl; python_version == "3.13" and platform_system == "Windows" and platform_machine == "AMD64"
-whl_files/lz4-4.3.3-cp314-cp314-win_amd64.whl; python_version == "3.14" and platform_system == "Windows" and platform_machine == "AMD64"
-whl_files/lz4-4.3.3-cp315-cp315-win_amd64.whl; python_version == "3.15" and platform_system == "Windows" and platform_machine == "AMD64"
-whl_files/lz4-4.3.3-cp311-cp311-win_arm64.whl; python_version == "3.11" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/lz4-4.3.3-cp312-cp312-win_arm64.whl; python_version == "3.12" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/lz4-4.3.3-cp313-cp313-win_arm64.whl; python_version == "3.13" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/lz4-4.3.3-cp314-cp314-win_arm64.whl; python_version == "3.14" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/lz4-4.3.3-cp315-cp315-win_arm64.whl; python_version == "3.15" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/zstd-1.5.7.2-cp314-cp314-win_amd64.whl; python_version == "3.14" and platform_system == "Windows" and platform_machine == "AMD64"
-whl_files/zstd-1.5.7.2-cp315-cp315-win_amd64.whl; python_version == "3.15" and platform_system == "Windows" and platform_machine == "AMD64"
-whl_files/zstd-1.5.7.2-cp311-cp311-win_arm64.whl; python_version == "3.11" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/zstd-1.5.7.2-cp312-cp312-win_arm64.whl; python_version == "3.12" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/zstd-1.5.7.2-cp313-cp313-win_arm64.whl; python_version == "3.13" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/zstd-1.5.7.2-cp314-cp314-win_arm64.whl; python_version == "3.14" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/zstd-1.5.7.2-cp315-cp315-win_arm64.whl; python_version == "3.15" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/brotli-1.2.0-cp315-cp315-win_amd64.whl; python_version == "3.15" and platform_system == "Windows" and platform_machine == "AMD64"
-whl_files/brotli-1.2.0-cp311-cp311-win_arm64.whl; python_version == "3.11" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/brotli-1.2.0-cp312-cp312-win_arm64.whl; python_version == "3.12" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/brotli-1.2.0-cp313-cp313-win_arm64.whl; python_version == "3.13" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/brotli-1.2.0-cp314-cp314-win_arm64.whl; python_version == "3.14" and platform_system == "Windows" and platform_machine == "ARM64"
-whl_files/brotli-1.2.0-cp315-cp315-win_arm64.whl; python_version == "3.15" and platform_system == "Windows" and platform_machine == "ARM64"
-
+# Cultivator managed-Python LEAPP dependencies; external tools are excluded.
 bcrypt==5.0.0
 beautifulsoup4==4.8.2
 bencoding
 fitdecode==0.10.0
 folium==0.14.0
-# The zip seeker reads a CLBX zip's file times from its metadata.msgpack.
 msgpack==1.2.3
 packaging>=24.0
 pillow==13.0.0
 polyline==2.0.0
-# Do NOT pip install the PyPI 'blackboxprotobuf' into this environment: it
-# force-downgrades protobuf to 3.10.0 (reintroducing patched CVEs). ALEAPP
-# uses the vendored copy in scripts/blackboxprotobuf instead.
 protobuf==5.29.6
-sqlcipher3==0.6.2
 PyCryptodome
 pytz
-mister_skinnylegs @ git+https://github.com/cclgroupltd/mister-skinnylegs.git@v0.0.18
 simplekml
 wheel
 xlsxwriter==3.1.1

@@ -6,8 +6,8 @@
   "sourceHadUncommittedChanges": false,
   "counts": {
     "v1": 0,
-    "v2": 1337,
-    "modules": 538,
+    "v2": 1296,
+    "modules": 533,
     "alternate_modules": 1
   },
   "modules": [
@@ -1759,235 +1759,6 @@
           "paths": [
             "*/org.breezyweather/databases/breezyweather.db*"
           ]
-        }
-      ]
-    },
-    {
-      "path": "scripts/artifacts/browserArtifactsViaMisterSkinnylegs.py",
-      "artifacts": [
-        {
-          "key": "binance_user_details_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Binance User Details (Mister Skinnylegs)",
-          "description": "Recovers Binance User Details records from the Chromium cache folder this module locates for the profile; when it cannot locate one, no cache records are read",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "binance_balances_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Binance Balances (Mister Skinnylegs)",
-          "description": "Recovers Binance Balance records from the Cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "bing_searches_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Bing searches (Mister Skinnylegs)",
-          "description": "Recovers Bing searches from URLs in history, cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "chatgpt_chat_information_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - ChatGPT Chat Information (Mister Skinnylegs)",
-          "description": "Recovers ChatGPT chat information from History and Cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "chatgpt_user_information_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - ChatGPT User Information (Mister Skinnylegs)",
-          "description": "Recovers ChatGPT user information from Cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "coinbase_payment_methods_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Coinbase Payment Methods (Mister Skinnylegs)",
-          "description": "Recovers Coinbase Payment Methods records from the Cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "coinbase_user_details_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Coinbase User Details (Mister Skinnylegs)",
-          "description": "Recovers Coinbase User Details records from the Cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "coinbase_balances_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Coinbase Balances (Mister Skinnylegs)",
-          "description": "Recovers Coinbase Balances records from the Cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "coinbase_transactions_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Coinbase Transactions (Mister Skinnylegs)",
-          "description": "Recovers Coinbase Transactions from the Cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "deepseek_user_information_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - DeepSeek User Information (Mister Skinnylegs)",
-          "description": "Recovers DeepSeek user information from Cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "deepseek_chat_session_information_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - DeepSeek Chat Session Information (Mister Skinnylegs)",
-          "description": "Recovers DeepSeek Chat Session Information from Cache and History",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "deepseek_chat_messages_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - DeepSeek Chat Messages (Mister Skinnylegs)",
-          "description": "Recovers DeepSeek Chat Messages from Cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "discord_chat_messages_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Discord Chat Messages (Mister Skinnylegs)",
-          "description": "Recovers Discord chat messages from the Cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "dropbox_session_storage_user_activity_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Dropbox Session Storage User Activity (Mister Skinnylegs)",
-          "description": "Reports the Dropbox 'uxa' records held in Session Storage (last active time, visit id, previous URL and clicked link values as the site stored them)",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "dropbox_file_system_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Dropbox File System (Mister Skinnylegs)",
-          "description": "Recovers a partial file system from URLs in the history",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "dropbox_thumbnails_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Dropbox Thumbnails (Mister Skinnylegs)",
-          "description": "Recovers thumbnails for files stored in Dropbox",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "duckduckgo_searches_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Duckduckgo searches (Mister Skinnylegs)",
-          "description": "Recovers Duckduckgo searches from URLs in history, cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "google_drive_files_and_folders_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Google Drive Files and Folders (Mister Skinnylegs)",
-          "description": "Recovers Google Drive and Docs folder and file names (and urls) from history records",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "google_drive_thumbnails_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Google Drive Thumbnails (Mister Skinnylegs)",
-          "description": "Recovers Google Drive thumbnails from the cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "google_drive_usage_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Google Drive Usage (Mister Skinnylegs)",
-          "description": "Reports the ui:tabFirstStartTimeMsec Session Storage values held for drive.google.com, read as Unix milliseconds",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "google_searches_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Google searches (Mister Skinnylegs)",
-          "description": "Recovers google searches from URLs in history, session storage, cache",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "o365_sharepoint_recent_files_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - O365-Sharepoint recent files (Mister Skinnylegs)",
-          "description": "Recovers recent files list and any thumbnails from API responses in the cache for Sharepoint and O365",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "o365_sharepoint_user_activity_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - O365-Sharepoint user activity (Mister Skinnylegs)",
-          "description": "Reports cache, history and download records whose URLs match Sharepoint and O365 document view, edit session and download patterns",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "reddit_chat_messages_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Reddit Chat Messages (Mister Skinnylegs)",
-          "description": "Recovers Reddit chat messages from the Cache and IndexedDB",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "history_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - History (Mister Skinnylegs)",
-          "description": "Reports the History records of each Chromium profile folder named Default that holds a Web Data file",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "downloads_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Downloads (Mister Skinnylegs)",
-          "description": "Dumps Download Records",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "localstorage_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Localstorage (Mister Skinnylegs)",
-          "description": "Dumps Localstorage Records",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
-        },
-        {
-          "key": "sessionstorage_msl_plugin",
-          "version": "v2",
-          "name": "Browser Data - Sessionstorage (Mister Skinnylegs)",
-          "description": "Dumps Sessionstorage Records",
-          "category": "MSL Web Artifacts",
-          "paths": "*/Default/Web Data"
         }
       ]
     },
@@ -7255,41 +7026,6 @@
     {
       "path": "scripts/artifacts/hiveReader.py",
       "artifacts": []
-    },
-    {
-      "path": "scripts/artifacts/hldPrivacySafe.py",
-      "artifacts": [
-        {
-          "key": "hld_privacy_safe_files",
-          "version": "v2",
-          "name": "HLD Vault - Hidden Files",
-          "description": "Rows from the FILE_INFO table of the vault's encrypted index, each with the original and encrypted names and paths the index stores for a file and the times recorded for it",
-          "category": "Encrypting Media Apps",
-          "paths": [
-            "*/.privacy_safe/db/privacy_safe.db*"
-          ]
-        },
-        {
-          "key": "hld_privacy_safe_albums",
-          "version": "v2",
-          "name": "HLD Vault - Albums",
-          "description": "Rows from the SAFE_BOX table of the vault's encrypted index, one per album row in the index, with the number of items it holds and its cover",
-          "category": "Encrypting Media Apps",
-          "paths": [
-            "*/.privacy_safe/db/privacy_safe.db*"
-          ]
-        },
-        {
-          "key": "hld_privacy_safe_preferences",
-          "version": "v2",
-          "name": "HLD Vault - Preferences",
-          "description": "Entries from the share_privacy_safe.xml preferences file of com.hld.anzenbokusucal, with the name and the value of each entry decrypted",
-          "category": "Encrypting Media Apps",
-          "paths": [
-            "*/com.hld.anzenbokusucal/shared_prefs/share_privacy_safe.xml"
-          ]
-        }
-      ]
     },
     {
       "path": "scripts/artifacts/honorMediaLibrary.py",
@@ -14279,43 +14015,6 @@
       ]
     },
     {
-      "path": "scripts/artifacts/Threema.py",
-      "artifacts": [
-        {
-          "key": "threema_account",
-          "version": "v2",
-          "name": "Threema - Account",
-          "description": "The signed-in Threema account's own Threema ID, display nickname, and any mobile number linked to it, read from the app's main preferences file.",
-          "category": "Threema",
-          "paths": [
-            "*/ch.threema.app/shared_prefs/ch.threema.app_preferences.xml"
-          ]
-        },
-        {
-          "key": "threema_contacts",
-          "version": "v2",
-          "name": "Threema - Contacts",
-          "description": "Contacts recorded in Threema's local, SQLCipher-encrypted database, with each one's stored verification level and the date the contact record was created locally.",
-          "category": "Threema",
-          "paths": [
-            "*/ch.threema.app/files/key.dat",
-            "*/ch.threema.app/databases/threema4.db*"
-          ]
-        },
-        {
-          "key": "threema_messages",
-          "version": "v2",
-          "name": "Threema - Messages",
-          "description": "One-to-one messages recorded in Threema's local, SQLCipher-encrypted database: text, file (type 8), static location, and call events, with direction, delivery/read status, and any quote-reply relationship between messages.",
-          "category": "Threema",
-          "paths": [
-            "*/ch.threema.app/files/key.dat",
-            "*/ch.threema.app/databases/threema4.db*"
-          ]
-        }
-      ]
-    },
-    {
       "path": "scripts/artifacts/thunderbird.py",
       "artifacts": [
         {
@@ -14719,43 +14418,6 @@
           "category": "Tusky",
           "paths": [
             "*/com.keylesspalace.tusky/databases/tuskyDB*"
-          ]
-        }
-      ]
-    },
-    {
-      "path": "scripts/artifacts/tutanota.py",
-      "artifacts": [
-        {
-          "key": "tutanota_accounts",
-          "version": "v2",
-          "name": "Tutanota - Accounts",
-          "description": "Parses the Tutanota (Tuta Mail) accounts the Android client holds credentials for.",
-          "category": "Tutanota",
-          "paths": [
-            "*/de.tutao.tutanota/databases/tuta-db*",
-            "*/de.tutao.tutanota/app_webview/Default/Local Storage/leveldb/*"
-          ]
-        },
-        {
-          "key": "tutanota_configuration",
-          "version": "v2",
-          "name": "Tutanota - App Configuration",
-          "description": "Parses the Tutanota (Tuta Mail) Android client's server, notification and credential settings.",
-          "category": "Tutanota",
-          "paths": [
-            "*/de.tutao.tutanota/databases/tuta-db*",
-            "*/de.tutao.tutanota/app_webview/Default/Local Storage/leveldb/*"
-          ]
-        },
-        {
-          "key": "tutanota_calendar_alarms",
-          "version": "v2",
-          "name": "Tutanota - Calendar Alarms",
-          "description": "Parses the calendar alarm notifications scheduled by the Tutanota (Tuta Mail) Android client.",
-          "category": "Tutanota",
-          "paths": [
-            "*/de.tutao.tutanota/databases/tuta-db*"
           ]
         }
       ]
@@ -15450,62 +15112,6 @@
           "description": "Parses and extracts text-to-speech navigation information",
           "category": "Waze",
           "paths": "*/com.waze/waze/tts/tts.db*"
-        }
-      ]
-    },
-    {
-      "path": "scripts/artifacts/weChat.py",
-      "artifacts": [
-        {
-          "key": "wechat_messages",
-          "version": "v2",
-          "name": "WeChat - Messages",
-          "description": "Rows from the message table of the decrypted EnMicroMsg.db, each a message with its conversation, direction, time and content",
-          "category": "WeChat",
-          "paths": [
-            "*/com.tencent.mm/MicroMsg/*/EnMicroMsg.db*",
-            "*/com.tencent.mm/shared_prefs/auth_info_key_prefs.xml",
-            "*/com.tencent.mm/shared_prefs/WLOGIN_DEVICE_INFO.xml",
-            "*/com.tencent.mm/MicroMsg/*/image2/*",
-            "*/com.tencent.mm/MicroMsg/*/voice2/*",
-            "*/com.tencent.mm/MicroMsg/*/emoji/*"
-          ]
-        },
-        {
-          "key": "wechat_contacts",
-          "version": "v2",
-          "name": "WeChat - Contacts",
-          "description": "Rows from the rcontact table of the decrypted EnMicroMsg.db, each a contact record the database holds, with the WeChat id, nickname and any remark",
-          "category": "WeChat",
-          "paths": [
-            "*/com.tencent.mm/MicroMsg/*/EnMicroMsg.db*",
-            "*/com.tencent.mm/shared_prefs/auth_info_key_prefs.xml",
-            "*/com.tencent.mm/shared_prefs/WLOGIN_DEVICE_INFO.xml"
-          ]
-        },
-        {
-          "key": "wechat_conversations",
-          "version": "v2",
-          "name": "WeChat - Conversations",
-          "description": "Rows from the rconversation table of the decrypted EnMicroMsg.db, each a conversation the account holds, with its message count and the time and digest of its last message",
-          "category": "WeChat",
-          "paths": [
-            "*/com.tencent.mm/MicroMsg/*/EnMicroMsg.db*",
-            "*/com.tencent.mm/shared_prefs/auth_info_key_prefs.xml",
-            "*/com.tencent.mm/shared_prefs/WLOGIN_DEVICE_INFO.xml"
-          ]
-        },
-        {
-          "key": "wechat_account",
-          "version": "v2",
-          "name": "WeChat - Account",
-          "description": "The signed-in account, read from the userinfo table of the decrypted EnMicroMsg.db and the account's own preference files",
-          "category": "WeChat",
-          "paths": [
-            "*/com.tencent.mm/MicroMsg/*/EnMicroMsg.db*",
-            "*/com.tencent.mm/shared_prefs/auth_info_key_prefs.xml",
-            "*/com.tencent.mm/shared_prefs/WLOGIN_DEVICE_INFO.xml"
-          ]
         }
       ]
     },
@@ -16430,7 +16036,7 @@
     "leapp_functions/data_sources/json_files.py": "08064bf703f116ee5a3d02b11b3e5207a759d0aaea3dc7905e1a8a8593bda029",
     "leapp_functions/data_sources/text_files.py": "4d674f139839f8162c4ef0f92ec7f7eae4680cb2c339ae6917149b2f0d2254be",
     "leapp_functions/lava_launcher.py": "e90220f907b05c440532c6e5cd0f66d40a4d7e98ec8dc93348a2b62f2577a5f0",
-    "requirements.txt": "8b7571c6cd303d46f1b3fd80836c68bf8885bbaf732bf40f2a2b2e689e5a2b38",
+    "requirements.txt": "7a295b7c5e1668cb840ab1f3eb984c6930b68ad7fa8fb3488dbddae1073a9e5f",
     "scripts/alternate_artifacts/README.md": "038a864b0e10172ac026a2a1deb5375806730f0f8b05d62cd2c1b830500f6f21",
     "scripts/alternate_artifacts/appInventory.py": "f62a949f6bc3828a89b77a62b926ffde2393bfa8f26255d239527d243b6498bb",
     "scripts/artifact_report.py": "bb59c3de11c6053bd8c858f4d2dbfecbda7baf9fb856ffadec421d09aa96178a",
@@ -16535,7 +16141,6 @@
     "scripts/artifacts/SimpleStorage_applaunch.py": "79bbf758a9639faf4f8e0aa686616e1e93ec1e5b1a8cba91aaad6ae976359090",
     "scripts/artifacts/Spotify.py": "914af4635e5936b8c3a723771dd51f422f0921c8eaa6e95d2abc053cb19d7e4b",
     "scripts/artifacts/StravaGPS.py": "cb82af79191968096e5238094af9a9bdcb1aa06470fb8a706140f7b049e7af85",
-    "scripts/artifacts/Threema.py": "f9cec4a9846db34b532d25137670f6bb8ae686fdff4892123409bd205662e799",
     "scripts/artifacts/Todoist.py": "52becfc6cb85aa5ac847173ea508e1b92f28567fb63a4c103218c83735b918d0",
     "scripts/artifacts/TorBrowser.py": "c8102ccc2e8a4fda460fa571d33b16f74d7711ffc7b750c098d1b9608d419f03",
     "scripts/artifacts/Twitter.py": "c218616f0a9a9e769909e9a5b5daf438dcbd734f081e2cc69b87d3117c8fa251",
@@ -16596,7 +16201,6 @@
     "scripts/artifacts/booking.py": "36a0315669570afc1a2bcfc989d3db351292a7c5a7f99010dbc7dd16a1d1554b",
     "scripts/artifacts/breadWallet.py": "bad55614b78af38a52e2d8e164e62581e415d70fa3ed1929e2b2cc45a6e87c0d",
     "scripts/artifacts/breezyWeather.py": "4e53e765e20f7b2ec0fc3ff203c09cfa7939a691ea070610b248d8a6fc7ca357",
-    "scripts/artifacts/browserArtifactsViaMisterSkinnylegs.py": "04a6d49a41a050e40418a42923529bc42d0248aebdb4e2df48440eff3bbe260b",
     "scripts/artifacts/browserCachechrome.py": "279c47adf10f66245c2b35869574f92676bd79d9de6eb570f7eaf9876f1d5e0d",
     "scripts/artifacts/browserCachefirefox.py": "d0ec4879dcb85eb052e55ab0ab5781da9180232489ca3560cf497ca5afec474a",
     "scripts/artifacts/browserlocation.py": "fb85e70235dc5edd400e077bbfa400b436240ebaddd9f0223f4db15ffd02d133",
@@ -16733,7 +16337,6 @@
     "scripts/artifacts/hikvision.py": "8d1d92c9bc7c3a6602fb400cdc97ed47140df3b01ef03cedac8855ffed26d6cd",
     "scripts/artifacts/hinge.py": "ae83875f81b05ab7fd5e65f644a2fa852289bfea38acfd3533cc81637a051637",
     "scripts/artifacts/hiveReader.py": "890e930373c0fd88186e1247557ec5454e341ad5d87839e93ec4face02c7ba1c",
-    "scripts/artifacts/hldPrivacySafe.py": "f8ae48bd268393da6f36560650e40bddbb0bd2fa0baaa214f200f6d59cc1cf2f",
     "scripts/artifacts/honorMediaLibrary.py": "1f0902b067e7a9104b72a2791bc89647bfb743b8e3e8274d88fcbf0be8f944d4",
     "scripts/artifacts/houseparty.py": "8cedbb24cde2a471b573bb0c4b19e0bd7d1588c0fe8d5e82c384c1844ac604aa",
     "scripts/artifacts/imagemngCache.py": "227edb0ae98db6ad2d314edd5429aeb0ef2a1ff7bb201bc58d887b4673f043e7",
@@ -16929,7 +16532,6 @@
     "scripts/artifacts/trailSense.py": "f792a4dbbcae1b43fa1b0aec68933fd9375e0dd860d5f22a4d274ea7c01e6907",
     "scripts/artifacts/truecaller.py": "602298b96910840c002b9cce8b92fb64849ca1efd28f9f4aebb859ecd7b1847f",
     "scripts/artifacts/tusky.py": "74ab4c97e929ef379c677d43f0301dea6b1e6fdec0cbebaaf0f9c7e13fecff05",
-    "scripts/artifacts/tutanota.py": "1abcc360a58cd9eeb505ea89c6a936e05a2b05284d0ceed2b64983b3060a82f2",
     "scripts/artifacts/twitch.py": "81e22c23dcdf7173defcfb23033a71e9cecbffb46369a7ae494a0e2fae098c60",
     "scripts/artifacts/uber.py": "637cff3e5cd2de2076e8c0407ad069528b9e5a22242767321530faeb6a0bbcbc",
     "scripts/artifacts/ulrUserprefs.py": "8f825272e69820150c290a15551db37abe31cb8fa99152da5a3ba7f87fe0fd86",
@@ -16955,7 +16557,6 @@
     "scripts/artifacts/vlcthumbsADB.py": "9377fd998550bcd3eb547a43302cedad3434d52ef20f9b30e53674e75e0d2c04",
     "scripts/artifacts/walStrings.py": "26e846bfc0798bbbc4592555e058cd26fd8ae8bbdf2d126352624ed423a79c56",
     "scripts/artifacts/waze.py": "f0a876ca48890781977e479fcbd59537f55dd9fe41b317b43112c314ed6c5b0e",
-    "scripts/artifacts/weChat.py": "1fc71ec9ca8b1cc8f1cc56383f3bdf0a9876bcd6b40c5094f32b9ba24ecf862c",
     "scripts/artifacts/weibo.py": "321b22a7a842eb8727571946bf1cce449a8fe00294c88a0b1deabefc4434f34c",
     "scripts/artifacts/wellbeing.py": "2be11e629bae47ef8b50510bf03bf393d7e63b899ce48141c8f9947ee147d9bd",
     "scripts/artifacts/wellbeingaccount.py": "b7a7f18e6bd8cf4bf943e34c929eb8620a5e648a343f4441b47a714bb172ecbf",
@@ -17028,36 +16629,31 @@
     "scripts/vendor/exoprobe.py": "26a61d0ce01f6dc9af9d9bba3421de5414a852c61cdc0978b26a919ffb16d625",
     "scripts/vendor/qnxprobe.py": "f91ed52420a04e1bd61a480d6cacb4fbd791770d2942a5ff6f3721b9d497c8c3",
     "scripts/vendor/vendored.json": "1ee77a68918d88c5805e0e2bd2bd5a5ae76bede97846b8fc0bf93686d9d33aa9",
-    "scripts/version_info.py": "fc999cbccdb4d8445a692a67a56ecc99067c9e9cad566574839f4b2ea72d5498",
-    "whl_files/brotli-1.2.0-cp311-cp311-win_arm64.whl": "54cfcef5b927106d426c56a3f662c4ef6309a266ac9b71534e1fda72c609de08",
-    "whl_files/brotli-1.2.0-cp312-cp312-win_arm64.whl": "61631660e8058a51369082f9cfaa84efbb6abac40148cea835df83a284d0e68e",
-    "whl_files/brotli-1.2.0-cp313-cp313-win_arm64.whl": "96e3667c53ae03e890934ffc409972d4606dac6c21330bf4ab8c543f6769db24",
-    "whl_files/brotli-1.2.0-cp314-cp314-win_arm64.whl": "62df18e699fc52385004ffa84ecaef6e8a845c777122416aa680081b54ec193a",
-    "whl_files/brotli-1.2.0-cp315-cp315-win_amd64.whl": "4a2af2c3c4cd89d1841e5358fe49412ce99a4327ad4b47c42c2ebd78da624fea",
-    "whl_files/brotli-1.2.0-cp315-cp315-win_arm64.whl": "2dbfd7eed7192379ebf22e1cd29ef3389b7bee057866f239366378685b189f60",
-    "whl_files/lz4-4.3.3-cp311-cp311-win_arm64.whl": "4695ca30aeffea2cada9b849b2809c116b7f769ed1fb32ca65d462f337991e19",
-    "whl_files/lz4-4.3.3-cp312-cp312-win_arm64.whl": "e96c759862defcbb2a514e6077f2cfb3254034efc43946c5b91fe8be137a40be",
-    "whl_files/lz4-4.3.3-cp313-cp313-win_amd64.whl": "a5995142dc037c1a58000117fc24e781cb374a4782d758ab0dd6ef156528313e",
-    "whl_files/lz4-4.3.3-cp313-cp313-win_arm64.whl": "486f513e5c3fedf3c328908bf6ca28626df9c87d6c4303b90b901e30730a7557",
-    "whl_files/lz4-4.3.3-cp314-cp314-win_amd64.whl": "dde9fabfe747f43f64c76ec8d47e68a4a249fd7dec305c52e095ce02819b6b49",
-    "whl_files/lz4-4.3.3-cp314-cp314-win_arm64.whl": "fd14c2f1fe12e93fabca2fc47281a44b9f8daac607994518d67d1eacdbc894e7",
-    "whl_files/lz4-4.3.3-cp315-cp315-win_amd64.whl": "25c01c15ccf0b9255823c8ee189d1aac2ea078814391439feec69e5724e01300",
-    "whl_files/lz4-4.3.3-cp315-cp315-win_arm64.whl": "205a16742f48a29a46b59896728795696abbad37e05d27f183a5ac4b4d43ab5e",
-    "whl_files/sqlcipher3-0.6.2-cp315-cp315-win_amd64.whl": "3f6d99554abf75a8ac043a1b7c6becb44f7d18b3ef21b7aa278f57e223010a67",
-    "whl_files/sqlcipher3-0.6.2-cp315-cp315-win_arm64.whl": "5cacdfd27844ed169d725ece40f3ca9085bc9e0f273f347210baf688303f7270",
-    "whl_files/zstd-1.5.7.2-cp311-cp311-win_arm64.whl": "f728b52ada9f954b2ec6987b884868f5c2cfd2d3fd9db39cce41ca45456d8c73",
-    "whl_files/zstd-1.5.7.2-cp312-cp312-win_arm64.whl": "da82644289f655e8e09a84036fa409c5e358a507f37932fb6081af2587617a2d",
-    "whl_files/zstd-1.5.7.2-cp313-cp313-win_arm64.whl": "bae1680ae7805e37970e8509837ddfeaf4da15863431be820d9abcfdaf1d3fe0",
-    "whl_files/zstd-1.5.7.2-cp314-cp314-win_amd64.whl": "15890d53f88b7c54c8a11f8e5e587a010e439b20d4491641c3d7662b30b5613c",
-    "whl_files/zstd-1.5.7.2-cp314-cp314-win_arm64.whl": "b7509d7b442e4927271ded9c8ff47db33c2106e2a59de3d2a311e8e3d4742e1e",
-    "whl_files/zstd-1.5.7.2-cp315-cp315-win_amd64.whl": "c162e7a4a8a913b96f1cd7662db821fd2bb4e4fc3ddd91c1a329c8f71f0be000",
-    "whl_files/zstd-1.5.7.2-cp315-cp315-win_arm64.whl": "e1e587ba472a36d604ebceb59c531be42976fcb475fadb838c1722f859fb3a77"
+    "scripts/version_info.py": "fc999cbccdb4d8445a692a67a56ecc99067c9e9cad566574839f4b2ea72d5498"
   },
   "packaging": {
     "profile": "cultivator-headless",
     "excludedDirectories": [
       "assets",
       "scripts/_elements"
-    ]
+    ],
+    "dependencyPolicy": "managed-python-only-v1",
+    "excludedModules": {
+      "scripts/artifacts/Threema.py": "SQLCipher native library/DLL dependency",
+      "scripts/artifacts/hldPrivacySafe.py": "SQLCipher native library/DLL dependency",
+      "scripts/artifacts/weChat.py": "SQLCipher native library/DLL dependency",
+      "scripts/artifacts/browserArtifactsViaMisterSkinnylegs.py": "Git-installed browser dependency chain",
+      "scripts/artifacts/tutanota.py": "Chromium reader supplied by the Git-installed browser dependency chain"
+    },
+    "excludedFiles": []
+  },
+  "upstreamCounts": {
+    "v1": 0,
+    "v2": 1337,
+    "modules": 538,
+    "alternate_modules": 1
+  },
+  "sourceOverrides": {
+    "requirements.txt": "8b7571c6cd303d46f1b3fd80836c68bf8885bbaf732bf40f2a2b2e689e5a2b38"
   }
 }

@@ -6,8 +6,8 @@
   "sourceHadUncommittedChanges": false,
   "counts": {
     "v1": 0,
-    "v2": 1326,
-    "modules": 482,
+    "v2": 1266,
+    "modules": 481,
     "alternate_modules": 1
   },
   "modules": [
@@ -8795,497 +8795,6 @@
       ]
     },
     {
-      "path": "scripts/artifacts/logarchive.py",
-      "artifacts": [
-        {
-          "key": "logarchive",
-          "version": "v2",
-          "name": "logarchive",
-          "description": "Processes Apple Unified Logs, either from tracev3 data in the extraction, from a json file exported with 'log show', or from an embedded sysdiagnose tarball",
-          "category": "Unified Logs",
-          "paths": [
-            "*/logarchive*.json",
-            "*/db/diagnostics/*",
-            "*/db/uuidtext/*",
-            "*.logarchive/*",
-            "*/sysdiagnose_*.tar.gz"
-          ]
-        },
-        {
-          "key": "logarchive_artifacts",
-          "version": "v2",
-          "name": "logarchive artifacts",
-          "description": "Extract relevant entries from the logarchive table of LAVA db",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_time_change",
-          "version": "v2",
-          "name": "logarchive time change",
-          "description": "Unified log entries containing 'Time change: Clock shifted by', 'Significant time change', TMSetManualTime or 'setting manual time'",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_flashlight",
-          "version": "v2",
-          "name": "logarchive flashlight",
-          "description": "Unified log entries tagged '[Flashlight Controller]' or AVFlashlight. Which of these messages record the light turning on or off has not been measured for this artifact",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_executed_apps",
-          "version": "v2",
-          "name": "logarchive executed apps",
-          "description": "Unified log entries containing 'Allowing tap for icon view' (matched without regard to case, so 'Disallowing tap' entries are included), 'Launching application' or 'transition source:', and entries of the com.apple.UserNotifications subsystem containing 'Launch application'; what each form records is not sourced here",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_tethering",
-          "version": "v2",
-          "name": "logarchive personal hotspot",
-          "description": "Hotspot/Tethering state",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_airplane_mode",
-          "version": "v2",
-          "name": "logarchive airplane mode",
-          "description": "Airplane Mode",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_lock_status",
-          "version": "v2",
-          "name": "logarchive lock status",
-          "description": "Unified log entries about screen lock and unlock, screen power (ScreenOn changed, Screen shut off) and the 'Biometric match' completion entries",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_wifi_status",
-          "version": "v2",
-          "name": "logarchive wifi status",
-          "description": "WiFi Status",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_bluetooth_status",
-          "version": "v2",
-          "name": "logarchive bluetooth status",
-          "description": "Bluetooth Status",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_audio_status",
-          "version": "v2",
-          "name": "logarchive audio status",
-          "description": "Audio Status",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_motionstate",
-          "version": "v2",
-          "name": "logarchive motion state transitions",
-          "description": "Motion state transition entries",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_navigation",
-          "version": "v2",
-          "name": "logarchive navigation",
-          "description": "Unified log records whose subsystem begins with com.apple.Navigation, compared without regard to case, so com.apple.navigation.VirtualGarage is included",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_calls",
-          "version": "v2",
-          "name": "logarchive call events",
-          "description": "Unified log entries recording telephony activity: call tracking start and end from callservicesd, Phone app open requests with the originating process, Phone app tab changes, keypad tone requests (actionID 1200-1209 map to keypad digits 0-9), and incoming call entries in the ims log category",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_dialed_numbers",
-          "version": "v2",
-          "name": "logarchive dialed numbers",
-          "description": "Unified log entries from CommCenter and the Phone app: the call.provider setup block whose kPhoneNumber field holds a dialed number, the teardown block carrying the same kUuid, the Call(StatusUpdate) state chain, and MobilePhone ContactSearchManager entries whose message text holds the contents of the Phone app dial field",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_typing",
-          "version": "v2",
-          "name": "logarchive keyboard activity",
-          "description": "Unified log entries recording on-screen keyboard activity: keyboard touch signposts logged per app (category KeyboardSignposts) and keyboard sound requests for character (actionID 1104), delete (1155) and modifier (1156) keys",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_faceid_presence",
-          "version": "v2",
-          "name": "logarchive biometric sensor events",
-          "description": "Unified log entries from biometric sensor stacks: Face ID camera frames with face-detected, attention and glasses flags (PearlCamFrameReceived), face-to-device distance readings (getFaceDetectInfo), SpringBoard face-in-view notices, and Touch ID finger-on/finger-off events on home button devices",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_pocket_state",
-          "version": "v2",
-          "name": "logarchive pocket state",
-          "description": "Unified log entries recording front infrared sensor pocket-state detection (Doppler in pocket state detected/cleared) and SpringBoard PocketState changes",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_touch",
-          "version": "v2",
-          "name": "logarchive touchscreen events",
-          "description": "Unified log entries recording physical screen contact: digitizer contact presence transitions, per-app touch statistics windows (touchstats), touch attention events, and tap-to-wake ('received tapToWake', 'send tapToWake' and 'tapToWakeDidRecognize' entries, written by backboardd and SpringBoard on the tested images)",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_usb_connections",
-          "version": "v2",
-          "name": "logarchive USB and power connections",
-          "description": "Unified log entries recording external power and USB cable attach/detach: powerexperienced plugin state changes, kernel IOAccessoryUSBConnectShim cable-detect events, and the kernel VBUS power and CON_DET physical-connection states",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_camera",
-          "version": "v2",
-          "name": "logarchive camera capture",
-          "description": "Unified log entries from the Camera app and photo pipeline recording capture mode changes, moment capture begin/commit, still image capture, and assets being added to the photo library",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_notifications",
-          "version": "v2",
-          "name": "logarchive notification interactions",
-          "description": "Unified log entries about notifications: removal of notification requests, group expansion, cell default actions (tap-through), long-look presentation, and reply actions",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_app_focus",
-          "version": "v2",
-          "name": "logarchive app focus and lifecycle",
-          "description": "Unified log entries recording which app held focus and lifecycle transitions: contextstored inFocus values, SpringBoard app bootstrap with launch intent, scene lifecycle changes, icon taps, and terminations from the app switcher",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_media_playback",
-          "version": "v2",
-          "name": "logarchive media playback",
-          "description": "Unified log entries in the MediaRemote category recording now-playing state: originating app bundle id, playback state changes, and route information",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_sim_cellular",
-          "version": "v2",
-          "name": "logarchive SIM and cellular state",
-          "description": "Unified log entries recording SIM slot status (kCTSIMSupportSIMStatus values), cellular data network type changes, and itunestored network type observations",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_unlock_auth",
-          "version": "v2",
-          "name": "logarchive unlock sessions and method",
-          "description": "Unified log entries recording lock/unlock session durations (apsd 'Was locked/unlocked for N seconds'), authentication requests with type and outcome, keybag state transitions, the kernel's APFS volume unlock entries and volume lock and unlock notifications, and locks from the side button",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_dictation",
-          "version": "v2",
-          "name": "logarchive dictation",
-          "description": "Unified log entries recording keyboard dictation sessions: dictation start with language code, begin/end feedback events, and assistantd dictation-type audio record preparation",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_audio_routes",
-          "version": "v2",
-          "name": "logarchive audio routes",
-          "description": "Unified log entries from the audio server recording output route configuration and changes (receiver, speaker, or a Bluetooth device) for calls and other audio sessions",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_battery_state",
-          "version": "v2",
-          "name": "logarchive battery state",
-          "description": "Unified log entries recording battery charge level changes posted by powerd and battery info updates from PowerUIAgent",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_charging_state",
-          "version": "v2",
-          "name": "logarchive charging state",
-          "description": "Unified log entries in which powerd logged a charging state update, with the state and the other values the entry names",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_battery_center_sources",
-          "version": "v2",
-          "name": "logarchive Battery Center power sources",
-          "description": "Unified log entries in which Battery Center listed a power source, the internal battery or a wireless accessory, with the name, type, transport, charge values and identifiers it logged",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_battery_center_devices",
-          "version": "v2",
-          "name": "logarchive Battery Center devices",
-          "description": "Unified log entries in which Battery Center listed a device with a battery: its name, vendor, charge percentage, charging and connection values, transport and identifiers as logged",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_ui_navigation",
-          "version": "v2",
-          "name": "logarchive interface navigation",
-          "description": "Unified log entries recording interface navigation between apps: Control Center launch and visibility, Today view overlay appearance, widget visibility changes, and home screen page scrolling",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_driving",
-          "version": "v2",
-          "name": "logarchive driving state",
-          "description": "Unified log entries recording vehicular motion classification: wifid CMMotionActivity driving start/stop, locationd vehicular episode markers, Driving Focus engagement, and the pedestrian-after-driving motion alarm",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_bluetooth_pairing",
-          "version": "v2",
-          "name": "logarchive bluetooth pairing",
-          "description": "Unified log entries recording device discovery and pairing: bluetoothd CBDevice discovery records carrying accessory name, Bluetooth address and product identifiers, plus pairing session lifecycle entries",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_emergency_sos",
-          "version": "v2",
-          "name": "logarchive emergency SOS engine",
-          "description": "Unified log entries containing 'broadcasting SOSStatus', 'flowStartedOnEitherDevice' or 'sosTriggeredOnPairedDevice', matched in any process",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_power_events",
-          "version": "v2",
-          "name": "logarchive power events",
-          "description": "Unified log entries marking device boot and shutdown: the kernel iBoot version line logged at startup, the SpringBoard orientation-deferral shutdown notice, and locationd shutting down",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_airdrop",
-          "version": "v2",
-          "name": "logarchive AirDrop",
-          "description": "Unified log entries matching AirDrop and share sheet message text: the device's AirDrop ID, discoverability scanning mode (Everyone/Contacts Only/Off), SharingDaemon state dumps, share sheet activation, transfer entries, discoverable mode changes, and validation record hash entries",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_carplay_session",
-          "version": "v2",
-          "name": "logarchive CarPlay session",
-          "description": "Unified log entries recording the CarPlay connection sequence: the airplayd USB DirectLink notice that marks a wired session, CarKit session authentication and activation states, CarPlayApp vehicle identifier entries, and the wifid CarPlay session vehicle record carrying the reported model and manufacturer",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_biometric_match",
-          "version": "v2",
-          "name": "logarchive biometric match results",
-          "description": "Unified log entries recording the result of a Face ID or Touch ID match: the kernel matchResultHandler entries, coreauthd no-match entries, and the documented SpringBoard biometric unlock events",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_passcode_field",
-          "version": "v2",
-          "name": "logarchive passcode field input",
-          "description": "Unified log entries recording the passcode text field (SBUIPasscodeTextField) becoming and ceasing to be the keyboard input target, with the process that showed it",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_hardware_buttons",
-          "version": "v2",
-          "name": "logarchive hardware button presses",
-          "description": "Unified log entries recording physical button presses: backboardd button events with the button's HID usage and how long it was held, SpringBoard side button press counts and single press recognition, SpringBoard raw volume press entries, and the SpringBoard button combination recognizer's press type",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_orientation",
-          "version": "v2",
-          "name": "logarchive device orientation and pick-up",
-          "description": "Unified log entries recording device orientation changes (Received orientation), wake gesture notifications such as a pick-up (Gesture notification) and the kernel's [TTW] orientation changes",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_system_gestures",
-          "version": "v2",
-          "name": "logarchive system edge gestures",
-          "description": "Unified log entries recording touches taken over by a system gesture (backboardd) and SpringBoard edge gesture recognizers for the app switcher, Control Center and the Cover Sheet",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_usb_host",
-          "version": "v2",
-          "name": "logarchive USB host connections",
-          "description": "Unified log entries about the USB connection type: the kernel AppleUSBCableType, UserEventAgent connectType changes, and lockdownd host session entries",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_app_state",
-          "version": "v2",
-          "name": "logarchive app install and state",
-          "description": "Unified log entries from installd in the com.apple.appinstallation TransactionLog category, installd entries naming a container it 'Made container live for', and CommCenter ct.server entries beginning 'App state'; what each entry records about an app is reported as logged and is not sourced here",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_device_id",
-          "version": "v2",
-          "name": "Logarchive - Device Identifiers",
-          "description": "Unified log entries that carry device identifying details: the model, OS version and build that sharingd logs, and the name, device type, OS build and serial number of each peer that securityd lists in its account state, the examined device among them.",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_wake_source",
-          "version": "v2",
-          "name": "logarchive wake source",
-          "description": "Unified log entries from SpringBoard whose message begins 'wake source:' followed by a source name such as Notification, LiftToWake, Touch, ACPowerChange, LockButton or HomeButton",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_weather",
-          "version": "v2",
-          "name": "logarchive weather",
-          "description": "Unified log entries under the com.apple.weather subsystem about weather data fetches and forecast builds, each carrying a location value. They are written by the Weather app, its widget and, on some images, other processes. On the iOS 14.3 image the location is a place name with coordinates; on the iOS 17 and 26 images it is an encoded value.",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_family_hotspot",
-          "version": "v2",
-          "name": "logarchive family hotspot",
-          "description": "Unified log entries recording the Family Hotspot state. An entry holds either a single state (Disabled was observed) or a list of quoted strings, each followed by a value.",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_tcc_cache",
-          "version": "v2",
-          "name": "logarchive TCC authorization cache dumps",
-          "description": "Statedump snapshots titled 'TCC Authorization Cache', one row per cached authorization entry in each dump: the service, the auth right, the reason and the version as logged, and the process that wrote the dump. A dump is the process's state when it was written, not an event, and the same entry is repeated by the later dumps that still hold it.",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_tcc_cache_summary",
-          "version": "v2",
-          "name": "logarchive TCC authorization cache summary",
-          "description": "A collapsed view of the TCC authorization cache dumps: each distinct entry (process, process ID, service, auth right, reason, version, other flags) once, with the first and last dump that held it and the number of dumps.",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_location_state",
-          "version": "v2",
-          "name": "logarchive location manager state dumps",
-          "description": "Statedump snapshots titled 'CLLocationManagerStateTracker', one row per dump: the location manager flags and settings the dump logged, and the process that wrote it. A dump is the state when it was written, not an event.",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_location_state_summary",
-          "version": "v2",
-          "name": "logarchive location manager state summary",
-          "description": "A collapsed view of the location manager state dumps: each distinct content (process, process ID and the logged keys and values) once, with the first and last dump that held it and the number of dumps.",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_urlopens",
-          "version": "v2",
-          "name": "logarchive URL and link opens",
-          "description": "Unified log lines matching three URL-open markers: UIOpenURLAction actions, openURLContexts scene calls, and launchservices reporting no registered handler for a URL scheme. Each row is one log line, not one open.",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_capture_sessions",
-          "version": "v2",
-          "name": "logarchive camera and microphone capture sessions",
-          "description": "Unified log lines from the camera capture daemon (subsystem com.apple.cameracapture) recording a capture session being created, a client calling start or stop, the session status changing, and the client's own startRunning and stopRunning calls. Each row is one log line, not one session. A start line is a lead; it does not establish that audio or video was recorded.",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_capture_streaming",
-          "version": "v2",
-          "name": "logarchive camera streaming power events",
-          "description": "Unified log lines from the camera capture daemon's FigCaptureLogCameraStreamingPowerEvent function with the PID, application ID, device type, streaming flag and port type as logged. Each row is one log line.",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_recording_indicator",
-          "version": "v2",
-          "name": "logarchive recording indicator lines",
-          "description": "SpringBoard '[Recording Indicator]' log lines: the camera/microphone activity-changed line, secure indicator layer creation, and the live rendering assertion line. Each row is one log line.",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_app_snapshots",
-          "version": "v2",
-          "name": "logarchive app snapshots",
-          "description": "Unified log entries from SpringBoard's com.apple.SplashBoard subsystem saying that snapshot data was written to a file. The message carries a bracketed identifier and the path of the .ktx file written",
-          "category": "Unified Logs",
-          "paths": null
-        },
-        {
-          "key": "logarchive_data_usage",
-          "version": "v2",
-          "name": "logarchive data usage",
-          "description": "Unified log entries from symptomsd in the analytics category giving WiFi and Cell in/out values for a name on a numbered flow; the values are reported as logged",
-          "category": "Unified Logs",
-          "paths": null
-        }
-      ]
-    },
-    {
       "path": "scripts/artifacts/mailprotect.py",
       "artifacts": [
         {
@@ -16214,9 +15723,6 @@
   "files": {
     "ATTRIBUTIONS.md": "a99b2f7d7467ada7747c0c8eba927a5552e63daec1fd68643a3877f8bdf98307",
     "LICENSE": "79d810346bfad252c5c223af0db8689e5612e211bf12c15649cfc8ae6e952e7b",
-    "bin/.gitignore": "3150589dccfe4bc6ef97a5f1611f599ffb42fdfd0d8371de69aa2f52283c0886",
-    "bin/PROVENANCE.md": "7305669ac0ceea8c96913c6e06a1fade64b6d85444a1e5932891a8fcb1f0aceb",
-    "bin/THIRD-PARTY-NOTICES-unifiedlog_iterator.txt": "fe7e846aa359db2c3947bd2653a67f34b91b323cf6cffb2c20c3136772c8694f",
     "ileapp.py": "b8dd21fcd766daf374bba68751d195671b6951c2ca27303de9bfe75350ed6a90",
     "leapp_functions/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "leapp_functions/app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -16229,7 +15735,7 @@
     "leapp_functions/data_sources/text_files.py": "4d674f139839f8162c4ef0f92ec7f7eae4680cb2c339ae6917149b2f0d2254be",
     "leapp_functions/lava_launcher.py": "e90220f907b05c440532c6e5cd0f66d40a4d7e98ec8dc93348a2b62f2577a5f0",
     "leapp_functions/parsers/apple_atx.py": "9063bcc383694373c6c73db442d86c7f3b15858339d0206247ad19c1ed104cb1",
-    "requirements.txt": "bd81a5f2b7040b8f084c02afa43ace2a511d96186ed4dda727b1fe8caf161c97",
+    "requirements.txt": "3d1e97e78b7937d2237a98def738d244eeef899c1d740ce670024455243aafb7",
     "scripts/alternate_artifacts/README.md": "95339df517530e2b019f05d03872cabd7ccb97fe87690d6c390d4064f27d81b0",
     "scripts/alternate_artifacts/appInventory.py": "bd11e14eed5a42c11de914efb666d29703ced7f320498865392953ec72a19519",
     "scripts/artifact_report.py": "1884d943988d5eec69b1dfc7b94fa7a13179b318486cb8dff8326a6c0f01b794",
@@ -16500,7 +16006,7 @@
     "scripts/artifacts/home_depot.py": "66384388696498b1d57a6b0cf5e93dbfc182670eb72d3b8961dbb07cd65acdda",
     "scripts/artifacts/houseparty.py": "c0516e7d0ba02dbab9ef014a1c6e742b10b52c50a661f03a1b104efc3bc6f579",
     "scripts/artifacts/iCloudWifi.py": "d4d7e5f257752e72184551ad27c7ca85fd755df0965e28f15e2b412badc3aba8",
-    "scripts/artifacts/iOSCacheLocations.py": "60d3e011e991599e1a44d3b0c7fa1e3fa3d2eccfdc801bc848f1eec59dc09e41",
+    "scripts/artifacts/iOSCacheLocations.py": "899f1aaebf4d07bf1e6d72cd7188a9743ffb4446f815e5251cec53aac0e86035",
     "scripts/artifacts/iOSclaude.py": "189e3ea7093189b762469b1e302a107528d35c38e73ac1cf5d9f31ce4302c2e8",
     "scripts/artifacts/iTunesBackupInfo.py": "d0a7dd832ddeee95f485c587822dfd31b16e4d9c0c97553df0018d600f9a9898",
     "scripts/artifacts/icloudMeta.py": "e2436fd14cbf37ee1b903bf8d138f03be1b11b742f9c65aa7da72b19507390a6",
@@ -16531,7 +16037,7 @@
     "scripts/artifacts/knowledgeC.py": "204a9bc28900a45f9565a7afcf947960515ecb306544492410f2ec052b91fcaa",
     "scripts/artifacts/lastBuild.py": "b4f2529035a7e5c3b97d726f05b44d1d790a623ab2cbf56bfdfbe050c6f161c4",
     "scripts/artifacts/lgThinq.py": "0df62ab66f2dfa9daa8ac4c66a53141a25a341f54cc93bb2c7e1218d9d757dc4",
-    "scripts/artifacts/lidl_plus.py": "667df9fe85feacb8924ff955d1e4508e1e02db6b1b0063fa7719c068ab59f4be",
+    "scripts/artifacts/lidl_plus.py": "0596c78494d1653690f5efc1c419168ab54374663aaf8b8b8867767143640688",
     "scripts/artifacts/life360.py": "6d32e23084a047621ffde27763dc36f6c5f442e10942dccb1cc787a11b647b77",
     "scripts/artifacts/life360Awareness.py": "65e516b7e5c4d97ef822f5366020bc719800dee114cfe10091f71213f17b084e",
     "scripts/artifacts/life360Cache.py": "27dac5443b0d1c82146e7b27d4fedc79e27c5daf22d040ea4b8a4eb5f71775f7",
@@ -16543,7 +16049,6 @@
     "scripts/artifacts/locServicesconfig.py": "d351955cf2fdc698ccf87efded31a8a8c31add3653301556f5f3aea15fa12097",
     "scripts/artifacts/locationdCacheEncryptedB.py": "513bea3962614da6e79d3937e8d91e84e749b9652ea007a7e60c24ca0974ac53",
     "scripts/artifacts/lockdownEvents.py": "c3eb205918cfa8cd5fd1a41e0043d2eff4fbc2da3cf7402799376c96df8d3a16",
-    "scripts/artifacts/logarchive.py": "372153f4a99267e3823c17f4d20df659d8623fa564f0da80a75c9692c3e0ba5d",
     "scripts/artifacts/mailprotect.py": "441992e3163ca517fcec946924c37d24096bf1f5fd3af3a15d1cb37456e742f7",
     "scripts/artifacts/managedSettings.py": "b9a48002ab31f2ce757a7d3f12fdfac217858f95324eaacfef81951f175535f9",
     "scripts/artifacts/mapsSync.py": "2e4628202308b74cc6952f447be29c9c6a181b38f3f052a1351861f733a237c2",
@@ -16765,7 +16270,6 @@
     "scripts/lavafuncs.py": "800f401d436f6e0dcee60e66ff60a4bb68db11a848ff3376b6029ad2ddd56bf8",
     "scripts/life360_common.py": "de97b44fb4f79e393353336cf3ca146116e89fceefcb8418700ae3a8de85fe1a",
     "scripts/life360_recovery.py": "7e8683201ffca5922b53f7fe31ecfee596c91f7917dcae79fb66f01f51f99057",
-    "scripts/log_filter.py": "b499eaa12b2e1a4177eb8560abf98c559560860453b9636c158f8577186c2d40",
     "scripts/mmkv_parser.py": "fe94e3e255f49c80c16c775fe57fe0748c958e97fda8d3d2a142dc696b36628c",
     "scripts/modules_to_exclude.py": "ce9894691bf04bcb758fba90c265a0968a4ed1ae7b653d3b60b600a959a53d07",
     "scripts/parse3.py": "7e8674f687da3f4d1e0e2c006fad264eaa5ccdb4cd530c2bafb50fb6710b0c77",
@@ -16779,7 +16283,6 @@
     "scripts/test_artifacts/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "scripts/test_artifacts/image_list.py": "8c4b53507ffd232926e89ec2aa45dcf0544d15d7306a4d320fc91afead1ee194",
     "scripts/tz_offset.py": "82d5a321f21d48c984721d94044a1180eee119a2fd8de7fd185ebb68489b41ac",
-    "scripts/unifiedlogs.py": "8bd750b15986e635793a95fbce6b74b1e6d7287c4b5c24682c7db43b6afbde0b",
     "scripts/vendor/LICENSE-ewfprobe": "401585b66a0a9270ea55491ab4e6f666ef57c0c1b4d27f74a93e9629ed53142a",
     "scripts/vendor/LICENSE-qnxprobe": "401585b66a0a9270ea55491ab4e6f666ef57c0c1b4d27f74a93e9629ed53142a",
     "scripts/vendor/README.md": "c8bb5443bb2c41bb025f75f17f421986fed6831b6501fcc5c91060ecc1b6bbb2",
@@ -16795,12 +16298,6 @@
     "whl_files/astc_decomp_faster-1.1.5-cp314-cp314-win_arm64.whl": "04c9d226d72c251007ec7c55d8a8b18287e53e485629d4f8c8c48280ff329b63",
     "whl_files/astc_decomp_faster-1.1.5-cp315-cp315-win_amd64.whl": "df25339c2a89de5f681ab8a816864c39e766fddc4fc8fcf3549e9553c8452c62",
     "whl_files/astc_decomp_faster-1.1.5-cp315-cp315-win_arm64.whl": "4a4c3a469dfc171e4f9ac7b35d40fed3d013d999dd0fed6c4083bd0b9511d563",
-    "whl_files/pyahocorasick-2.3.1-cp311-cp311-win_arm64.whl": "d4aa06297a9c1887705ae78e448ddb25d28bb577160d0b9784109830d86b4210",
-    "whl_files/pyahocorasick-2.3.1-cp312-cp312-win_arm64.whl": "628df5d0358c3fe87b2343f5941c8cb508f6befd07b4ae5212684e26f7a9645e",
-    "whl_files/pyahocorasick-2.3.1-cp313-cp313-win_arm64.whl": "220f7bdd09bbec36ba05705a854469596e6b4eef544783ff31c4a7aa5172d062",
-    "whl_files/pyahocorasick-2.3.1-cp314-cp314-win_arm64.whl": "d9357f70b9b80cc02cb7a80e02cd1225e15c26896f68a32260486475c19064bc",
-    "whl_files/pyahocorasick-2.3.1-cp315-cp315-win_amd64.whl": "12a3ad14c349cae1355c5fc80c3bee0d8fbdbb2555dc43ae020a1ccee97c1706",
-    "whl_files/pyahocorasick-2.3.1-cp315-cp315-win_arm64.whl": "006c3635631ba5ec92356e8cca270d20cf85d526a6945c11e079f699262c688f",
     "whl_files/pyliblzfse-0.4.1-cp311-cp311-win_amd64.whl": "d80b9236283cfa5ed27d30a7edf7d0cc30f06dd9fd20431ac6288def30ee9dea",
     "whl_files/pyliblzfse-0.4.1-cp311-cp311-win_arm64.whl": "ea56c744517d2f00bfeb25997061199d4d07086170e5d3fd6a6d3e444f36d796",
     "whl_files/pyliblzfse-0.4.1-cp312-cp312-win_amd64.whl": "9f0eb3b8cd1d61874702b1f80aaa5047117d4984bfcc8f1de65313db893d8a4b",
@@ -16810,14 +16307,33 @@
     "whl_files/pyliblzfse-0.4.1-cp314-cp314-win_amd64.whl": "cc105996b5ab4440e37afc2f08fb97a574ab5c576ccb84599d6270b790ddd05c",
     "whl_files/pyliblzfse-0.4.1-cp314-cp314-win_arm64.whl": "232e4da2cc65e6de48b67c8ea5cf0bbaa2b9bc774a3b8ef426a3a8bed3e9d301",
     "whl_files/pyliblzfse-0.4.1-cp315-cp315-win_amd64.whl": "a3b01a140300fc7dbfcda254ca81229fcd563efc540a4d5597aef52cbb7329ee",
-    "whl_files/pyliblzfse-0.4.1-cp315-cp315-win_arm64.whl": "ccda67e46801c5c0802637d37399153c0852e0eb79ea51ebb976db6771cb49ac",
-    "admin/scripts/fetch_unifiedlog_iterator.py": "fe4adaf7bcd3a2d25589272587ca6c481cae9e1844b6e6e977071284a9fe84b5"
+    "whl_files/pyliblzfse-0.4.1-cp315-cp315-win_arm64.whl": "ccda67e46801c5c0802637d37399153c0852e0eb79ea51ebb976db6771cb49ac"
   },
   "packaging": {
     "profile": "cultivator-headless",
     "excludedDirectories": [
       "assets",
       "scripts/_elements"
+    ],
+    "dependencyPolicy": "managed-python-only-v1",
+    "excludedModules": {
+      "scripts/artifacts/logarchive.py": "Requires the external unifiedlog_iterator executable"
+    },
+    "excludedFiles": [
+      "admin/scripts/fetch_unifiedlog_iterator.py",
+      "scripts/unifiedlogs.py",
+      "scripts/log_filter.py",
+      "bin/PROVENANCE.md",
+      "bin/THIRD-PARTY-NOTICES-unifiedlog_iterator.txt"
     ]
+  },
+  "upstreamCounts": {
+    "v1": 0,
+    "v2": 1326,
+    "modules": 482,
+    "alternate_modules": 1
+  },
+  "sourceOverrides": {
+    "requirements.txt": "bd81a5f2b7040b8f084c02afa43ace2a511d96186ed4dda727b1fe8caf161c97"
   }
 }

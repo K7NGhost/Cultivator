@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 
 from vendor_sources import REPORT_ASSET_DIRECTORIES, include_runtime_file
+from runtime_policy import EXCLUDED_MODULES, filter_requirements
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -30,10 +31,15 @@ def main():
             if (bundle / directory).exists():
                 raise SystemExit(f"Unused report assets bundled: {bundle / directory}")
         for relative, expected in catalog["files"].items():
-            if not include_runtime_file(relative):
+            if not include_runtime_file(relative, platform):
                 raise SystemExit(f"Excluded resource in runtime catalog: {relative}")
             for path in (source / relative, bundle / relative):
-                actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                content = path.read_bytes()
+                if path == source / relative and relative == "requirements.txt":
+                    if hashlib.sha256(content).hexdigest() != catalog["sourceOverrides"][relative]:
+                        raise SystemExit(f"Upstream requirements changed: {path}")
+                    content = filter_requirements(content.decode("utf-8"), platform).encode("utf-8")
+                actual = hashlib.sha256(content).hexdigest()
                 if actual != expected:
                     raise SystemExit(f"Source hash mismatch: {path}")
             paths.append((bundle / relative).relative_to(ROOT).as_posix())
@@ -41,8 +47,9 @@ def main():
         original = {p.relative_to(source).as_posix() for folder in ("artifacts", "alternate_artifacts")
                     for p in (source / "scripts" / folder).rglob("*.py") if p.name != "__init__.py"}
         recorded = {module["path"] for module in catalog["modules"]}
-        if original != recorded:
-            raise SystemExit(f"{platform}: artifact source files omitted or added: {original ^ recorded}")
+        excluded = original.intersection(EXCLUDED_MODULES[platform])
+        if original - excluded != recorded:
+            raise SystemExit(f"{platform}: artifact source files omitted or added: {(original - excluded) ^ recorded}")
         summary[platform] = {"revision": catalog["revision"], "runtimeFiles": len(catalog["files"]),
                              "artifactDefinitions": sum(len(module["artifacts"]) for module in catalog["modules"]),
                              "sourceHashesVerified": True, "moduleFilesVerified": True}

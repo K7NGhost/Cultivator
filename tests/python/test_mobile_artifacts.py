@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -93,6 +94,62 @@ def create_index(root, output, *, only=None):
 
 
 class MobileCatalogTests(unittest.TestCase):
+    def test_managed_python_policy_excludes_external_parsers_and_dependencies(self):
+        sys.path.insert(0, str(ROOT / "scripts/mobile"))
+        try:
+            from runtime_policy import EXCLUDED_MODULES, include_policy_file, filter_requirements
+            for platform in ("ios", "android", "vehicle"):
+                bundle = BUNDLES / platform
+                catalog = json.loads((bundle / "catalog.json").read_text(encoding="utf-8"))
+                self.assertEqual(catalog["packaging"]["dependencyPolicy"], "managed-python-only-v1")
+                self.assertEqual(catalog["packaging"]["excludedModules"], EXCLUDED_MODULES[platform])
+                for relative in EXCLUDED_MODULES[platform]:
+                    self.assertFalse((bundle / relative).exists(), relative)
+                for relative in catalog["files"]:
+                    self.assertTrue(include_policy_file(relative, platform), relative)
+                requirements = (bundle / "requirements.txt").read_text(encoding="utf-8")
+                self.assertEqual(filter_requirements(requirements, platform), requirements)
+                for folder in ("artifacts", "alternate_artifacts"):
+                    for path in (bundle / "scripts" / folder).glob("*.py"):
+                        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+                        for node in ast.walk(tree):
+                            imports = [n.name for n in node.names] if isinstance(node, ast.Import) else [node.module or ""] if isinstance(node, ast.ImportFrom) else []
+                            for name in imports:
+                                self.assertNotIn(name.split(".")[0], {"ctypes", "subprocess", "sqlcipher3", "pysqlcipher3", "mister_skinnylegs", "ccl_chromium_reader"}, str(path))
+        finally:
+            sys.path.pop(0)
+
+    def test_vendoring_does_not_restore_external_dependencies(self):
+        sys.path.insert(0, str(ROOT / "scripts/mobile"))
+        try:
+            import vendor_sources
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "upstream"
+                artifacts = source / "scripts/artifacts"
+                artifacts.mkdir(parents=True)
+                definition = "__artifacts_v2__ = {'fixture': {'name': 'Fixture', 'paths': ('*/fixture.db',)}}\n"
+                (artifacts / "safe.py").write_text(definition, encoding="utf-8")
+                (artifacts / "Threema.py").write_text(definition.replace("fixture", "excluded"), encoding="utf-8")
+                wheels = source / "whl_files"
+                wheels.mkdir()
+                (wheels / "sqlcipher3-0.6.2-cp315-cp315-win_amd64.whl").write_bytes(b"excluded")
+                requirements = "sqlcipher3==0.6.2\nmister_skinnylegs @ git+https://example.invalid/repo\nprotobuf==5.29.6\n"
+                (source / "requirements.txt").write_text(requirements, encoding="utf-8")
+                with mock.patch.object(vendor_sources, "DESTINATION", root / "bundles"), mock.patch.object(vendor_sources.subprocess, "check_output", side_effect=["fixture-revision\n", ""]):
+                    vendor_sources.vendor(source, "android")
+                bundle = root / "bundles/android"
+                catalog = json.loads((bundle / "catalog.json").read_text(encoding="utf-8"))
+                self.assertEqual(catalog["counts"]["v2"], 1)
+                self.assertEqual(catalog["upstreamCounts"]["v2"], 2)
+                self.assertFalse((bundle / "scripts/artifacts/Threema.py").exists())
+                self.assertFalse(list(bundle.rglob("*.whl")))
+                self.assertNotIn("git+", (bundle / "requirements.txt").read_text(encoding="utf-8"))
+                self.assertNotIn("sqlcipher3", (bundle / "requirements.txt").read_text(encoding="utf-8"))
+                self.assertEqual((source / "requirements.txt").read_text(encoding="utf-8"), requirements)
+        finally:
+            sys.path.pop(0)
+
     def test_headless_bundles_exclude_report_assets(self):
         for platform in ("ios", "android", "vehicle"):
             bundle = BUNDLES / platform

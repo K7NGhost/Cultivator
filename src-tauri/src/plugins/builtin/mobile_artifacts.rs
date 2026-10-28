@@ -1,4 +1,4 @@
-//! Complete bundled iLEAPP/ALEAPP/VLEAPP catalogs in isolated Python workers.
+//! Bundled iLEAPP/ALEAPP/VLEAPP parsers using managed Python dependencies only.
 use super::{python_worker::PythonWorker, BuiltinArtifact, BuiltinPlugin, BuiltinPluginContext};
 use crate::{
     evidence,
@@ -66,11 +66,7 @@ impl Platform {
         })
     }
     fn python(self) -> &'static str {
-        if matches!(self, Self::Android) && cfg!(windows) {
-            "3.15"
-        } else {
-            "3.12"
-        }
+        "3.12"
     }
     fn manifest(self) -> PythonPluginManifest {
         static IOS: OnceLock<PythonPluginManifest> = OnceLock::new();
@@ -125,7 +121,7 @@ impl Platform {
             manifest.options.clear();
         }
         manifest.entry = format!("builtin:{}-artifacts", self.name());
-        manifest.description = format!("Parse the complete bundled {} artifact catalog. Results retain original columns, source references and parser metadata.", catalog["project"].as_str().unwrap());
+        manifest.description = format!("Parse bundled {} artifacts using managed Python dependencies. Results retain original columns, source references and parser metadata.", catalog["project"].as_str().unwrap());
         manifest.mode = PythonPluginMode::PathGlob;
         manifest.path_glob = patterns.clone();
         manifest.archive_path_glob = patterns;
@@ -614,6 +610,7 @@ mod tests {
         ] {
             let manifest = super::super::plugin(id).unwrap().manifest();
             assert_eq!(manifest.id, id);
+            assert_eq!(manifest.python, "3.12");
             if matches!(platform, Platform::Vehicle) {
                 assert!(matches!(manifest.target, PythonPluginTarget::Infotainment));
             }

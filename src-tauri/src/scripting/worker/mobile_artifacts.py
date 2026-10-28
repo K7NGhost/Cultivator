@@ -1,4 +1,4 @@
-"""Cultivator JSON-lines adapter for the bundled, unmodified LEAPP parsers.
+"""Cultivator JSON-lines adapter for the bundled LEAPP parsers with managed-Python dependencies.
 
 Parser stdout is isolated from the protocol. Requests for evidence bytes are
 served by the parent Inodex reader; upstream seekers create parser working copies.
@@ -16,7 +16,6 @@ import re
 import sqlite3
 import sys
 import tempfile
-import time
 import traceback
 from datetime import datetime, timezone
 
@@ -178,84 +177,6 @@ def install_inventory_adapter(loader):
         patched.add(id(namespace))
 
 
-@contextlib.contextmanager
-def native_tool_lock(directory):
-    directory.mkdir(parents=True, exist_ok=True)
-    with (directory / "download.lock").open("a+b") as lock:
-        lock.seek(0)
-        lock.write(b"0")
-        lock.flush()
-        lock.seek(0)
-        if os.name == "nt":
-            import msvcrt
-            while True:
-                try:
-                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-                    break
-                except OSError:
-                    time.sleep(0.1)
-            try:
-                yield
-            finally:
-                lock.seek(0)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
-
-
-def install_unified_log_reader(bundle):
-    """Provision upstream's digest-pinned native reader only when requested."""
-    from scripts import unifiedlogs
-    original = unifiedlogs.find_iterator
-
-    def verified_reader():
-        helper = bundle / "admin/scripts/fetch_unifiedlog_iterator.py"
-        spec = importlib.util.spec_from_file_location("cultivator_unifiedlogs_fetch", helper)
-        fetcher = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(fetcher)
-        key = fetcher.current_platform()
-        name = "unifiedlog_iterator.exe" if key.startswith("windows") else "unifiedlog_iterator"
-        directory = bundle / "native-tools" / key
-        binary = directory / name
-        manifest = directory / "verified.json"
-        if manifest.is_file() and binary.is_file():
-            from hashlib import sha256
-            details = json.loads(manifest.read_text(encoding="utf-8"))
-            if details.get("version") == fetcher.PINNED_VERSION and details.get("sha256") == sha256(binary.read_bytes()).hexdigest():
-                return str(binary)
-        emit({"type": "log", "level": "info", "message": "Preparing the verified native Unified Logs reader (first use downloads it from its upstream release)."})
-        directory.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="download-", dir=directory) as temporary:
-            fetcher.BIN_DIR = Path(temporary)
-            fetcher.fetch(key)  # Checks the pinned archive SHA-256 before extraction.
-            from hashlib import sha256
-            details = {"version": fetcher.PINNED_VERSION,
-                       "archiveSha256": fetcher.ASSETS[key][1],
-                       "sha256": sha256((Path(temporary) / name).read_bytes()).hexdigest()}
-            for filename in ("LICENSE-unifiedlog_iterator", name):
-                os.replace(Path(temporary) / filename, directory / filename)
-            ready = Path(temporary) / "verified.json"
-            ready.write_text(json.dumps(details), encoding="utf-8")
-            os.replace(ready, manifest)
-        return str(binary)
-
-    def find_iterator():
-        existing = original()
-        if existing:
-            return existing
-        if os.environ.get(unifiedlogs.BINARY_ENV_VAR):
-            raise RuntimeError("The configured Unified Logs reader is not executable")
-        with native_tool_lock(bundle / "native-tools"):
-            return verified_reader()
-
-    unifiedlogs.find_iterator = find_iterator
-
-
 def load_catalog(bundle):
     from scripts.plugin_loader import PluginLoader
     catalog = json.loads((bundle / "catalog.json").read_text(encoding="utf-8"))
@@ -349,8 +270,6 @@ def run(request, bundle):
         return
     core = importlib.import_module({"ios": "ileapp", "android": "aleapp", "vehicle": "vleapp"}[catalog["platform"]])
     install_inventory_adapter(loader)
-    if catalog["platform"] == "ios":
-        install_unified_log_reader(bundle)
     from scripts.context import Context
     from scripts import lavafuncs
     import pytz
@@ -411,11 +330,9 @@ def run(request, bundle):
         lavafuncs.initialize_lava(str(root), options.output_folder_base, extract_type)
         plugins = list(sorted(loader.plugins, key=lambda plugin: (plugin.category, plugin.name)))
         if catalog["platform"] == "ios":
-            # The upstream dispatcher invokes its logarchive children; these are
-            # all registered and checked above, rather than executed twice.
+            # The upstream dispatcher adds device-information parsers itself.
             plugins = [p for p in plugins if p.name != "last_build"
-                       and p.module_name != "iTunesBackupInfo"
-                       and (p.module_name != "logarchive" or p.name == "logarchive")]
+                       and p.module_name != "iTunesBackupInfo"]
         def progress(completed, total):
             emit({"type": "progress", "completed": source_number * total + completed,
                   "total": len(roots) * total,

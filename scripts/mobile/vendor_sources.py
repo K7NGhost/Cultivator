@@ -11,6 +11,7 @@ import shutil
 import subprocess
 
 from inventory_sources import inspect
+from runtime_policy import EXCLUDED_MODULES, EXCLUDED_FILES, include_policy_file, filter_requirements
 
 DESTINATION = Path(__file__).resolve().parents[2] / "src-tauri/resources/mobile"
 
@@ -19,9 +20,11 @@ DESTINATION = Path(__file__).resolve().parents[2] / "src-tauri/resources/mobile"
 REPORT_ASSET_DIRECTORIES = ("assets", "scripts/_elements")
 
 
-def include_runtime_file(relative):
+def include_runtime_file(relative, platform=None):
     relative = Path(relative)
     if "__pycache__" in relative.parts or relative.suffix in (".pyc", ".pyo"):
+        return False
+    if platform and not include_policy_file(relative.as_posix(), platform):
         return False
     name = relative.as_posix()
     return not any(name == directory or name.startswith(directory + "/")
@@ -37,7 +40,7 @@ def vendor(source, platform):
     files = []
     for directory in ("scripts", "leapp_functions", "assets", "bin", "whl_files"):
         for path in sorted((source / directory).rglob("*")):
-            if path.is_file() and include_runtime_file(path.relative_to(source)):
+            if path.is_file() and include_runtime_file(path.relative_to(source), platform):
                 files.append(path)
     project = {"ios": "iLEAPP", "android": "ALEAPP", "vehicle": "VLEAPP"}[platform]
     entry = {"ios": "ileapp.py", "android": "aleapp.py", "vehicle": "vleapp.py"}[platform]
@@ -45,15 +48,19 @@ def vendor(source, platform):
         path = source / name
         if path.is_file():
             files.append(path)
-    if platform == "ios":
-        files.append(source / "admin/scripts/fetch_unifiedlog_iterator.py")
     digests = {}
+    source_overrides = {}
     for path in files:
         relative = path.relative_to(source)
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, target)
-        digests[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        if relative.as_posix() == "requirements.txt":
+            source_overrides[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+            target.write_text(filter_requirements(path.read_text(encoding="utf-8"), platform), encoding="utf-8", newline="\n")
+        else:
+            shutil.copyfile(path, target)
+        digests[relative.as_posix()] = hashlib.sha256(target.read_bytes()).hexdigest()
+    filtered = inspect(destination)
     git = ["git", "-c", f"safe.directory={source.as_posix()}"]
     revision = subprocess.check_output([*git, "rev-parse", "HEAD"], cwd=source, text=True).strip()
     dirty = subprocess.check_output([*git, "status", "--porcelain"], cwd=source, text=True)
@@ -63,14 +70,18 @@ def vendor(source, platform):
         "repository": "https://github.com/abrignoni/" + project,
         "revision": revision,
         "sourceHadUncommittedChanges": bool(dirty.strip()),
-        "packaging": {"profile": "cultivator-headless", "excludedDirectories": list(REPORT_ASSET_DIRECTORIES)},
-        "counts": inventory["counts"],
-        "modules": inventory["modules"],
+        "packaging": {"profile": "cultivator-headless", "dependencyPolicy": "managed-python-only-v1",
+                      "excludedDirectories": list(REPORT_ASSET_DIRECTORIES),
+                      "excludedModules": EXCLUDED_MODULES[platform], "excludedFiles": list(EXCLUDED_FILES[platform])},
+        "upstreamCounts": inventory["counts"],
+        "sourceOverrides": source_overrides,
+        "counts": filtered["counts"],
+        "modules": filtered["modules"],
         "files": dict(sorted(digests.items())),
     }
     text = json.dumps(metadata, indent=2, ensure_ascii=False) + "\n"
     (destination / "catalog.json").write_text(text, encoding="utf-8")
-    print(f"{platform}: {len(files)} runtime files; {inventory['counts']}")
+    print(f"{platform}: {len(files)} runtime files; {filtered['counts']}")
 
 
 if __name__ == "__main__":

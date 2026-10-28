@@ -2611,7 +2611,7 @@
     "leapp_functions/data_sources/json_files.py": "08064bf703f116ee5a3d02b11b3e5207a759d0aaea3dc7905e1a8a8593bda029",
     "leapp_functions/data_sources/text_files.py": "4d674f139839f8162c4ef0f92ec7f7eae4680cb2c339ae6917149b2f0d2254be",
     "leapp_functions/lava_launcher.py": "e90220f907b05c440532c6e5cd0f66d40a4d7e98ec8dc93348a2b62f2577a5f0",
-    "requirements.txt": "3d39f24096c46f63b4551386de462c22d86ea8af10d64d42a4923008fb604519",
+    "requirements.txt": "dc145ff789b2cc1a0790e2842481baf074a66c594b45941475c3ec6a7abc1716",
     "scripts/artifact_report.py": "88003fa28c37f6706b036065e4bbe77a914e2d764eca99ffde954b9be4013fa7",
     "scripts/artifacts/AlfaRomeo_agenda_BT.py": "ca8995d606ef1943e07cf4af246625dc6b2d0d31571cf12447328deb1e160644",
     "scripts/artifacts/AlfaRomeo_agenda_contacts.py": "1fda5dc61cc24d4ecd26bfa581ce3634b611d44390fd7f644ca1926ae2344202",
@@ -2731,6 +2731,18 @@
     "excludedDirectories": [
       "assets",
       "scripts/_elements"
-    ]
+    ],
+    "dependencyPolicy": "managed-python-only-v1",
+    "excludedModules": {},
+    "excludedFiles": []
+  },
+  "upstreamCounts": {
+    "v1": 0,
+    "v2": 211,
+    "modules": 71,
+    "alternate_modules": 0
+  },
+  "sourceOverrides": {
+    "requirements.txt": "3d39f24096c46f63b4551386de462c22d86ea8af10d64d42a4923008fb604519"
   }
 }
