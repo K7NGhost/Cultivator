@@ -20,10 +20,7 @@ export function TelemetryChart({
   onSelect: (record: FlightRecord) => void;
 }) {
   const data = useMemo(() => {
-    const stride = Math.max(1, Math.ceil(records.length / 600));
-    const samples = records.filter(
-      (_, index) => index % stride === 0 || index === records.length - 1,
-    );
+    const samples = records;
     const values = samples.flatMap((row) =>
       row[field] == null ? [] : [row[field]!],
     );
@@ -72,7 +69,7 @@ export function TelemetryChart({
           className="mt-1 h-20 w-full cursor-crosshair"
           preserveAspectRatio="none"
           role="img"
-          aria-label={`${title} over the GPS track. Click to select a point.`}
+          aria-label={`${title} over flight telemetry. Click to select a point.`}
           onClick={(event) => {
             const box = event.currentTarget.getBoundingClientRect();
             const elapsed =
@@ -112,11 +109,11 @@ export function TelemetryChart({
         </svg>
       ) : (
         <div className="grid h-20 place-items-center text-xs text-muted-foreground">
-          No {title.toLowerCase()} on the GPS track
+          No {title.toLowerCase()} in flight telemetry
         </div>
       )}
       <div className="flex justify-between text-[9px] text-muted-foreground">
-        <span>GPS track samples</span>
+        <span>Telemetry samples</span>
         <span>
           {finiteLabel(data.min)}–{finiteLabel(data.max)} {unit}
         </span>

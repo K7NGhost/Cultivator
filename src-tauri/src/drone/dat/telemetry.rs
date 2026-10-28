@@ -283,15 +283,7 @@ impl Telemetry {
         false
     }
 
-    pub fn row(
-        &self,
-        id: usize,
-        tick: u64,
-        first_tick: u64,
-        clock: f64,
-        offset: usize,
-    ) -> FlightRow {
-        let elapsed_seconds = tick.saturating_sub(first_tick) as f64 / clock;
+    pub(super) fn measurements(&self) -> (Option<f64>, Option<&'static str>, Option<f64>) {
         let (altitude, reference) = if self.coordinate_source == Some(CoordinateSource::Gps) {
             (self.gps_msl, self.gps_msl.map(|_| "gps_msl"))
         } else if self.relative_height.is_some() {
@@ -310,6 +302,19 @@ impl Telemetry {
             }
             _ => None,
         };
+        (altitude, reference, speed)
+    }
+
+    pub fn row(
+        &self,
+        id: usize,
+        tick: u64,
+        first_tick: u64,
+        clock: f64,
+        offset: usize,
+    ) -> FlightRow {
+        let elapsed_seconds = tick.saturating_sub(first_tick) as f64 / clock;
+        let (altitude, reference, speed) = self.measurements();
         FlightRow {
             id,
             time: format_time(elapsed_seconds),

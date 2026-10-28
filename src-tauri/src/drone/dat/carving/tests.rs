@@ -1,5 +1,5 @@
 use super::*;
-use crate::drone::dat::packet::fixture_packet;
+use crate::packet::fixture_packet;
 use inodex::image::RawImage;
 use std::{
     fs,

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { StoredArtifactRecord } from "@/features/artifacts/model/types";
-import type { ConversionMetadata, CsvPage, ImportResult } from "../types";
+import type { ConversionMetadata, TelemetryPage, ImportResult } from "../types";
 
 export type DroneFlight = Omit<StoredArtifactRecord, "payload"> & {
   payload: {
@@ -20,13 +20,13 @@ export function openDroneFlight(caseDatabasePath: string, artifactId: string) {
     artifactId,
   });
 }
-export function droneCsvPage(
+export function droneTelemetryPage(
   caseDatabasePath: string,
   artifactId: string,
   page: number,
   query: string,
 ) {
-  return invoke<CsvPage>("drone_csv_page", {
+  return invoke<TelemetryPage>("drone_telemetry_page", {
     caseDatabasePath,
     artifactId,
     page,

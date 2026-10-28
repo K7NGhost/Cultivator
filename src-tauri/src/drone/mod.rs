@@ -1,5 +1,5 @@
 //! Case-owned flight conversions using the native DJI DAT decoder and map model.
-pub(crate) mod dat;
+pub(crate) use cultivator_drone_dat as dat;
 
 use crate::plugins::{self, PluginArtifactRecord};
 use sqlx::Row;
@@ -42,7 +42,7 @@ async fn dataset(
     case_database_path: String,
     artifact_id: String,
 ) -> Result<Arc<dat::Dataset>, String> {
-    // Recheck case membership even for cached CSV pages, so removed results
+    // Recheck case membership even for cached telemetry pages, so removed results
     // cannot be reopened through a stale UI selection.
     let artifact = list_drone_flights(case_database_path.clone())
         .await?
@@ -98,33 +98,18 @@ pub async fn open_drone_flight(
     artifact_id: String,
 ) -> Result<dat::ImportResult, String> {
     let flight = dataset(case_database_path, artifact_id).await?;
-    tauri::async_runtime::spawn_blocking(move || {
-        // Map transfer is bounded; the complete, hashed CSV remains pageable.
-        let step = flight.route.len().div_ceil(20_000).max(1);
-        let mut route: Vec<_> = flight.route.iter().step_by(step).cloned().collect();
-        if let Some(last) = flight.route.last() {
-            if route.last().map(|row| row.id) != Some(last.id) {
-                route.push(last.clone());
-            }
-        }
-        Ok(dat::ImportResult {
-            metadata: flight.metadata.clone(),
-            page: flight.page(0, 100, "", "")?,
-            route,
-            events: flight.events.clone(),
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || flight.import_result())
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn drone_csv_page(
+pub async fn drone_telemetry_page(
     case_database_path: String,
     artifact_id: String,
     page: usize,
     query: String,
-) -> Result<dat::CsvPage, String> {
+) -> Result<dat::TelemetryPage, String> {
     let flight = dataset(case_database_path, artifact_id).await?;
     tauri::async_runtime::spawn_blocking(move || flight.page(page, 100, &query, ""))
         .await
@@ -156,15 +141,11 @@ pub async fn export_drone_csv(
             return Ok(None);
         };
         let destination = file.into_path().map_err(|e| e.to_string())?;
-        let resolved = destination
-            .canonicalize()
-            .unwrap_or_else(|_| destination.clone());
-        if resolved == flight.csv_path() || resolved == Path::new(&flight.metadata.source_path) {
-            return Err(
-                "Choose a destination outside the source DAT and saved telemetry CSV.".into(),
-            );
-        }
-        std::fs::copy(flight.csv_path(), &destination).map_err(|e| e.to_string())?;
+        flight.export_csv(&destination)?;
+        *CACHE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .map_err(|_| "Flight cache unavailable")? = None;
         Ok(Some(destination.to_string_lossy().into()))
     })
     .await

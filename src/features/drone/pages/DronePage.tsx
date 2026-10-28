@@ -8,12 +8,12 @@ import { useCases } from "@/features/cases";
 import type { CaseRecord } from "@/features/cases/model/types";
 import { FlightWorkspace } from "../components/FlightWorkspace";
 import {
-  droneCsvPage,
+  droneTelemetryPage,
   listDroneFlights,
   openDroneFlight,
   type DroneFlight,
 } from "../services/droneRepository";
-import type { CsvPage, FlightRecord, ImportResult } from "../types";
+import type { TelemetryPage, FlightRecord, ImportResult } from "../types";
 import "../drone.css";
 
 const message = (error: unknown) =>
@@ -41,13 +41,14 @@ function DroneWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
   const [flightId, setFlightId] = useState("");
   const [detail, setDetail] = useState<ImportResult | null>(null);
   const [selected, select] = useState<FlightRecord | null>(null);
-  const [table, setTable] = useState<CsvPage | null>(null);
+  const [table, setTable] = useState<TelemetryPage | null>(null);
   const [page, setPage] = useState(0);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [opening, setOpening] = useState(false);
   const [paging, setPaging] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const flight = flights.find((item) => item.id === flightId);
   const refresh = useCallback(async (showLoading = true) => {
@@ -126,7 +127,7 @@ function DroneWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
     if (!detail) return;
     let disposed = false;
     setPaging(true);
-    void droneCsvPage(caseRecord.databasePath, flightId, page, filter)
+    void droneTelemetryPage(caseRecord.databasePath, flightId, page, filter)
       .then((next) => {
         if (!disposed) setTable(next);
       })
@@ -141,13 +142,22 @@ function DroneWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
     };
   }, [caseRecord.databasePath, flightId, detail, page, filter]);
   async function exportCsv() {
+    setExporting(true);
     try {
-      await invoke("export_drone_csv", {
+      const destination = await invoke<string | null>("export_drone_csv", {
         caseDatabasePath: caseRecord.databasePath,
         artifactId: flightId,
       });
+      if (destination) {
+        const updated = await openDroneFlight(caseRecord.databasePath, flightId);
+        setDetail((current) =>
+          current?.metadata.id === updated.metadata.id ? updated : current,
+        );
+      }
     } catch (caught) {
       setError(message(caught));
+    } finally {
+      setExporting(false);
     }
   }
   return (
@@ -179,11 +189,15 @@ function DroneWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
           size="sm"
           variant="ghost"
           className="h-7 px-2 text-xs"
-          disabled={!detail}
+          disabled={!detail || exporting}
           onClick={() => void exportCsv()}
         >
-          <ArrowDownToLine className="size-3.5" />
-          Export CSV
+          {exporting ? (
+            <LoaderCircle className="size-3.5 animate-spin" />
+          ) : (
+            <ArrowDownToLine className="size-3.5" />
+          )}
+          {exporting ? "Exporting CSV…" : "Export CSV"}
         </Button>
         {flights.length > 0 && (
           <select

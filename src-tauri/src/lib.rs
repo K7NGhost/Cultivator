@@ -2502,7 +2502,7 @@ pub fn run() {
             list_plugin_artifacts,
             drone::list_drone_flights,
             drone::open_drone_flight,
-            drone::drone_csv_page,
+            drone::drone_telemetry_page,
             drone::export_drone_csv,
             delete_plugin_artifact,
             delete_plugin_artifacts,

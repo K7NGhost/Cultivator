@@ -1,0 +1,41 @@
+[package]
+name = "cultivator-drone-benchmark"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+cultivator-drone-dat = { path = "../../../src-tauri/crates/drone-dat" }
+serde_json = "1"
+inodex = "0.1.2"
+
+[profile.release]
+debug = 1
+
+[profile.dev.package.cultivator-drone-dat]
+opt-level = 3
+
+[profile.dev.package.csv]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.memchr]
+opt-level = 3
+
+[profile.dev.package.csv-core]
+opt-level = 3
+
+[profile.dev.package.ryu]
+opt-level = 3
+
+[profile.dev.package.serde_json]
+opt-level = 3
+
+[profile.dev.package.inodex]
+opt-level = 3
+
+[profile.dev.package.flate2]
+opt-level = 3
+

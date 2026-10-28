@@ -1,13 +1,16 @@
-//! Native DJI DAT -> CSV conversion, based on the local DatCon source.
-pub(crate) mod carving;
+//! Native DJI DAT decoding into an indexed binary cache, with explicit CSV export.
+mod cache;
+pub mod carving;
+mod dataset;
+pub use cache::CacheMetadata;
+pub use dataset::restore_file;
 mod packet;
 mod schema;
 mod telemetry;
-#[cfg(test)]
-pub(crate) use packet::fixture_packet;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use packet::fixture_packet;
 
-use csv::{Position, StringRecord};
-use packet::{Clock, Scanner};
+use packet::{Clock, Packet, Scanner};
 use schema::parse_definitions;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,7 +21,7 @@ use std::{
 };
 use telemetry::{CoordinateSource, Telemetry};
 
-pub(crate) const MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_EVENTS: usize = 1_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -89,11 +92,18 @@ pub struct Metadata {
     pub source_path: String,
     pub source_bytes: u64,
     pub source_sha256: String,
+    /// Hash of the header and CRC-valid records, excluding filesystem padding.
+    #[serde(default)]
+    pub record_stream_sha256: String,
     pub format: String,
     pub aircraft: String,
     pub firmware_date: String,
     pub csv_path: String,
     pub csv_sha256: String,
+    #[serde(default)]
+    pub csv_pending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry_cache: Option<CacheMetadata>,
     pub row_count: usize,
     pub packet_count: usize,
     pub rejected_packets: usize,
@@ -113,20 +123,22 @@ pub struct CarvingProvenance {
     pub image_offset: u64,
     pub recovered_bytes: u64,
     pub stopped_at_size_limit: bool,
+    #[serde(default)]
+    pub stored_as_range: bool,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CsvPage {
+pub struct TelemetryPage {
     pub columns: Vec<String>,
-    pub rows: Vec<CsvRow>,
+    pub rows: Vec<TelemetryRow>,
     pub total: usize,
     pub page: usize,
     pub page_size: usize,
 }
 
 #[derive(Serialize)]
-pub struct CsvRow {
+pub struct TelemetryRow {
     pub values: Vec<String>,
     pub telemetry: FlightRow,
 }
@@ -134,17 +146,42 @@ pub struct CsvRow {
 #[derive(Serialize)]
 pub struct ImportResult {
     pub metadata: Metadata,
-    pub page: CsvPage,
+    pub page: TelemetryPage,
     pub route: Vec<FlightRow>,
+    pub samples: Vec<FlightRow>,
     pub events: Vec<FlightEvent>,
 }
 
 pub struct Dataset {
     pub metadata: Metadata,
     pub columns: Vec<String>,
-    positions: Vec<Position>,
+    cache: cache::Reader,
     pub route: Vec<FlightRow>,
+    pub samples: Vec<FlightRow>,
     pub events: Vec<FlightEvent>,
+    pub summary: FlightSummary,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct FlightSummary {
+    pub duration_seconds: f64,
+    pub max_altitude: Option<f64>,
+    pub max_speed: Option<f64>,
+}
+
+impl FlightSummary {
+    fn observe(&mut self, row: &FlightRow) {
+        self.observe_values(row.elapsed_seconds, row.altitude, row.speed);
+    }
+    fn observe_values(&mut self, elapsed: f64, altitude: Option<f64>, speed: Option<f64>) {
+        self.duration_seconds = self.duration_seconds.max(elapsed);
+        if let Some(value) = altitude {
+            self.max_altitude = Some(self.max_altitude.map_or(value, |old| old.max(value)));
+        }
+        if let Some(value) = speed {
+            self.max_speed = Some(self.max_speed.map_or(value, |old| old.max(value)));
+        }
+    }
 }
 
 pub fn format_time(seconds: f64) -> String {
@@ -189,14 +226,74 @@ pub fn convert_file_checked(
         return Err("This version supports DAT files up to 512 MiB.".into());
     }
     let data = fs::read(&source).map_err(|e| format!("Cannot read DAT file: {e}"))?;
-    let (start, version, clock_rate, aircraft) = header(&data)?;
+    convert_bytes_mode(&source, &data, output_root, cancelled, false)
+}
+
+/// Convert bytes already read or recovered by the caller. The caller must persist
+/// these same bytes at source; this avoids rereading a just-written carved DAT.
+pub fn convert_bytes_checked(
+    source: &Path,
+    data: &[u8],
+    output_root: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Dataset, String> {
+    convert_bytes_mode(source, data, output_root, cancelled, false)
+}
+
+/// Keep a verified carve as an image range, without creating a duplicate DAT.
+pub fn convert_carved_bytes_checked(
+    source: &Path,
+    data: &[u8],
+    output_root: &Path,
+    cancelled: &dyn Fn() -> bool,
+    origin: CarvingProvenance,
+) -> Result<Dataset, String> {
+    if !origin.stored_as_range || origin.recovered_bytes != data.len() as u64 {
+        return Err("Carved image range does not match its recovered bytes".into());
+    }
+    let mut dataset = convert_bytes_mode(source, data, output_root, cancelled, true)?;
+    dataset.metadata.carving = Some(origin);
+    dataset.save_metadata()?;
+    Ok(dataset)
+}
+
+fn convert_bytes_mode(
+    source: &Path,
+    data: &[u8],
+    output_root: &Path,
+    cancelled: &dyn Fn() -> bool,
+    logical_source: bool,
+) -> Result<Dataset, String> {
+    checkpoint(cancelled)?;
+    if data.len() as u64 > MAX_SOURCE_BYTES {
+        return Err("This version supports DAT files up to 512 MiB.".into());
+    }
+    let source = if logical_source {
+        source
+            .parent()
+            .ok_or("Missing carved source parent")?
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .join(source.file_name().ok_or("Missing carved source name")?)
+    } else {
+        source
+            .canonicalize()
+            .map_err(|e| format!("Cannot open DAT file: {e}"))?
+    };
+    if !source
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("dat"))
+    {
+        return Err("Choose a .DAT flight log.".into());
+    }
+    let (start, version, clock_rate, aircraft) = header(data)?;
     let id = uuid::Uuid::new_v4().to_string();
     fs::create_dir_all(output_root)
         .map_err(|e| format!("Cannot create conversion storage: {e}"))?;
     let directory = output_root.join(&id);
     fs::create_dir(&directory).map_err(|e| e.to_string())?;
     let result = convert(
-        &data, &source, &directory, &id, start, version, clock_rate, aircraft, cancelled,
+        data, &source, &directory, &id, start, version, clock_rate, aircraft, cancelled, true,
     );
     if result.is_err() {
         // Only this newly created conversion directory is removed on failure.
@@ -256,22 +353,37 @@ fn convert(
     clock_rate: f64,
     aircraft: &str,
     cancelled: &dyn Fn() -> bool,
+    publish_metadata: bool,
 ) -> Result<Dataset, String> {
     let mut definitions_text = String::new();
     let mut types: BTreeMap<(u16, usize), usize> = BTreeMap::new();
     let mut scanner = Scanner::new(data, start);
     let mut count = 0;
+    let mut packet_offsets = Vec::new();
+    let mut decoded_buffer = [0; 243];
+    let mut stream_hash = Sha256::new();
+    let mut span_start = 0;
+    let mut span_end = start;
     let mut position_sources = [false; 3];
     for packet in scanner.by_ref() {
         if count % 4096 == 0 {
             checkpoint(cancelled)?;
         }
         count += 1;
+        // Sources are capped at 512 MiB, so a four-byte offset is sufficient.
+        packet_offsets.push(packet.offset as u32);
+        if packet.offset != span_end {
+            stream_hash.update(&data[span_start..span_end]);
+            span_start = packet.offset;
+        }
+        span_end = packet.offset + packet.encrypted.len() + 12;
         *types
             .entry((packet.id, packet.encrypted.len()))
             .or_default() += 1;
         if let Some(source) = matches!(packet.id, 1 | 5 | 12 | 2048 | 2096)
-            .then(|| Telemetry::valid_position_source(packet.id, &packet.decode()))
+            .then(|| {
+                Telemetry::valid_position_source(packet.id, packet.decode_into(&mut decoded_buffer))
+            })
             .flatten()
         {
             position_sources[match source {
@@ -284,7 +396,7 @@ fn convert(
             if definitions_text.len() > 8 * 1024 * 1024 {
                 return Err("Embedded record definitions exceed the supported limit.".into());
             }
-            let decoded = packet.decode();
+            let decoded = packet.decode_into(&mut decoded_buffer);
             let end = decoded
                 .iter()
                 .position(|&b| b == 0)
@@ -293,6 +405,7 @@ fn convert(
             definitions_text.push('\n');
         }
     }
+    stream_hash.update(&data[span_start..span_end]);
     if count == 0 {
         return Err("No CRC-valid DJI records were found in the file.".into());
     }
@@ -303,7 +416,7 @@ fn convert(
     )
     .map_err(|e| e.to_string())?;
     let csv_path = directory.join("telemetry.csv");
-    let mut writer = csv::Writer::from_path(&csv_path).map_err(|e| e.to_string())?;
+    let mut writer = cache::Writer::new(&directory.join(cache::NAME))?;
     let coordinate_source = [
         CoordinateSource::Gps,
         CoordinateSource::Imu,
@@ -323,10 +436,12 @@ fn convert(
     let mut events_omitted = 0;
     let mut out_of_order = 0;
     let mut mapped = std::collections::BTreeSet::new();
-    for packet in Scanner::new(data, start) {
-        if row_count % 4096 == 0 {
+    for (packet_index, offset) in packet_offsets.into_iter().enumerate() {
+        if packet_index % 4096 == 0 {
             checkpoint(cancelled)?;
         }
+        // The first pass already CRC-validated these exact immutable bytes.
+        let packet = Packet::validated(data, offset);
         let tick = clock.unwrap(packet.tick);
         let origin = *first_tick.get_or_insert(tick);
         if let Some(previous) = group_tick {
@@ -337,9 +452,13 @@ fn convert(
             if tick > previous {
                 if changed {
                     row_count += 1;
-                    writer
-                        .serialize(state.row(row_count, previous, origin, clock_rate, group_offset))
-                        .map_err(|e| e.to_string())?;
+                    writer.push(state.row(
+                        row_count,
+                        previous,
+                        origin,
+                        clock_rate,
+                        group_offset,
+                    ))?;
                 }
                 changed = false;
                 group_tick = Some(tick);
@@ -354,9 +473,10 @@ fn convert(
             continue;
         }
         let old_mode = state.mode.clone();
+        let decoded = packet.decode_into(&mut decoded_buffer);
         if state.decode(
             packet.id,
-            &packet.decode(),
+            decoded,
             definitions.get(&packet.id),
             tick,
             packet.offset,
@@ -366,9 +486,11 @@ fn convert(
         }
         let mut message = None;
         if packet.id == 0x8000 {
-            let bytes = packet.decode();
-            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-            let text = String::from_utf8_lossy(&bytes[..end]).trim().to_string();
+            let end = decoded
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(decoded.len());
+            let text = String::from_utf8_lossy(&decoded[..end]).trim().to_string();
             if !text.is_empty() {
                 message = Some(("Flight controller log".to_string(), text));
             }
@@ -398,17 +520,15 @@ fn convert(
     }
     if changed {
         row_count += 1;
-        writer
-            .serialize(state.row(
-                row_count,
-                group_tick.unwrap(),
-                first_tick.unwrap(),
-                clock_rate,
-                group_offset,
-            ))
-            .map_err(|e| e.to_string())?;
+        writer.push(state.row(
+            row_count,
+            group_tick.unwrap(),
+            first_tick.unwrap(),
+            clock_rate,
+            group_offset,
+        ))?;
     }
-    writer.flush().map_err(|e| e.to_string())?;
+    let (mut cache, cache_metadata) = writer.finish()?;
     if row_count == 0 {
         return Err("Valid packets were found, but none contain a supported telemetry layout. No sample values were substituted.".into());
     }
@@ -451,13 +571,16 @@ fn convert(
         source_path: source.to_string_lossy().into(),
         source_bytes: data.len() as u64,
         source_sha256: sha256(data),
+        record_stream_sha256: format!("{:x}", stream_hash.finalize()),
         format: version.into(),
         aircraft: aircraft.into(),
         firmware_date: String::from_utf8_lossy(data.get(21..33).unwrap_or_default())
             .trim_matches(['\0', ' '])
             .into(),
         csv_path: csv_path.to_string_lossy().into(),
-        csv_sha256: sha256(&fs::read(&csv_path).map_err(|e| e.to_string())?),
+        csv_sha256: String::new(),
+        csv_pending: true,
+        telemetry_cache: Some(cache_metadata),
         row_count,
         packet_count: count,
         rejected_packets: scanner.rejected_packets,
@@ -466,12 +589,20 @@ fn convert(
         coordinate_source: coordinate_source
             .map_or("none", CoordinateSource::name)
             .into(),
-        route_point_count: 0,
-        route_distance_meters: None,
+        route_point_count: cache.index.route_points,
+        route_distance_meters: cache.index.distance,
         unmapped_record_types,
         warnings,
     };
-    let mut dataset = Dataset::load(metadata, events)?;
+    let mut dataset = Dataset {
+        metadata,
+        events,
+        columns: cache::COLUMNS.iter().map(|v| (*v).into()).collect(),
+        route: std::mem::take(&mut cache.index.route),
+        samples: std::mem::take(&mut cache.index.samples),
+        summary: cache.index.summary,
+        cache,
+    };
     if dataset.route.is_empty() {
         dataset
             .metadata
@@ -479,15 +610,13 @@ fn convert(
             .push("No valid GPS coordinates were found. The map will remain empty.".into());
     }
     fs::write(
-        directory.join("conversion.json"),
-        serde_json::to_vec_pretty(&dataset.metadata).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    fs::write(
         directory.join("events.json"),
         serde_json::to_vec_pretty(&dataset.events).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
+    if publish_metadata {
+        dataset.save_metadata()?;
+    }
     Ok(dataset)
 }
 
@@ -496,140 +625,6 @@ fn checkpoint(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
         Err("Drone parsing cancelled.".into())
     } else {
         Ok(())
-    }
-}
-
-impl Dataset {
-    pub(crate) fn save_metadata(&self) -> Result<(), String> {
-        let path = self
-            .csv_path()
-            .parent()
-            .ok_or("Missing conversion directory")?
-            .join("conversion.json");
-        fs::write(
-            path,
-            serde_json::to_vec_pretty(&self.metadata).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())
-    }
-    fn load(mut metadata: Metadata, events: Vec<FlightEvent>) -> Result<Self, String> {
-        let mut reader = csv::Reader::from_path(&metadata.csv_path).map_err(|e| e.to_string())?;
-        let columns: Vec<String> = reader
-            .headers()
-            .map_err(|e| e.to_string())?
-            .iter()
-            .map(String::from)
-            .collect();
-        let headers = reader.headers().map_err(|e| e.to_string())?.clone();
-        let mut positions = vec![];
-        let mut route = vec![];
-        let mut last_coordinate_tick = None;
-        let mut record = StringRecord::new();
-        loop {
-            let position = reader.position().clone();
-            if !reader.read_record(&mut record).map_err(|e| e.to_string())? {
-                break;
-            }
-            let row: FlightRow = record
-                .deserialize(Some(&headers))
-                .map_err(|e| format!("Cannot read generated CSV: {e}"))?;
-            positions.push(position);
-            if valid_coordinates(row.latitude, row.longitude)
-                && row.coordinate_tick != last_coordinate_tick
-            {
-                last_coordinate_tick = row.coordinate_tick;
-                route.push(row);
-            }
-        }
-        metadata.route_point_count = route.len();
-        metadata.route_distance_meters = (!route.is_empty()).then(|| {
-            route
-                .windows(2)
-                .map(|pair| ground_distance(&pair[0], &pair[1]))
-                .sum()
-        });
-        Ok(Self {
-            metadata,
-            columns,
-            positions,
-            route,
-            events,
-        })
-    }
-
-    pub fn page(
-        &self,
-        page: usize,
-        page_size: usize,
-        query: &str,
-        mode: &str,
-    ) -> Result<CsvPage, String> {
-        if page_size == 0 || page_size > 500 {
-            return Err("CSV page size must be between 1 and 500.".into());
-        }
-        let start = page.checked_mul(page_size).ok_or("Invalid page index")?;
-        let mut reader =
-            csv::Reader::from_path(&self.metadata.csv_path).map_err(|e| e.to_string())?;
-        let headers = reader.headers().map_err(|e| e.to_string())?.clone();
-        let query = query.trim().to_lowercase();
-        let mut rows = vec![];
-        let mut total = self.metadata.row_count;
-        if query.is_empty() && mode.is_empty() {
-            if let Some(position) = self.positions.get(start) {
-                reader.seek(position.clone()).map_err(|e| e.to_string())?;
-                for record in reader.records().take(page_size) {
-                    let record = record.map_err(|e| e.to_string())?;
-                    rows.push(CsvRow {
-                        telemetry: record
-                            .deserialize(Some(&headers))
-                            .map_err(|e| e.to_string())?,
-                        values: record.iter().map(String::from).collect(),
-                    });
-                }
-            }
-        } else {
-            total = 0;
-            for record in reader.records() {
-                let record = record.map_err(|e| e.to_string())?;
-                let row: FlightRow = record
-                    .deserialize(Some(&headers))
-                    .map_err(|e| e.to_string())?;
-                if (!mode.is_empty() && row.mode.as_deref() != Some(mode))
-                    || (!query.is_empty()
-                        && !record
-                            .iter()
-                            .any(|value| value.to_lowercase().contains(&query)))
-                {
-                    continue;
-                }
-                if total >= start && rows.len() < page_size {
-                    rows.push(CsvRow {
-                        telemetry: row,
-                        values: record.iter().map(String::from).collect(),
-                    });
-                }
-                total += 1;
-            }
-        }
-        Ok(CsvPage {
-            columns: self.columns.clone(),
-            rows,
-            total,
-            page,
-            page_size,
-        })
-    }
-
-    pub fn import_result(&self) -> Result<ImportResult, String> {
-        Ok(ImportResult {
-            metadata: self.metadata.clone(),
-            page: self.page(0, 100, "", "")?,
-            route: self.route.clone(),
-            events: self.events.clone(),
-        })
-    }
-    pub fn csv_path(&self) -> PathBuf {
-        PathBuf::from(&self.metadata.csv_path)
     }
 }
 
@@ -646,61 +641,6 @@ fn ground_distance(first: &FlightRow, last: &FlightRow) -> f64 {
         + latitude_a.cos() * latitude_b.cos() * (delta_longitude / 2.0).sin().powi(2);
     let a = a.clamp(0.0, 1.0);
     6_371_000.0 * 2.0 * a.sqrt().atan2((1.0 - a).sqrt())
-}
-
-/// Reopen a generated CSV without requiring or modifying its source DAT.
-pub fn restore_file(root: &Path, import_id: &str) -> Result<Dataset, String> {
-    let id = uuid::Uuid::parse_str(import_id).map_err(|_| "Invalid saved import ID")?;
-    let directory = root.join(id.to_string());
-    let mut metadata: Metadata = serde_json::from_slice(
-        &fs::read(directory.join("conversion.json"))
-            .map_err(|e| format!("Cannot reopen saved conversion: {e}"))?,
-    )
-    .map_err(|e| format!("Cannot read saved conversion metadata: {e}"))?;
-    if metadata.decoder_version < 2 {
-        return Err("This flight was converted with an older DAT decoder that accepted GPS data before acquisition. Run Drone Telemetry again to rebuild it with corrected GPS validation.".into());
-    }
-    if metadata.id != id.to_string() {
-        return Err("Saved conversion ID does not match its directory.".into());
-    }
-    let csv_path = directory
-        .join("telemetry.csv")
-        .canonicalize()
-        .map_err(|e| format!("Cannot reopen saved CSV: {e}"))?;
-    if csv_path.parent()
-        != Some(
-            directory
-                .canonicalize()
-                .map_err(|e| e.to_string())?
-                .as_path(),
-        )
-    {
-        return Err("Saved CSV is outside its conversion directory.".into());
-    }
-    use std::io::Read;
-    let mut file = fs::File::open(&csv_path).map_err(|e| e.to_string())?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 65536];
-    loop {
-        let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    if format!("{:x}", hasher.finalize()) != metadata.csv_sha256 {
-        return Err("Saved CSV hash does not match the original conversion. Re-import the DAT to create a new conversion.".into());
-    }
-    metadata.csv_path = csv_path.to_string_lossy().into();
-    let events: Vec<FlightEvent> = serde_json::from_slice(
-        &fs::read(directory.join("events.json")).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("Cannot read saved events: {e}"))?;
-    let dataset = Dataset::load(metadata, events)?;
-    if dataset.positions.len() != dataset.metadata.row_count {
-        return Err("Saved CSV row count does not match its metadata.".into());
-    }
-    Ok(dataset)
 }
 
 #[cfg(test)]

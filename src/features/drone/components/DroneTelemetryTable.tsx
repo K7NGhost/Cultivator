@@ -9,10 +9,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { CsvPage, FlightRecord } from "../types";
+import type { TelemetryPage, FlightRecord } from "../types";
 
 export type TelemetryTableProps = {
-  table: CsvPage | null;
+  table: TelemetryPage | null;
   selected: FlightRecord;
   onSelect: (record: FlightRecord) => void;
   query: string;

@@ -94,14 +94,25 @@ fn optional_carving_recovers_unallocated_log_deduplicates_live_log_and_retains_o
         carved.payload["metadata"]["carving"]["imagePath"],
         source.to_string_lossy().as_ref()
     );
-    assert_eq!(fs::read(&carved.file_path).unwrap(), log(100));
+    assert!(
+        !Path::new(&carved.file_path).exists(),
+        "a range-backed carve must not be copied upfront"
+    );
     let metadata = &carved.payload["metadata"];
+    assert_eq!(metadata["csvPending"], true);
+    assert!(!Path::new(metadata["csvPath"].as_str().unwrap()).exists());
     let root = Path::new(metadata["csvPath"].as_str().unwrap())
         .parent()
         .unwrap()
         .parent()
         .unwrap();
     let restored = dat::restore_file(root, metadata["id"].as_str().unwrap()).unwrap();
+    assert!(restored.metadata.csv_pending);
+    assert!(!restored.csv_path().exists());
+    assert_eq!(
+        restored.metadata.source_sha256,
+        format!("{:x}", Sha256::digest(log(100)))
+    );
     assert_eq!(restored.metadata.carving.unwrap().image_offset, 0x20000);
     assert_eq!(Sha256::digest(fs::read(source).unwrap()), original_hash);
 }

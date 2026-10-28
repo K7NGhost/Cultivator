@@ -1,5 +1,5 @@
-const CRC_TABLE: [u16; 256] = {
-    let mut table = [0; 256];
+const CRC_TABLE: [[u16; 256]; 8] = {
+    let mut table = [[0; 256]; 8];
     let mut index = 0;
     while index < 256 {
         let mut value = index as u16;
@@ -8,16 +8,38 @@ const CRC_TABLE: [u16; 256] = {
             value = (value >> 1) ^ if value & 1 != 0 { 0x8408 } else { 0 };
             bit += 1;
         }
-        table[index] = value;
+        table[0][index] = value;
         index += 1;
+    }
+    let mut lane = 1;
+    while lane < 8 {
+        let mut index = 0;
+        while index < 256 {
+            let value = table[lane - 1][index];
+            table[lane][index] = (value >> 8) ^ table[0][(value & 0xff) as usize];
+            index += 1;
+        }
+        lane += 1;
     }
     table
 };
 
 pub fn crc16(bytes: &[u8]) -> u16 {
     let mut crc = 0x3692u16;
-    for &byte in bytes {
-        crc = (crc >> 8) ^ CRC_TABLE[((crc ^ byte as u16) & 0xff) as usize];
+    let mut blocks = bytes.chunks_exact(8);
+    for block in blocks.by_ref() {
+        let value = u64::from_le_bytes(block.try_into().unwrap()) ^ crc as u64;
+        crc = CRC_TABLE[7][(value & 0xff) as usize]
+            ^ CRC_TABLE[6][((value >> 8) & 0xff) as usize]
+            ^ CRC_TABLE[5][((value >> 16) & 0xff) as usize]
+            ^ CRC_TABLE[4][((value >> 24) & 0xff) as usize]
+            ^ CRC_TABLE[3][((value >> 32) & 0xff) as usize]
+            ^ CRC_TABLE[2][((value >> 40) & 0xff) as usize]
+            ^ CRC_TABLE[1][((value >> 48) & 0xff) as usize]
+            ^ CRC_TABLE[0][(value >> 56) as usize];
+    }
+    for &byte in blocks.remainder() {
+        crc = (crc >> 8) ^ CRC_TABLE[0][((crc ^ byte as u16) & 0xff) as usize];
     }
     crc
 }
@@ -30,6 +52,26 @@ pub struct Packet<'a> {
 }
 
 impl Packet<'_> {
+    pub fn decode_into<'b>(&self, buffer: &'b mut [u8; 243]) -> &'b [u8] {
+        for (out, byte) in buffer.iter_mut().zip(self.encrypted) {
+            *out = byte ^ self.tick as u8;
+        }
+        &buffer[..self.encrypted.len()]
+    }
+
+    /// Only offsets produced by Scanner over this same immutable data may be used.
+    pub(super) fn validated(data: &[u8], offset: u32) -> Packet<'_> {
+        let offset = offset as usize;
+        let length = data[offset + 1] as usize;
+        Packet {
+            offset,
+            id: u16::from_le_bytes([data[offset + 4], data[offset + 5]]),
+            tick: u32::from_le_bytes(data[offset + 6..offset + 10].try_into().unwrap()),
+            encrypted: &data[offset + 10..offset + length - 2],
+        }
+    }
+
+    #[cfg(test)]
     pub fn decode(&self) -> Vec<u8> {
         self.encrypted.iter().map(|b| b ^ self.tick as u8).collect()
     }
@@ -59,8 +101,10 @@ impl<'a> Iterator for Scanner<'a> {
         while self.position < self.data.len() {
             let pos = self.position;
             if self.data[pos] != 0x55 {
-                self.position += 1;
-                self.skipped_bytes += 1;
+                let skipped =
+                    memchr::memchr(0x55, &self.data[pos..]).unwrap_or(self.data.len() - pos);
+                self.position += skipped;
+                self.skipped_bytes += skipped;
                 continue;
             }
             let length = self.data.get(pos + 1).copied().unwrap_or(0) as usize;
@@ -116,7 +160,7 @@ impl Clock {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn fixture_packet(id: u16, tick: u32, payload: &[u8]) -> Vec<u8> {
     assert!(payload.len() <= 243);
     let mut packet = vec![0x55, (payload.len() + 12) as u8, 0, 0];
@@ -139,7 +183,7 @@ mod tests {
     #[test]
     fn table_crc_matches_bitwise_reference_for_all_byte_values() {
         let bytes: Vec<u8> = (0..1024).map(|index| (index % 256) as u8).collect();
-        for length in [0, 1, 2, 31, 255, 256, 1024] {
+        for length in (0..=512).chain([1024]) {
             let mut reference = 0x3692u16;
             for byte in &bytes[..length] {
                 reference ^= *byte as u16;
@@ -148,6 +192,32 @@ mod tests {
                 }
             }
             assert_eq!(crc16(&bytes[..length]), reference);
+        }
+    }
+
+    #[test]
+    fn bulk_crc_matches_reference_for_unaligned_varied_payloads() {
+        let mut seed = 0x42534a16u32;
+        let bytes: Vec<u8> = (0..1032)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                seed as u8
+            })
+            .collect();
+        for offset in 0..8 {
+            for length in 0..=255 {
+                let input = &bytes[offset..offset + length];
+                let mut reference = 0x3692u16;
+                for byte in input {
+                    reference ^= *byte as u16;
+                    for _ in 0..8 {
+                        reference = (reference >> 1) ^ if reference & 1 != 0 { 0x8408 } else { 0 };
+                    }
+                }
+                assert_eq!(crc16(input), reference, "offset {offset}, length {length}");
+            }
         }
     }
     #[test]

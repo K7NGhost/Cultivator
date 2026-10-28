@@ -46,8 +46,15 @@ pub(super) fn append(
                 artifacts.len()
             ),
         );
-        let bytes = fs::read(&artifact.file_path).map_err(|e| e.to_string())?;
-        fingerprints.insert(carving::fingerprint(&bytes, cancelled)?);
+        let cached = artifact.payload["metadata"]["recordStreamSha256"].as_str();
+        let fingerprint = match cached.filter(|hash| !hash.is_empty()) {
+            Some(hash) => hash.to_owned(),
+            None => {
+                let bytes = fs::read(&artifact.file_path).map_err(|e| e.to_string())?;
+                carving::fingerprint(&bytes, cancelled)?
+            }
+        };
+        fingerprints.insert(fingerprint);
     }
     let directory = output.join(format!("carved-{}", uuid::Uuid::new_v4()));
     let mut attempted = 0u64;
@@ -153,11 +160,9 @@ pub(super) fn append(
                     image_offset: candidate.offset,
                     recovered_bytes: recovered.bytes.len() as u64,
                     stopped_at_size_limit: recovered.stopped_at_size_limit,
+                    stored_as_range: true,
                 };
-                fs::write(&file, &recovered.bytes).map_err(|e| e.to_string())?;
                 let fingerprint = recovered.fingerprint;
-                // Release the recovery buffer before the decoder reads the working copy.
-                drop(recovered.bytes);
                 context.progress(
                     index as u64,
                     candidates.len() as u64,
@@ -168,8 +173,9 @@ pub(super) fn append(
                         candidate.offset
                     ),
                 );
-                let artifact = super::drone_telemetry::parse_artifact_with_origin(
+                let artifact = super::drone_telemetry::parse_artifact_from_bytes(
                     file,
+                    &recovered.bytes,
                     output,
                     cancelled,
                     Some(provenance),

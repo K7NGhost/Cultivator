@@ -972,6 +972,7 @@ dependencies = [
  "crc32fast",
  "csv",
  "ctor",
+ "cultivator-drone-dat",
  "flate2",
  "globset",
  "grep",
@@ -1003,6 +1004,22 @@ dependencies = [
  "uuid",
  "windows",
  "zip",
+]
+
+[[package]]
+name = "cultivator-drone-dat"
+version = "0.1.0"
+dependencies = [
+ "csv",
+ "flate2",
+ "inodex",
+ "memchr",
+ "ryu",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]

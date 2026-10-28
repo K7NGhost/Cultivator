@@ -42,6 +42,7 @@ export type ConversionMetadata = {
     imageOffset: number;
     recoveredBytes: number;
     stoppedAtSizeLimit: boolean;
+    storedAsRange?: boolean;
   } | null;
   id: string;
   sourceName: string;
@@ -53,6 +54,9 @@ export type ConversionMetadata = {
   firmwareDate: string;
   csvPath: string;
   csvSha256: string;
+  csvPending?: boolean;
+  telemetryCache?: { version: number; indexSha256: string };
+  recordStreamSha256?: string;
   rowCount: number;
   packetCount: number;
   rejectedPackets: number;
@@ -65,7 +69,7 @@ export type ConversionMetadata = {
   warnings: string[];
 };
 
-export type CsvPage = {
+export type TelemetryPage = {
   columns: string[];
   rows: { values: string[]; telemetry: FlightRecord }[];
   total: number;
@@ -75,7 +79,8 @@ export type CsvPage = {
 
 export type ImportResult = {
   metadata: ConversionMetadata;
-  page: CsvPage;
+  page: TelemetryPage;
   route: FlightRecord[];
+  samples: FlightRecord[];
   events: FlightEvent[];
 };

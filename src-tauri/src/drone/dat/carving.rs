@@ -35,29 +35,28 @@ pub fn scan(
     cancelled: &dyn Fn() -> bool,
     mut progress: impl FnMut(u64, u64, usize),
 ) -> Result<Vec<Candidate>, String> {
-    let needle = regex::bytes::Regex::new("BUILD ").map_err(|e| e.to_string())?;
+    let needle = memchr::memmem::Finder::new(b"BUILD ");
     let length = image.len();
     let mut candidates = Vec::new();
     let mut offset = 0u64;
-    let mut carry = Vec::new();
+    let mut bytes = vec![0; BLOCK + 272];
+    let mut previous = 0;
     progress(0, length, 0);
     while offset < length {
         checkpoint(cancelled)?;
         let size = (length - offset).min(BLOCK as u64) as usize;
-        let mut bytes = carry;
-        let base = offset - bytes.len() as u64;
-        let previous = bytes.len();
-        bytes.resize(previous + size, 0);
+        let base = offset - previous as u64;
+        let end = previous + size;
         image
-            .read_exact_at(offset, &mut bytes[previous..])
+            .read_exact_at(offset, &mut bytes[previous..end])
             .map_err(|e| e.to_string())?;
-        for found in needle.find_iter(&bytes) {
+        for found in needle.find_iter(&bytes[..end]) {
             checkpoint(cancelled)?;
-            let Some(start) = found.start().checked_sub(16) else {
+            let Some(start) = found.checked_sub(16) else {
                 continue;
             };
             // Defer a header straddling the buffer boundary to the next block.
-            if bytes.len() - start < 256 && offset + (size as u64) < length {
+            if end - start < 256 && offset + (size as u64) < length {
                 continue;
             }
             let absolute = base + start as u64;
@@ -67,15 +66,21 @@ pub fn scan(
             {
                 continue;
             }
-            let Ok((record_start, format, _, _)) = header(&bytes[start..]) else {
+            let Ok((record_start, format, _, _)) = header(&bytes[start..end]) else {
                 continue;
             };
             let available = (length - absolute).min(PROBE as u64) as usize;
-            let mut probe = vec![0; available];
-            image
-                .read_exact_at(absolute, &mut probe)
-                .map_err(|e| e.to_string())?;
-            let mut records = Scanner::new(&probe, record_start);
+            let mut probe = Vec::new();
+            let probe = if end - start >= available {
+                &bytes[start..start + available]
+            } else {
+                probe.resize(available, 0);
+                image
+                    .read_exact_at(absolute, &mut probe)
+                    .map_err(|e| e.to_string())?;
+                &probe
+            };
+            let mut records = Scanner::new(probe, record_start);
             let Some(first) = records.next() else {
                 continue;
             };
@@ -93,7 +98,8 @@ pub fn scan(
             });
         }
         offset += size as u64;
-        carry = bytes[bytes.len().saturating_sub(272)..].to_vec();
+        previous = end.min(272);
+        bytes.copy_within(end - previous..end, 0);
         progress(offset, length, candidates.len());
     }
     Ok(candidates)
@@ -104,13 +110,19 @@ pub fn scan(
 pub fn fingerprint(bytes: &[u8], cancelled: &dyn Fn() -> bool) -> Result<String, String> {
     let (start, _, _, _) = header(bytes)?;
     let mut digest = Sha256::new();
-    digest.update(&bytes[..start]);
+    let mut span_start = 0;
+    let mut span_end = start;
     for (count, packet) in Scanner::new(bytes, start).enumerate() {
         if count % 4096 == 0 {
             checkpoint(cancelled)?;
         }
-        digest.update(&bytes[packet.offset..packet.offset + packet.encrypted.len() + 12]);
+        if packet.offset != span_end {
+            digest.update(&bytes[span_start..span_end]);
+            span_start = packet.offset;
+        }
+        span_end = packet.offset + packet.encrypted.len() + 12;
     }
+    digest.update(&bytes[span_start..span_end]);
     Ok(format!("{:x}", digest.finalize()))
 }
 
@@ -133,6 +145,7 @@ pub fn recover(
     let mut last_good = 0usize;
     let mut packets = 0usize;
     let mut stopped_for_gap = false;
+    let mut digest = Sha256::new();
     while (bytes.len() as u64) < limit {
         checkpoint(cancelled)?;
         let previous = bytes.len();
@@ -143,11 +156,17 @@ pub fn recover(
             .map_err(|e| e.to_string())?;
         if last_good == 0 {
             last_good = header(&bytes)?.0;
+            digest.update(&bytes[..last_good]);
         }
+        let mut span_start = last_good;
         for packet in Scanner::new(&bytes, last_good) {
             if packet.offset - last_good > MAX_GAP {
                 stopped_for_gap = true;
                 break;
+            }
+            if packet.offset != last_good {
+                digest.update(&bytes[span_start..last_good]);
+                span_start = packet.offset;
             }
             last_good = packet.offset + packet.encrypted.len() + 12;
             packets += 1;
@@ -155,6 +174,7 @@ pub fn recover(
                 checkpoint(cancelled)?;
             }
         }
+        digest.update(&bytes[span_start..last_good]);
         progress(bytes.len() as u64);
         if stopped_for_gap || bytes.len() - last_good > MAX_GAP {
             stopped_for_gap = true;
@@ -166,7 +186,7 @@ pub fn recover(
     }
     let stopped_at_size_limit = !stopped_for_gap && available > limit;
     bytes.truncate(last_good);
-    let fingerprint = fingerprint(&bytes, cancelled)?;
+    let fingerprint = format!("{:x}", digest.finalize());
     Ok(Recovered {
         bytes,
         fingerprint,

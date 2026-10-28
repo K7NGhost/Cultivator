@@ -2,6 +2,123 @@ use super::packet::fixture_packet;
 use super::*;
 
 #[test]
+fn preview_summary_includes_non_position_ticks_without_expanding_the_route() {
+    let mut data = header_bytes(false);
+    let position = gps(378_000_000, -1_224_000_000, 150_000);
+    data.extend(fixture_packet(5, 600, &position[..68]));
+    for tick in 601..1601 {
+        data.extend(fixture_packet(1, tick, &imu(38.0, -123.0)));
+    }
+    with_fixture(&data, |eager| {
+        let preview = convert_file_checked(
+            Path::new(&eager.metadata.source_path),
+            eager.csv_path().parent().unwrap().parent().unwrap(),
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(preview.metadata.row_count, eager.metadata.row_count);
+        assert_eq!(
+            preview.summary.duration_seconds,
+            eager.summary.duration_seconds
+        );
+        assert_eq!(preview.summary.max_speed, eager.summary.max_speed);
+        assert_eq!(preview.summary.max_altitude, eager.summary.max_altitude);
+        assert_eq!(
+            serde_json::to_value(&preview.route).unwrap(),
+            serde_json::to_value(&eager.route).unwrap()
+        );
+        assert_eq!(preview.route.len(), 1);
+    });
+}
+
+#[test]
+fn range_backed_binary_reopens_without_copying_or_source_image() {
+    let case = tempfile::tempdir().unwrap();
+    let image = case.path().join("evidence.img");
+    let logical = case.path().join("range_0x1000.DAT");
+    let output = case.path().join("output");
+    let mut data = header_bytes(false);
+    data.extend(fixture_packet(1, 600, &imu(37.8, -122.4)));
+    let mut raw = vec![0; 4096];
+    raw.extend(&data);
+    fs::write(&image, &raw).unwrap();
+    let origin = CarvingProvenance {
+        image_path: image.to_string_lossy().into_owned(),
+        image_offset: 4096,
+        recovered_bytes: data.len() as u64,
+        stopped_at_size_limit: false,
+        stored_as_range: true,
+    };
+    let preview =
+        convert_carved_bytes_checked(&logical, &data, &output, &|| false, origin).unwrap();
+    assert!(!logical.exists());
+    assert!(!preview.csv_path().exists());
+    // Binary conversions are portable even if the source image is unavailable.
+    // Simulate a legacy deferred range and preserve its evidence verification.
+    let mut legacy = preview.metadata.clone();
+    legacy.telemetry_cache = None;
+    let metadata_path = output.join(&legacy.id).join("conversion.json");
+    let saved = fs::read(&metadata_path).unwrap();
+    fs::write(&metadata_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let mut changed = raw.clone();
+    changed[4096 + 130] ^= 1;
+    fs::write(&image, &changed).unwrap();
+    assert!(restore_file(&output, &legacy.id)
+        .err()
+        .unwrap()
+        .contains("DAT hash"));
+    fs::write(&image, &raw).unwrap();
+    fs::write(&metadata_path, saved).unwrap();
+    fs::remove_file(&image).unwrap();
+    let restored = restore_file(&output, &preview.metadata.id).unwrap();
+    assert_eq!(restored.metadata.source_sha256, sha256(&data));
+    assert!(restored.metadata.carving.as_ref().unwrap().stored_as_range);
+    assert!(!logical.exists());
+    assert_eq!(restored.page(0, 100, "", "").unwrap().rows.len(), 1);
+    assert_eq!(
+        restore_file(&output, &preview.metadata.id)
+            .unwrap()
+            .metadata
+            .csv_sha256,
+        restored.metadata.csv_sha256
+    );
+}
+
+#[test]
+fn legacy_pending_dat_migrates_once_without_csv_and_checks_evidence() {
+    let case = tempfile::tempdir().unwrap();
+    let source = case.path().join("retained.DAT");
+    let output = case.path().join("conversions");
+    let mut data = header_bytes(false);
+    data.extend(fixture_packet(1, 600, &imu(37.8, -122.4)));
+    data.extend(fixture_packet(1, 1200, &imu(37.81, -122.41)));
+    fs::write(&source, &data).unwrap();
+    let mut dataset = convert_file(&source, &output).unwrap();
+    dataset.metadata.telemetry_cache = None;
+    dataset.save_metadata().unwrap();
+    fs::remove_file(&dataset.cache.path).unwrap();
+    fs::write(&source, [data.as_slice(), b"changed"].concat()).unwrap();
+    assert!(restore_file(&output, &dataset.metadata.id)
+        .err()
+        .unwrap()
+        .contains("DAT hash"));
+    fs::write(&source, &data).unwrap();
+    let (first, second) = std::thread::scope(|scope| {
+        let a = scope.spawn(|| restore_file(&output, &dataset.metadata.id).unwrap());
+        let b = scope.spawn(|| restore_file(&output, &dataset.metadata.id).unwrap());
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    for restored in [&first, &second] {
+        assert!(restored.metadata.telemetry_cache.is_some());
+        assert!(restored.metadata.csv_pending);
+        assert!(!restored.csv_path().exists());
+        assert_eq!(restored.page(0, 100, "", "").unwrap().rows.len(), 2);
+    }
+    fs::remove_file(source).unwrap();
+    assert!(restore_file(&output, &dataset.metadata.id).is_ok());
+}
+
+#[test]
 fn cancellation_during_packet_scan_cleans_only_the_new_conversion() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let directory = tempfile_for_cancellation();
@@ -249,8 +366,105 @@ fn with_fixture(data: &[u8], check: impl FnOnce(Dataset)) {
     fs::write(&source, data).unwrap();
     let result = convert_file(&source, &directory.join("output")).unwrap();
     assert_eq!(fs::read(&source).unwrap(), data);
+    assert_eq!(
+        result.metadata.record_stream_sha256,
+        carving::fingerprint(data, &|| false).unwrap()
+    );
+    assert!(!result.csv_path().exists());
+    assert!(result.metadata.csv_sha256.is_empty());
+    assert!(result.metadata.telemetry_cache.is_some());
     check(result);
     fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn indexed_binary_preserves_precision_strings_and_reads_only_requested_blocks() {
+    let mut data = header_bytes(false);
+    data.extend(fixture_packet(1, 600, &imu(37.8, -122.4)));
+    with_fixture(&data, |dataset| {
+        let path = dataset.cache.path.with_file_name("test.bin");
+        let mut writer = cache::Writer::new(&path).unwrap();
+        for id in 1..=25000 {
+            let mut row = dataset.route[0].clone();
+            row.id = id;
+            row.elapsed_seconds = (id - 1) as f64 / 600.0;
+            row.time = format_time(row.elapsed_seconds);
+            row.coordinate_tick = Some(id as u64 + u32::MAX as u64);
+            row.source_offset = usize::MAX - id;
+            row.mode = Some(format!("quoted, \"value\"\n{}", "x".repeat(id % 200)));
+            row.altitude = Some(if id == 12345 { 1e9 } else { id as f64 });
+            row.battery_current = Some(-0.0);
+            writer.push(row).unwrap();
+        }
+        let (_, expected) = writer.finish().unwrap();
+        let reader = cache::Reader::open(&path, &expected, 25000).unwrap();
+        assert!(reader.index.route.len() <= 20000);
+        assert!(reader.index.samples.len() <= 1030);
+        assert_eq!(reader.index.route.first().unwrap().id, 1);
+        assert_eq!(reader.index.route.last().unwrap().id, 25000);
+        assert!(reader.index.samples.iter().any(|r| r.id == 12345));
+        let row = &reader.range(511, 2).unwrap()[1];
+        assert_eq!(row.id, 513);
+        assert_eq!(row.elapsed_seconds.to_bits(), (512.0f64 / 600.0).to_bits());
+        assert_eq!(row.source_offset, usize::MAX - 513);
+        assert_eq!(row.battery_current.unwrap().to_bits(), (-0.0f64).to_bits());
+        assert!(row.mode.as_ref().unwrap().contains('\n'));
+        let mut metadata = dataset.metadata.clone();
+        metadata.row_count = 25000;
+        metadata.telemetry_cache = Some(expected.clone());
+        let loaded = Dataset::from_cache(metadata, vec![], reader);
+        let export = path
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("roundtrip.csv");
+        let hash = loaded.export_csv(&export).unwrap();
+        assert_eq!(hash, sha256(&fs::read(&export).unwrap()));
+        let mut csv = csv::Reader::from_path(&export).unwrap();
+        assert_eq!(
+            csv.headers().unwrap().iter().collect::<Vec<_>>(),
+            cache::COLUMNS
+        );
+        let original = loaded.page(249, 100, "", "").unwrap();
+        let exported: Vec<FlightRow> = csv.deserialize().map(Result::unwrap).collect();
+        assert_eq!(
+            serde_json::to_value(&exported[24999]).unwrap(),
+            serde_json::to_value(&original.rows[99].telemetry).unwrap()
+        );
+        // Corrupt the last block. Opening and reading the first page still work:
+        // neither operation scans or hashes all telemetry blocks.
+        let mut bytes = fs::read(&path).unwrap();
+        let footer = u64::from_le_bytes(bytes[24..32].try_into().unwrap()) as usize;
+        bytes[footer - 1] ^= 1;
+        fs::write(&path, &bytes).unwrap();
+        let reader = cache::Reader::open(&path, &expected, 25000).unwrap();
+        assert_eq!(reader.range(0, 100).unwrap().len(), 100);
+        assert!(reader.range(24999, 1).err().unwrap().contains("block hash"));
+        let original_export = fs::read(&export).unwrap();
+        let corrupt = Dataset::from_cache(loaded.metadata.clone(), vec![], reader);
+        assert!(corrupt.export_csv(&export).is_err());
+        assert_eq!(fs::read(&export).unwrap(), original_export);
+        bytes[8] = 99;
+        fs::write(&path, &bytes).unwrap();
+        assert!(cache::Reader::open(&path, &expected, 25000)
+            .err()
+            .unwrap()
+            .contains("version"));
+        bytes[8] = 1;
+        bytes[footer] ^= 1;
+        fs::write(&path, &bytes).unwrap();
+        assert!(cache::Reader::open(&path, &expected, 25000)
+            .err()
+            .unwrap()
+            .contains("index hash"));
+        bytes[footer] ^= 1;
+        fs::write(&path, &bytes).unwrap();
+        assert!(cache::Reader::open(&path, &expected, 24999).is_err());
+        bytes.truncate(footer);
+        fs::write(&path, &bytes).unwrap();
+        assert!(cache::Reader::open(&path, &expected, 25000).is_err());
+    });
 }
 
 #[test]
@@ -283,7 +497,7 @@ fn v1_combines_same_tick_and_keeps_last_group() {
 }
 
 #[test]
-fn v3_reads_embedded_definitions_crc_recovery_and_filters_csv() {
+fn v3_reads_embedded_definitions_crc_recovery_and_filters_telemetry() {
     let mut data = header_bytes(true);
     data.extend(fixture_packet(65533, 4_500_000, b"Op.[config]\nname battery_info\ntype 4000\nOp.uint16_t packVol 0\nOp.int32_t current 0\nOp.uint16_t soc 0\n"));
     let mut battery = vec![];
@@ -326,6 +540,8 @@ fn missing_gps_does_not_create_a_fictitious_route() {
     data.extend(fixture_packet(1, 600, &imu(0.0, 0.0)));
     with_fixture(&data, |dataset| {
         assert!(dataset.route.is_empty());
+        assert_eq!(dataset.samples.len(), 1);
+        assert_eq!(dataset.samples[0].altitude, Some(42.5));
         let row = &dataset.page(0, 100, "", "").unwrap().rows[0].telemetry;
         assert_eq!(row.latitude, None);
         assert_eq!(row.longitude, None);
@@ -337,10 +553,10 @@ fn real_dat_round_trip_when_sample_is_supplied() {
     let Some(source) = std::env::var_os("CULTIVATOR_TEST_DAT") else {
         return;
     };
-    let directory = PathBuf::from(
-        std::env::var_os("CULTIVATOR_TEST_OUTPUT")
-            .unwrap_or_else(|| std::env::temp_dir().into_os_string()),
-    );
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = std::env::var_os("CULTIVATOR_TEST_OUTPUT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| temporary.path().to_owned());
     let source = PathBuf::from(source);
     let original_hash = sha256(&fs::read(&source).unwrap());
     let dataset = convert_file(&source, &directory).unwrap();
@@ -355,7 +571,7 @@ fn real_dat_round_trip_when_sample_is_supplied() {
         assert_eq!(
             dataset.route.len(),
             expected.len(),
-            "Every raw GPS fix must survive CSV loading"
+            "Every raw GPS fix must survive binary storage"
         );
         for (row, expected) in dataset.route.iter().zip(expected) {
             assert!((row.latitude.unwrap() - expected["lat"].as_f64().unwrap()).abs() < 1e-9);
@@ -386,7 +602,7 @@ fn real_dat_round_trip_when_sample_is_supplied() {
     )
     .unwrap();
     println!(
-        "Real DAT: {} valid packets, {} CSV rows, {} route points; source SHA-256 unchanged.",
+        "Real DAT: {} valid packets, {} telemetry rows, {} route points; source SHA-256 unchanged.",
         dataset.metadata.packet_count,
         dataset.metadata.row_count,
         dataset.route.len()
@@ -394,7 +610,7 @@ fn real_dat_round_trip_when_sample_is_supplied() {
 }
 
 #[test]
-fn saved_conversion_reopens_without_dat_and_rejects_changed_csv() {
+fn saved_binary_opens_without_source_and_legacy_csv_migrates_once() {
     let mut data = header_bytes(false);
     data.extend(fixture_packet(1, 600, &imu(37.8, -122.4)));
     data.extend(fixture_packet(1, 1200, &imu(37.81, -122.41)));
@@ -402,31 +618,47 @@ fn saved_conversion_reopens_without_dat_and_rejects_changed_csv() {
         let id = dataset.metadata.id.clone();
         let csv_path = dataset.csv_path();
         let root = csv_path.parent().unwrap().parent().unwrap();
+        assert!(dataset
+            .export_csv(Path::new(&dataset.metadata.source_path))
+            .is_err());
+        assert!(dataset.export_csv(&dataset.cache.path).is_err());
+        assert!(dataset
+            .export_csv(&dataset.cache.path.with_file_name("conversion.json"))
+            .is_err());
         fs::remove_file(&dataset.metadata.source_path).unwrap();
         let restored = restore_file(root, &id).unwrap();
-        assert_eq!(restored.metadata.csv_sha256, dataset.metadata.csv_sha256);
-        assert_eq!(restored.route.len(), dataset.route.len());
         assert_eq!(restored.page(1, 1, "", "").unwrap().rows[0].telemetry.id, 2);
-        assert_eq!(restored.route[0].latitude, dataset.route[0].latitude);
+        assert!(!csv_path.exists());
         assert!(restore_file(root, "../source.DAT").is_err());
         let metadata_path = csv_path.parent().unwrap().join("conversion.json");
         let metadata_bytes = fs::read(&metadata_path).unwrap();
-        let mut legacy: serde_json::Value = serde_json::from_slice(&metadata_bytes).unwrap();
-        legacy.as_object_mut().unwrap().remove("decoderVersion");
-        fs::write(&metadata_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let mut old: serde_json::Value = serde_json::from_slice(&metadata_bytes).unwrap();
+        old.as_object_mut().unwrap().remove("decoderVersion");
+        fs::write(&metadata_path, serde_json::to_vec(&old).unwrap()).unwrap();
         assert!(restore_file(root, &id)
             .err()
             .unwrap()
             .contains("Run Drone Telemetry again"));
         fs::write(&metadata_path, metadata_bytes).unwrap();
+        // Only explicit export creates CSV. Simulate an existing completed CSV case.
+        let hash = dataset.export_csv(&csv_path).unwrap();
+        assert_eq!(hash, sha256(&fs::read(&csv_path).unwrap()));
+        let mut legacy: Metadata =
+            serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
+        legacy.telemetry_cache = None;
+        fs::write(&metadata_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        fs::remove_file(&dataset.cache.path).unwrap();
         let original_csv = fs::read(&csv_path).unwrap();
         fs::write(&csv_path, [original_csv.as_slice(), b"changed"].concat()).unwrap();
-        let error = restore_file(root, &id).err().unwrap();
-        assert!(error.contains("hash does not match"));
-        fs::remove_file(&csv_path).unwrap();
         assert!(restore_file(root, &id)
             .err()
             .unwrap()
-            .contains("Cannot reopen saved CSV"));
+            .contains("hash does not match"));
+        fs::write(&csv_path, &original_csv).unwrap();
+        let migrated = restore_file(root, &id).unwrap();
+        assert!(migrated.metadata.telemetry_cache.is_some());
+        assert_eq!(migrated.page(1, 1, "", "").unwrap().rows[0].telemetry.id, 2);
+        fs::remove_file(&csv_path).unwrap();
+        assert!(restore_file(root, &id).is_ok());
     });
 }

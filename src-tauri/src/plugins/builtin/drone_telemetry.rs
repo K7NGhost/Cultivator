@@ -158,40 +158,47 @@ pub(super) fn parse_artifact_with_origin(
     cancelled: &dyn Fn() -> bool,
     carving: Option<dat::CarvingProvenance>,
 ) -> Result<BuiltinArtifact, String> {
-    let mut dataset = dat::convert_file_checked(&path, output, cancelled)?;
+    let dataset = dat::convert_file_checked(&path, output, cancelled)?;
+    artifact_from_dataset(dataset, path, output, carving)
+}
+
+pub(super) fn parse_artifact_from_bytes(
+    path: PathBuf,
+    bytes: &[u8],
+    output: &Path,
+    cancelled: &dyn Fn() -> bool,
+    carving: Option<dat::CarvingProvenance>,
+) -> Result<BuiltinArtifact, String> {
+    let dataset = dat::convert_carved_bytes_checked(
+        &path,
+        bytes,
+        output,
+        cancelled,
+        carving.clone().ok_or("Missing carved DAT provenance")?,
+    )?;
+    artifact_from_dataset(dataset, path, output, carving)
+}
+
+fn artifact_from_dataset(
+    mut dataset: dat::Dataset,
+    path: PathBuf,
+    output: &Path,
+    carving: Option<dat::CarvingProvenance>,
+) -> Result<BuiltinArtifact, String> {
     if let Some(origin) = carving {
         dataset.metadata.warnings.push(format!("Contiguous DAT carve from decoded image byte offset 0x{:x}. Fragmented or overwritten content may be incomplete.{}", origin.image_offset,
             if origin.stopped_at_size_limit { " Recovery stopped at the 512 MiB size limit." } else { "" }));
         dataset.metadata.carving = Some(origin);
         dataset.save_metadata()?;
     }
-    let mut duration: f64 = 0.0;
-    let mut altitude: Option<f64> = None;
-    let mut speed: Option<f64> = None;
-    for (index, record) in csv::Reader::from_path(dataset.csv_path())
-        .map_err(|e| e.to_string())?
-        .deserialize::<dat::FlightRow>()
-        .enumerate()
-    {
-        if index % 4096 == 0 && cancelled() {
-            return Err("Drone parsing cancelled.".into());
-        }
-        let row = record.map_err(|e| e.to_string())?;
-        duration = duration.max(row.elapsed_seconds);
-        if let Some(number) = row.altitude {
-            altitude = Some(altitude.map_or(number, |old| old.max(number)));
-        }
-        if let Some(number) = row.speed {
-            speed = Some(speed.map_or(number, |old| old.max(number)));
-        }
-    }
+    let summary = dataset.summary;
     Ok(BuiltinArtifact {
         file_path: path.to_string_lossy().into(),
         kind: "journey".into(),
         label: dataset.metadata.source_name.clone(),
         payload: json!({"kind":"journey","category":"journeys","label":dataset.metadata.source_name,
-            "provider":"Cultivator DJI DAT", "metadata":dataset.metadata, "durationSeconds":duration,
-            "maxAltitude":altitude,"maxSpeed":speed,"conversionRoot":output,
+            "provider":"Cultivator DJI DAT", "metadata":dataset.metadata, "durationSeconds":summary.duration_seconds,
+            "maxAltitude":summary.max_altitude,"maxSpeed":summary.max_speed,"conversionRoot":output,
             "source":{"filePath":path,"parser":"cultivator-dat"}}),
     })
 }

@@ -23,7 +23,7 @@ export function FlightWorkspace({
   ...tableProps
 }: TelemetryTableProps & { active: boolean; detail: ImportResult }) {
   const { selected, onSelect } = tableProps;
-  const { metadata, route, events } = detail;
+  const { metadata, route, samples, events } = detail;
   const properties: [string, string][] = [
     ["Sample", `#${selected.id}`],
     ["Elapsed", selected.time],
@@ -101,7 +101,7 @@ export function FlightWorkspace({
             )}
             <div className="grid shrink-0 border-t md:grid-cols-2">
               <TelemetryChart
-                records={route}
+                records={samples}
                 selected={selected}
                 field="altitude"
                 title={
@@ -114,7 +114,7 @@ export function FlightWorkspace({
                 onSelect={onSelect}
               />
               <TelemetryChart
-                records={route}
+                records={samples}
                 selected={selected}
                 field="speed"
                 title="Ground speed"
@@ -196,8 +196,12 @@ export function FlightWorkspace({
               <dd className="break-all font-mono">{metadata.sourcePath}</dd>
               <dt className="text-muted-foreground">Source SHA-256</dt>
               <dd className="break-all font-mono">{metadata.sourceSha256}</dd>
-              <dt className="text-muted-foreground">CSV SHA-256</dt>
-              <dd className="break-all font-mono">{metadata.csvSha256}</dd>
+              {metadata.csvSha256 && (
+                <>
+                  <dt className="text-muted-foreground">CSV SHA-256</dt>
+                  <dd className="break-all font-mono">{metadata.csvSha256}</dd>
+                </>
+              )}
               <dt className="text-muted-foreground">Telemetry rows</dt>
               <dd>{metadata.rowCount.toLocaleString()}</dd>
               <dt className="text-muted-foreground">
