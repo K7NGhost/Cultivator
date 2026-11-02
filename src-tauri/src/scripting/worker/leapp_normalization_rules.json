@@ -1,0 +1,1389 @@
+{
+  "version": 1,
+  "sourceRevisions": {
+    "android": "b08555a1eb22f13e26161be6e353fc9436e2b504",
+    "ios": "4cb4e54ceb8b119bf22634a1223680c62cbc4146",
+    "vehicle": "2d3c5415008d031da564597fa696d4afca5e985f"
+  },
+  "rules": [
+    {
+      "id": "android.get_chrome.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/chrome.py",
+      "artifactKey": "get_chrome",
+      "kind": "browser_history",
+      "columns": [
+        "Last Visit Time",
+        "URL",
+        "Title",
+        "Visit Count",
+        "Typed Count",
+        "ID",
+        "Hidden"
+      ],
+      "fields": {
+        "url": {
+          "columns": [
+            "URL"
+          ],
+          "convert": "string"
+        },
+        "title": {
+          "columns": [
+            "Title"
+          ],
+          "convert": "string"
+        },
+        "visitedAt": {
+          "columns": [
+            "Last Visit Time"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "visitCount": {
+          "columns": [
+            "Visit Count"
+          ],
+          "convert": "integer"
+        }
+      },
+      "constants": {
+        "browser": "Chromium"
+      },
+      "moduleSha256": "eb8a7f0a3b8c90a7d7cf5330f8c6a9c7b814955abe8a37ec3f6cb6dff21214f0"
+    },
+    {
+      "id": "android.get_chromeWebVisits.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/chrome.py",
+      "artifactKey": "get_chromeWebVisits",
+      "kind": "visited_page",
+      "columns": [
+        "Visit Timestamp",
+        "URL",
+        "Title",
+        "Duration",
+        "Transition (As Stored)",
+        "Core Transition Interpretation",
+        "Qualifier(s)",
+        "From Visit URL"
+      ],
+      "fields": {
+        "url": {
+          "columns": [
+            "URL"
+          ],
+          "convert": "string"
+        },
+        "title": {
+          "columns": [
+            "Title"
+          ],
+          "convert": "string"
+        },
+        "visitedAt": {
+          "columns": [
+            "Visit Timestamp"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        }
+      },
+      "constants": {
+        "browser": "Chromium"
+      },
+      "moduleSha256": "eb8a7f0a3b8c90a7d7cf5330f8c6a9c7b814955abe8a37ec3f6cb6dff21214f0"
+    },
+    {
+      "id": "android.get_chromeSearchTerms.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/chrome.py",
+      "artifactKey": "get_chromeSearchTerms",
+      "kind": "searched_item",
+      "columns": [
+        "Last Visit Time",
+        "Search Term",
+        "URL",
+        "Title",
+        "Visit Count"
+      ],
+      "fields": {
+        "query": {
+          "columns": [
+            "Search Term"
+          ],
+          "convert": "string"
+        },
+        "searchedAt": {
+          "columns": [
+            "Last Visit Time"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "url": {
+          "columns": [
+            "URL"
+          ],
+          "convert": "string"
+        }
+      },
+      "constants": {
+        "application": "Chromium"
+      },
+      "moduleSha256": "eb8a7f0a3b8c90a7d7cf5330f8c6a9c7b814955abe8a37ec3f6cb6dff21214f0"
+    },
+    {
+      "id": "android.get_chromeKeywordSearchTerms.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/chrome.py",
+      "artifactKey": "get_chromeKeywordSearchTerms",
+      "kind": "searched_item",
+      "columns": [
+        "Last Visit Time",
+        "Term",
+        "URL"
+      ],
+      "fields": {
+        "query": {
+          "columns": [
+            "Term"
+          ],
+          "convert": "string"
+        },
+        "searchedAt": {
+          "columns": [
+            "Last Visit Time"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "url": {
+          "columns": [
+            "URL"
+          ],
+          "convert": "string"
+        }
+      },
+      "constants": {
+        "application": "Chromium"
+      },
+      "moduleSha256": "eb8a7f0a3b8c90a7d7cf5330f8c6a9c7b814955abe8a37ec3f6cb6dff21214f0"
+    },
+    {
+      "id": "android.get_chromeBookmarks.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/chromeBookmarks.py",
+      "artifactKey": "get_chromeBookmarks",
+      "kind": "web_bookmark",
+      "columns": [
+        "Added Date",
+        "Added Date (as stored)",
+        "URL",
+        "Name",
+        "Parent",
+        "Type",
+        "Browser Name",
+        "Folder Path (names)",
+        "Bookmark ID (as stored)",
+        "Parent ID (as stored)",
+        "Root Folder Key"
+      ],
+      "fields": {
+        "url": {
+          "columns": [
+            "URL"
+          ],
+          "convert": "string"
+        },
+        "title": {
+          "columns": [
+            "Name"
+          ],
+          "convert": "string"
+        },
+        "folder": {
+          "columns": [
+            "Parent"
+          ],
+          "convert": "string"
+        },
+        "createdAt": {
+          "columns": [
+            "Added Date"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        }
+      },
+      "constants": {
+        "browser": "Chromium"
+      },
+      "moduleSha256": "4a9b11c8267f128744b74874d9c19fb7e672d9c70fa591a110a070fabaaa5045"
+    },
+    {
+      "id": "android.get_chromeCookies.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/chromeCookies.py",
+      "artifactKey": "get_chromeCookies",
+      "kind": "cookie",
+      "columns": [
+        "Last Access Date",
+        "Host",
+        "Name",
+        "Value",
+        "Created Date",
+        "Expiration Date",
+        "Path"
+      ],
+      "fields": {
+        "host": {
+          "columns": [
+            "Host"
+          ],
+          "convert": "string"
+        },
+        "name": {
+          "columns": [
+            "Name"
+          ],
+          "convert": "string"
+        },
+        "path": {
+          "columns": [
+            "Path"
+          ],
+          "convert": "string"
+        },
+        "createdAt": {
+          "columns": [
+            "Created Date"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "expiresAt": {
+          "columns": [
+            "Expiration Date"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        }
+      },
+      "moduleSha256": "afd827b63a0e1121c0b3afd0a0e8f429735f42b34736ec6c21efeea8846c79ce"
+    },
+    {
+      "id": "ios.chromeWebHistory.v1",
+      "reviewed": true,
+      "platform": "ios",
+      "module": "scripts/artifacts/chrome.py",
+      "artifactKey": "chromeWebHistory",
+      "kind": "browser_history",
+      "columns": [
+        "Last Visit Time",
+        "URL",
+        "Title",
+        "Visit Count",
+        "Typed Count",
+        "ID",
+        "Hidden"
+      ],
+      "fields": {
+        "url": {
+          "columns": [
+            "URL"
+          ],
+          "convert": "string"
+        },
+        "title": {
+          "columns": [
+            "Title"
+          ],
+          "convert": "string"
+        },
+        "visitedAt": {
+          "columns": [
+            "Last Visit Time"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "visitCount": {
+          "columns": [
+            "Visit Count"
+          ],
+          "convert": "integer"
+        }
+      },
+      "constants": {
+        "browser": "Chromium"
+      },
+      "moduleSha256": "c56d2f874fc78e75dc32bee74a616894596556ac1cb899a8754524e3486d608b"
+    },
+    {
+      "id": "ios.chromeWebVisits.v1",
+      "reviewed": true,
+      "platform": "ios",
+      "module": "scripts/artifacts/chrome.py",
+      "artifactKey": "chromeWebVisits",
+      "kind": "visited_page",
+      "columns": [
+        "Visit Timestamp",
+        "URL",
+        "Title",
+        "Duration",
+        "Transition Type",
+        "Qualifier(s)",
+        "From Visit URL"
+      ],
+      "fields": {
+        "url": {
+          "columns": [
+            "URL"
+          ],
+          "convert": "string"
+        },
+        "title": {
+          "columns": [
+            "Title"
+          ],
+          "convert": "string"
+        },
+        "visitedAt": {
+          "columns": [
+            "Visit Timestamp"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        }
+      },
+      "constants": {
+        "browser": "Chromium"
+      },
+      "moduleSha256": "c56d2f874fc78e75dc32bee74a616894596556ac1cb899a8754524e3486d608b"
+    },
+    {
+      "id": "ios.chromeWebSearch.v1",
+      "reviewed": true,
+      "platform": "ios",
+      "module": "scripts/artifacts/chrome.py",
+      "artifactKey": "chromeWebSearch",
+      "kind": "searched_item",
+      "columns": [
+        "Last Visit Time",
+        "Search Term",
+        "URL",
+        "Title",
+        "Visit Count"
+      ],
+      "fields": {
+        "query": {
+          "columns": [
+            "Search Term"
+          ],
+          "convert": "string"
+        },
+        "searchedAt": {
+          "columns": [
+            "Last Visit Time"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "url": {
+          "columns": [
+            "URL"
+          ],
+          "convert": "string"
+        }
+      },
+      "constants": {
+        "application": "Chromium"
+      },
+      "moduleSha256": "c56d2f874fc78e75dc32bee74a616894596556ac1cb899a8754524e3486d608b"
+    },
+    {
+      "id": "ios.chromeKeywordSearchTerms.v1",
+      "reviewed": true,
+      "platform": "ios",
+      "module": "scripts/artifacts/chrome.py",
+      "artifactKey": "chromeKeywordSearchTerms",
+      "kind": "searched_item",
+      "columns": [
+        "Last Visit Time",
+        "Term",
+        "URL"
+      ],
+      "fields": {
+        "query": {
+          "columns": [
+            "Term"
+          ],
+          "convert": "string"
+        },
+        "searchedAt": {
+          "columns": [
+            "Last Visit Time"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "url": {
+          "columns": [
+            "URL"
+          ],
+          "convert": "string"
+        }
+      },
+      "constants": {
+        "application": "Chromium"
+      },
+      "moduleSha256": "c56d2f874fc78e75dc32bee74a616894596556ac1cb899a8754524e3486d608b"
+    },
+    {
+      "id": "ios.chromeBookmarks.v1",
+      "reviewed": true,
+      "platform": "ios",
+      "module": "scripts/artifacts/chrome.py",
+      "artifactKey": "chromeBookmarks",
+      "kind": "web_bookmark",
+      "columns": [
+        "Added Date",
+        "URL",
+        "Name",
+        "Parent",
+        "Type"
+      ],
+      "fields": {
+        "url": {
+          "columns": [
+            "URL"
+          ],
+          "convert": "string"
+        },
+        "title": {
+          "columns": [
+            "Name"
+          ],
+          "convert": "string"
+        },
+        "folder": {
+          "columns": [
+            "Parent"
+          ],
+          "convert": "string"
+        },
+        "createdAt": {
+          "columns": [
+            "Added Date"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        }
+      },
+      "constants": {
+        "browser": "Chromium"
+      },
+      "moduleSha256": "c56d2f874fc78e75dc32bee74a616894596556ac1cb899a8754524e3486d608b"
+    },
+    {
+      "id": "ios.chromeCookies.v1",
+      "reviewed": true,
+      "platform": "ios",
+      "module": "scripts/artifacts/chrome.py",
+      "artifactKey": "chromeCookies",
+      "kind": "cookie",
+      "columns": [
+        "Last Access Date",
+        "Host",
+        "Name",
+        "Value",
+        "Created Date",
+        "Expiration Date",
+        "Path"
+      ],
+      "fields": {
+        "host": {
+          "columns": [
+            "Host"
+          ],
+          "convert": "string"
+        },
+        "name": {
+          "columns": [
+            "Name"
+          ],
+          "convert": "string"
+        },
+        "path": {
+          "columns": [
+            "Path"
+          ],
+          "convert": "string"
+        },
+        "createdAt": {
+          "columns": [
+            "Created Date"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "expiresAt": {
+          "columns": [
+            "Expiration Date"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        }
+      },
+      "moduleSha256": "c56d2f874fc78e75dc32bee74a616894596556ac1cb899a8754524e3486d608b"
+    },
+    {
+      "id": "android.contacts.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/contacts.py",
+      "artifactKey": "contacts",
+      "kind": "contact",
+      "columns": [
+        "Mimetype",
+        "Data 1",
+        "Display Name",
+        "Phone Number",
+        "Email Address",
+        "Source File"
+      ],
+      "fields": {
+        "name": {
+          "columns": [
+            "Display Name"
+          ],
+          "convert": "string"
+        },
+        "phones": {
+          "columns": [
+            "Phone Number"
+          ],
+          "convert": "strings"
+        },
+        "emails": {
+          "columns": [
+            "Email Address"
+          ],
+          "convert": "strings"
+        }
+      },
+      "moduleSha256": "56fa1a41e5f6ce209d370c57cc8d4b2c944221976c2d280c18940a6e49104300"
+    },
+    {
+      "id": "android.get_sms_mms.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/smsmms.py",
+      "artifactKey": "get_sms_mms",
+      "kind": "sms",
+      "columns": [
+        "Date",
+        "Date Sent",
+        "Type",
+        "Address",
+        "Body",
+        "MSG ID",
+        "Thread ID",
+        "Contact ID",
+        "Read",
+        "Service Center",
+        "Error Code"
+      ],
+      "fields": {
+        "sender": {
+          "columns": [
+            "Address"
+          ],
+          "convert": "string",
+          "when": {
+            "column": "Type",
+            "values": [
+              "Received"
+            ]
+          }
+        },
+        "body": {
+          "columns": [
+            "Body"
+          ],
+          "convert": "string"
+        },
+        "conversationId": {
+          "columns": [
+            "Thread ID"
+          ],
+          "convert": "string"
+        },
+        "sentAt": {
+          "columns": [
+            "Date Sent"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "receivedAt": {
+          "columns": [
+            "Date"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "recipients": {
+          "columns": [
+            "Address"
+          ],
+          "convert": "strings",
+          "when": {
+            "column": "Type",
+            "values": [
+              "Sent",
+              "Draft",
+              "Outbox",
+              "Failed",
+              "Queued"
+            ]
+          }
+        }
+      },
+      "constants": {
+        "service": "SMS"
+      },
+      "moduleSha256": "56680fcadfc1324b88eaed332b601bf621d0efe415d6cb033c34cbdceb1be4e1"
+    },
+    {
+      "id": "android.get_sms_mms_mms.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/smsmms.py",
+      "artifactKey": "get_sms_mms_mms",
+      "kind": "mms",
+      "columns": [
+        "Date",
+        "Date Sent",
+        "Direction",
+        "From Address",
+        "Body",
+        "Media",
+        "MSG ID",
+        "Thread ID",
+        "Read",
+        "To Address",
+        "Cc",
+        "Bcc"
+      ],
+      "fields": {
+        "sender": {
+          "columns": [
+            "From Address"
+          ],
+          "convert": "string"
+        },
+        "recipients": {
+          "columns": [
+            "To Address"
+          ],
+          "convert": "strings"
+        },
+        "body": {
+          "columns": [
+            "Body"
+          ],
+          "convert": "string"
+        },
+        "conversationId": {
+          "columns": [
+            "Thread ID"
+          ],
+          "convert": "string"
+        },
+        "sentAt": {
+          "columns": [
+            "Date Sent"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "receivedAt": {
+          "columns": [
+            "Date"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        }
+      },
+      "moduleSha256": "56680fcadfc1324b88eaed332b601bf621d0efe415d6cb033c34cbdceb1be4e1"
+    },
+    {
+      "id": "android.get_calllog.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/calllog.py",
+      "artifactKey": "get_calllog",
+      "kind": "call",
+      "columns": [
+        "Call Date",
+        "Phone Account Address",
+        "Partner",
+        "Raw Call Type (as stored)",
+        "Type",
+        "Duration in Secs",
+        "Partner Location",
+        "Country ISO",
+        "Data",
+        "Mime Type",
+        "Transcription",
+        "Deleted"
+      ],
+      "fields": {
+        "phone": {
+          "columns": [
+            "Partner"
+          ],
+          "convert": "string"
+        },
+        "startedAt": {
+          "columns": [
+            "Call Date"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "durationSeconds": {
+          "columns": [
+            "Duration in Secs"
+          ],
+          "convert": "number"
+        }
+      },
+      "moduleSha256": "c2511bda07155721b7207b90acee8736a9bccbeb79a934d6967c37bae677c3ae"
+    },
+    {
+      "id": "android.accounts_ce.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/accounts_ce.py",
+      "artifactKey": "accounts_ce",
+      "kind": "account",
+      "columns": [
+        "Account Type",
+        "Account Name",
+        "Password"
+      ],
+      "fields": {
+        "username": {
+          "columns": [
+            "Account Name"
+          ],
+          "convert": "string"
+        },
+        "service": {
+          "columns": [
+            "Account Type"
+          ],
+          "convert": "string"
+        }
+      },
+      "moduleSha256": "375e5b28dfece4f2325b553cd9f6942562a49da96f36e5461f5d212bbd9f5a13"
+    },
+    {
+      "id": "android.get_bluetoothConnections.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/bluetoothConnections.py",
+      "artifactKey": "get_bluetoothConnections",
+      "kind": "bluetooth_device",
+      "columns": [
+        "Timestamp",
+        "Device Name",
+        "MAC Address",
+        "Link Key"
+      ],
+      "fields": {
+        "name": {
+          "columns": [
+            "Device Name"
+          ],
+          "convert": "string"
+        },
+        "address": {
+          "columns": [
+            "MAC Address"
+          ],
+          "convert": "string"
+        },
+        "lastConnectedAt": {
+          "columns": [
+            "Timestamp"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        }
+      },
+      "moduleSha256": "b6f6c7c276a6ba20b47b6866277c500b2a1b3e176480f32ef857fb4b46c1716a"
+    },
+    {
+      "id": "android.get_bluetoothAdapter.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/bluetoothConnections.py",
+      "artifactKey": "get_bluetoothAdapter",
+      "kind": "system",
+      "columns": [
+        "Key",
+        "Value"
+      ],
+      "fields": {
+        "key": {
+          "columns": [
+            "Key"
+          ],
+          "convert": "string"
+        },
+        "value": {
+          "columns": [
+            "Value"
+          ],
+          "convert": "string"
+        }
+      },
+      "constants": {
+        "namespace": "Bluetooth adapter"
+      },
+      "moduleSha256": "b6f6c7c276a6ba20b47b6866277c500b2a1b3e176480f32ef857fb4b46c1716a"
+    },
+    {
+      "id": "android.get_calendar.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/googleCalendar.py",
+      "artifactKey": "get_calendar",
+      "kind": "calendar_entry",
+      "columns": [
+        "Event Start Timestamp",
+        "Event End Timestamp",
+        "Event Timezone",
+        "Title",
+        "Description",
+        "Event Location",
+        "Sync ID",
+        "Organizer",
+        "Calendar Display Name",
+        "All Day Event",
+        "Has Alarm"
+      ],
+      "fields": {
+        "title": {
+          "columns": [
+            "Title"
+          ],
+          "convert": "string"
+        },
+        "startsAt": {
+          "columns": [
+            "Event Start Timestamp"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "endsAt": {
+          "columns": [
+            "Event End Timestamp"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "location": {
+          "columns": [
+            "Event Location"
+          ],
+          "convert": "string"
+        },
+        "organizer": {
+          "columns": [
+            "Organizer"
+          ],
+          "convert": "string"
+        }
+      },
+      "moduleSha256": "ab2a2eb07192b8af0c1ac63d8c991249a1904c6a6f2170396eb4ee40ff04182e"
+    },
+    {
+      "id": "android.googleCalendarAppEvents.v1",
+      "reviewed": true,
+      "platform": "android",
+      "module": "scripts/artifacts/googleCalendar.py",
+      "artifactKey": "googleCalendarAppEvents",
+      "kind": "calendar_entry",
+      "columns": [
+        "Start",
+        "End",
+        "Title",
+        "Description",
+        "Account",
+        "Calendar Name",
+        "Calendar ID",
+        "Created",
+        "Updated",
+        "Event Type",
+        "To Be Removed",
+        "Event Web Link",
+        "iCal UID",
+        "Event ID"
+      ],
+      "fields": {
+        "title": {
+          "columns": [
+            "Title"
+          ],
+          "convert": "string"
+        },
+        "startsAt": {
+          "columns": [
+            "Start"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "endsAt": {
+          "columns": [
+            "End"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        }
+      },
+      "moduleSha256": "ab2a2eb07192b8af0c1ac63d8c991249a1904c6a6f2170396eb4ee40ff04182e"
+    },
+    {
+      "id": "ios.sms.v1",
+      "reviewed": true,
+      "platform": "ios",
+      "module": "scripts/artifacts/sms.py",
+      "artifactKey": "sms",
+      "kind": "instant_message",
+      "columns": [
+        "Message Timestamp",
+        "Read Timestamp",
+        "Delivered Timestamp",
+        "Attachment Timestamp",
+        "From Me",
+        "Sender",
+        "Chat Contact ID",
+        "Message",
+        "Attachment File",
+        "Chat Name",
+        "Chat Participants",
+        "Service",
+        "Message Direction",
+        "Message Sent",
+        "Message Delivered",
+        "Message Read",
+        "Account",
+        "Account Login",
+        "Destination Caller ID",
+        "Attachment Name",
+        "Attachment Mimetype",
+        "Attachment Size (Bytes)",
+        "Message Row ID",
+        "Message GUID",
+        "Chat ID"
+      ],
+      "fields": {
+        "sender": {
+          "columns": [
+            "Sender"
+          ],
+          "convert": "string"
+        },
+        "body": {
+          "columns": [
+            "Message"
+          ],
+          "convert": "string"
+        },
+        "conversationId": {
+          "columns": [
+            "Chat ID"
+          ],
+          "convert": "string"
+        },
+        "service": {
+          "columns": [
+            "Service"
+          ],
+          "convert": "string"
+        },
+        "sentAt": {
+          "columns": [
+            "Message Timestamp"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "receivedAt": {
+          "columns": [
+            "Delivered Timestamp"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        }
+      },
+      "moduleSha256": "b408a46fc40b82b1b30975a4b0766d3193da844c0a6bebd3c8598f79bc220864"
+    },
+    {
+      "id": "ios.calendarEvents.v1",
+      "reviewed": true,
+      "platform": "ios",
+      "module": "scripts/artifacts/calendarAll.py",
+      "artifactKey": "calendarEvents",
+      "kind": "calendar_entry",
+      "columns": [
+        "Start Time",
+        "End Time",
+        "Timezone",
+        "Calendar Name",
+        "Account Name",
+        "Event Title",
+        "Location Name",
+        "Location Address",
+        "Location Coordinates",
+        "Invitation From",
+        "Invitees",
+        "Conference URL",
+        "Attachments",
+        "Notes",
+        "Creation Time",
+        "Last Modification Time",
+        "Source File"
+      ],
+      "fields": {
+        "title": {
+          "columns": [
+            "Event Title"
+          ],
+          "convert": "string"
+        },
+        "startsAt": {
+          "columns": [
+            "Start Time"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "endsAt": {
+          "columns": [
+            "End Time"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        },
+        "location": {
+          "columns": [
+            "Location Name"
+          ],
+          "convert": "string"
+        }
+      },
+      "moduleSha256": "1bf4a5e55f71a66f988e73fd4a6a902f64d44c79b51613f76b9f9000ca2f5fc7"
+    },
+    {
+      "id": "ios.safariBookmarks.v1",
+      "reviewed": true,
+      "platform": "ios",
+      "module": "scripts/artifacts/safariBookmarks.py",
+      "artifactKey": "safariBookmarks",
+      "kind": "web_bookmark",
+      "columns": [
+        "Title",
+        "URL",
+        "Hidden"
+      ],
+      "fields": {
+        "url": {
+          "columns": [
+            "URL"
+          ],
+          "convert": "string"
+        },
+        "title": {
+          "columns": [
+            "Title"
+          ],
+          "convert": "string"
+        }
+      },
+      "constants": {
+        "browser": "Safari"
+      },
+      "moduleSha256": "d6ae128f139d886a72b6abf2c9dd9c105c31d43b90c7eb648171b0641f89706c"
+    },
+    {
+      "id": "vehicle.ford_sync_bt_contacts.v1",
+      "reviewed": true,
+      "platform": "vehicle",
+      "module": "scripts/artifacts/ford_sync_bluetooth.py",
+      "artifactKey": "ford_sync_bt_contacts",
+      "kind": "contact",
+      "columns": [
+        "Table Number",
+        "Last Name",
+        "First Name",
+        "Sort Name",
+        "Phone Number",
+        "Other Numbers",
+        "Number Count",
+        "Email",
+        "Address",
+        "Source File"
+      ],
+      "fields": {
+        "name": {
+          "columns": [
+            "Sort Name"
+          ],
+          "convert": "string"
+        },
+        "phones": {
+          "columns": [
+            "Phone Number"
+          ],
+          "convert": "strings"
+        },
+        "emails": {
+          "columns": [
+            "Email"
+          ],
+          "convert": "strings"
+        }
+      },
+      "moduleSha256": "8b4629dc202466ca6b7f0fce110bdaba25216bf280f11495c260eeda50dfe0a5"
+    },
+    {
+      "id": "vehicle.ford_sync_bt_calls.v1",
+      "reviewed": true,
+      "platform": "vehicle",
+      "module": "scripts/artifacts/ford_sync_bluetooth.py",
+      "artifactKey": "ford_sync_bt_calls",
+      "kind": "call",
+      "columns": [
+        "Call Time",
+        "Direction",
+        "Name",
+        "Phone Number",
+        "Number Type (as stored)",
+        "Table Number",
+        "Record ID",
+        "Source File"
+      ],
+      "fields": {
+        "phone": {
+          "columns": [
+            "Phone Number"
+          ],
+          "convert": "string"
+        },
+        "contactName": {
+          "columns": [
+            "Name"
+          ],
+          "convert": "string"
+        },
+        "startedAt": {
+          "columns": [
+            "Call Time"
+          ],
+          "convert": "datetime",
+          "nullValues": [
+            0,
+            "0"
+          ]
+        }
+      },
+      "moduleSha256": "8b4629dc202466ca6b7f0fce110bdaba25216bf280f11495c260eeda50dfe0a5"
+    },
+    {
+      "id": "vehicle.ford_sync_bt_paired_devices.v1",
+      "reviewed": true,
+      "platform": "vehicle",
+      "module": "scripts/artifacts/ford_sync_bluetooth.py",
+      "artifactKey": "ford_sync_bt_paired_devices",
+      "kind": "connected_device",
+      "columns": [
+        "Device ID",
+        "Device Name",
+        "Model",
+        "Manufacturer",
+        "Network Name",
+        "Device Software Version",
+        "Bluetooth Address",
+        "Subscriber Number",
+        "Class of Device (as stored)",
+        "Primary Device (as stored)",
+        "HFP Primary (as stored)",
+        "Vendor ID (as stored)",
+        "Product ID (as stored)",
+        "Source File"
+      ],
+      "fields": {
+        "name": {
+          "columns": [
+            "Device Name"
+          ],
+          "convert": "string"
+        },
+        "identifier": {
+          "columns": [
+            "Device ID"
+          ],
+          "convert": "string"
+        },
+        "model": {
+          "columns": [
+            "Model"
+          ],
+          "convert": "string"
+        },
+        "manufacturer": {
+          "columns": [
+            "Manufacturer"
+          ],
+          "convert": "string"
+        }
+      },
+      "constants": {
+        "connectionType": "Bluetooth"
+      },
+      "moduleSha256": "8b4629dc202466ca6b7f0fce110bdaba25216bf280f11495c260eeda50dfe0a5"
+    },
+    {
+      "id": "vehicle.hyundaiContacts.v1",
+      "reviewed": true,
+      "platform": "vehicle",
+      "module": "scripts/artifacts/hyundai_contacts.py",
+      "artifactKey": "hyundaiContacts",
+      "kind": "contact",
+      "columns": [
+        "Device MAC",
+        "Record ID",
+        "Full Name",
+        "First Name",
+        "Last Name",
+        "Phone Number",
+        "Phone Type (as stored)",
+        "Source Database"
+      ],
+      "fields": {
+        "name": {
+          "columns": [
+            "Full Name"
+          ],
+          "convert": "string"
+        },
+        "phones": {
+          "columns": [
+            "Phone Number"
+          ],
+          "convert": "strings"
+        }
+      },
+      "moduleSha256": "ab3294b3acc7d33362ecc1ee36dc4f5a68a728da857732c272d1ca4867743365"
+    }
+  ]
+}

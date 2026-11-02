@@ -8,6 +8,11 @@ import { buildCultivatorApiReferenceForLlms } from "../src/features/artifacts/ut
 import type { StoredArtifactRecord } from "../src/features/artifacts/model/types";
 
 describe("standard artifact models", () => {
+  test("the LEAPP worker's bundled model snapshot matches the canonical schemas", () => {
+    const snapshot = JSON.parse(readFileSync("src-tauri/src/scripting/worker/artifact_model_schemas.json", "utf8"));
+    expect(snapshot.version).toBe(1);
+    expect(snapshot.models).toEqual(artifactModelDefinitions);
+  });
   test("every main category owns documented models and routes each kind exactly once", () => {
     expect(artifactCategoryDefinitions).toHaveLength(13);
     expect(artifactModelDefinitions).toHaveLength(45);

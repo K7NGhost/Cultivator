@@ -11,6 +11,13 @@ entry = "builtin:mobile-artifacts"
 function = "parse"
 
 [[options]]
+id = "normalizeArtifacts"
+label = "Standardize recognized artifacts"
+description = "Apply reviewed model mappings. Unmatched or invalid rows remain lossless custom tables; coverage is saved with the parser output."
+type = "checkbox"
+defaultValue = "true"
+
+[[options]]
 id = "timezone"
 label = "Timezone"
 description = "Timezone for iOS parser output, such as UTC or America/New_York."

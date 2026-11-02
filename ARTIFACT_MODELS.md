@@ -78,3 +78,49 @@ This appears under Social Networking. A plugin returning `document` appears
 under Documents, and `connected_device` appears under Connected Devices.
 `buildCultivatorApiReferenceForLlms()` includes the category catalog and field
 definitions for all 45 models.
+
+## Automatic LEAPP normalization
+
+The iOS, Android, and Vehicle artifact plugins enable **Standardize recognized
+artifacts** by default. Reviewed rows become standard models and therefore appear
+in their normal artifact-tree categories. Turning the option off preserves the
+previous custom-table presentation.
+
+`src-tauri/src/scripting/worker/leapp_normalization_rules.json` is the versioned
+mapping registry. Its first version contains 28 reviewed parser mappings, pinned
+to bundled source revisions and module hashes. A rule names the exact platform/artifact key,
+expected column labels, target model, and field conversions. Mapping does not
+depend on fuzzy artifact names or guess numeric timestamp units.
+
+The adapter reads no more than 256 LAVA rows at once. Unmapped outputs, changed
+parser revisions, unexpected schemas, and rows that fail conversion or validation
+remain custom tables. Each input row is emitted exactly once. Normalized payloads
+retain every original column/value in `raw`, original source/provenance metadata,
+the parser revision and row offset, and the normalization rule/schema versions.
+The original LAVA database is retained and opened read-only during conversion.
+
+Typed LAVA datetime columns are explicitly UTC Unix seconds; other datetime
+columns must contain ISO text or use an explicit epoch conversion in a reviewed
+rule. ISO strings without timezone information remain without a timezone.
+Direction-sensitive fields have conditional rules: for example Android SMS
+addresses become senders for received messages and recipients for sent messages.
+
+Each source output directory contains `normalization.json`, reporting row counts,
+unmapped columns, bounded validation error samples, rule IDs and fallback reasons.
+The existing `coverage.json` also includes normalization totals and report paths.
+Plugin logs identify the output locations.
+
+To inventory all bundled parser outputs and draft metadata-only candidate mappings:
+
+```powershell
+python scripts/mobile/audit_normalization.py --output .cache/leapp-normalization-audit.json
+```
+
+Candidates are always marked `needs_review` and never become active automatically.
+Review the upstream parser's semantics and column variants before adding a rule.
+The audit currently covers 2,773 bundled artifact definitions; 28 have reviewed
+mappings. Remaining outputs stay lossless custom tables.
+
+When model definitions change, run `bun run generate:artifact-schemas` to refresh
+the checked-in schema snapshot used by Python and Rust. Catalog tests compare the
+snapshot to the canonical TypeScript definitions to detect drift.

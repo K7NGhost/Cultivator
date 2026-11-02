@@ -23,6 +23,7 @@ use std::{
 include!(concat!(env!("OUT_DIR"), "/mobile_sources.rs"));
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
 static NEXT_RUN: AtomicU64 = AtomicU64::new(0);
+mod normalization;
 
 #[derive(Clone, Copy)]
 enum Platform {
@@ -118,10 +119,10 @@ impl Platform {
         };
         manifest.python = self.python().into();
         if !ios {
-            manifest.options.clear();
+            manifest.options.retain(|option| option.id == "normalizeArtifacts");
         }
         manifest.entry = format!("builtin:{}-artifacts", self.name());
-        manifest.description = format!("Parse bundled {} artifacts using managed Python dependencies. Results retain original columns, source references and parser metadata.", catalog["project"].as_str().unwrap());
+        manifest.description = format!("Parse bundled {} artifacts and standardize reviewed outputs. Original columns, source references, parser metadata and unmapped tables are retained.", catalog["project"].as_str().unwrap());
         manifest.mode = PythonPluginMode::PathGlob;
         manifest.path_glob = patterns.clone();
         manifest.archive_path_glob = patterns;
@@ -389,6 +390,7 @@ fn run_worker(
         NEXT_RUN.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir_all(&output).map_err(|e| e.to_string())?;
+    let normalization_config = normalization::prepare(&output)?;
     let mut allowed = HashSet::new();
     let mut roots = Vec::new();
     let mut seen = HashSet::new();
@@ -476,7 +478,7 @@ fn run_worker(
             &[bundle.to_string_lossy().into_owned()],
         )?;
         let source_output = output.join(format!("input-{}", root_number + 1));
-        worker.send(&json!({"roots":[root],"outputRoot":source_output.to_string_lossy(),"sourceIndex":root_number,"options":context.options}))?;
+        worker.send(&json!({"roots":[root],"outputRoot":source_output.to_string_lossy(),"sourceIndex":root_number,"options":context.options,"normalization":normalization_config}))?;
         loop {
             let response = worker.receive(context, Duration::from_secs(24 * 60 * 60))?;
             match response["type"].as_str() {
@@ -521,23 +523,7 @@ fn run_worker(
                     ),
                 ),
                 Some("artifact") => {
-                    let payload = response
-                        .get("payload")
-                        .filter(|p| p["kind"] == "custom_table" && p["table"]["rows"].is_array())
-                        .ok_or("Invalid mobile artifact table")?
-                        .clone();
-                    let artifact = BuiltinArtifact {
-                        file_path: response["filePath"]
-                            .as_str()
-                            .ok_or("Missing artifact source")?
-                            .into(),
-                        kind: "custom_table".into(),
-                        label: response["label"]
-                            .as_str()
-                            .ok_or("Missing artifact label")?
-                            .into(),
-                        payload,
-                    };
+                    let artifact = normalization::artifact(&response)?;
                     serde_json::to_writer(&mut artifact_writer, &artifact)
                         .map_err(|e| e.to_string())?;
                     artifact_writer
@@ -572,7 +558,7 @@ fn run_worker(
     }
     artifact_writer.flush().map_err(|e| e.to_string())?;
     context.spool_artifacts(artifact_spool);
-    context.log(if failed_parsers == 0 { "info" } else { "warn" }, format!("Parsed {saved_rows} artifact rows; {failed_parsers} parser failures. Full parser coverage and original LAVA output: {}", output.display()));
+    context.log(if failed_parsers == 0 { "info" } else { "warn" }, format!("Parsed {saved_rows} artifact rows; {failed_parsers} parser failures. Parser and normalization coverage, plus original LAVA output: {}", output.display()));
     Ok(())
 }
 

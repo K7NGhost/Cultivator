@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "generate:artifact-schemas": "bun scripts/mobile/export_artifact_schemas.ts",
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",

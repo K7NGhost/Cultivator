@@ -571,36 +571,19 @@ function buildArtifactTree(
         "ungrouped",
         showEmptyArtifacts,
       );
-      const groupNodes = Array.from(categoryBucket.grouped.entries())
-        .map(([groupKey, groupBucket]) => {
-          const children = buildArtifactNodes(
+      const groupedArtifactNodes = Array.from(categoryBucket.grouped.entries())
+        .flatMap(([groupKey, groupBucket]) =>
+          buildArtifactNodes(
             category,
             groupBucket.artifacts,
             groupKey,
             showEmptyArtifacts,
-          );
-
-          return {
-            id: `group:${category}:${groupKey}`,
-            name: groupBucket.name,
-            kind: "group" as const,
-            count: children.reduce((total, node) => total + node.count, 0),
-            entryCount: children.reduce(
-              (total, node) => total + node.entryCount,
-              0,
-            ),
-            occurrenceCount: children.reduce(
-              (total, node) => total + node.occurrenceCount,
-              0,
-            ),
-            children,
-          };
-        })
-        .filter((node) => showEmptyArtifacts || node.entryCount > 0)
-        .sort((firstNode, secondNode) =>
-          firstNode.name.localeCompare(secondNode.name),
+          ),
         );
-      const children = [...groupNodes, ...artifactNodes];
+      const children = [...groupedArtifactNodes, ...artifactNodes].sort(
+        (firstNode, secondNode) =>
+          firstNode.name.localeCompare(secondNode.name),
+      );
 
       return {
         id: `category:${category}`,

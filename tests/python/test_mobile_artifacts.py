@@ -256,7 +256,6 @@ class MobileIntegrationTests(unittest.TestCase):
             self.assertGreater(len(coverage[0]["modules"]), 0)
             if platform == "vehicle":
                 self.assertEqual(len(coverage[0]["modules"]), 211)
-            tables = [a["payload"]["table"] for a in artifacts]
             # Independently compare each imported table batch to its source LAVA rows.
             database = sqlite3.connect(case / "output/source-1/_lava_artifacts.db")
             try:
@@ -264,10 +263,11 @@ class MobileIntegrationTests(unittest.TestCase):
                     payload = event["payload"]
                     name = payload["parser"]["artifact"]["tablename"]
                     query = 'SELECT * FROM "' + name.replace('"', '""') + '" ORDER BY rowid LIMIT ? OFFSET ?'
-                    batch = payload["table"]["rows"]
+                    original = payload["table"] if payload["kind"] == "custom_table" else {"rows": [payload["raw"]["row"]], "columns": payload["raw"]["columns"]}
+                    batch = original["rows"]
                     values = database.execute(query, (len(batch), payload["parser"]["rowOffset"])).fetchall()
                     self.assertEqual([tuple(row.values()) for row in batch], values)
-                    for column in payload["table"]["columns"]:
+                    for column in original["columns"]:
                         self.assertEqual(column["label"], payload["parser"]["artifact"]["column_map"][column["key"]])
             finally:
                 database.close()
@@ -405,8 +405,8 @@ class MobileIntegrationTests(unittest.TestCase):
                     database.close()
         events, materialized = self.exercise("android", fixture, "https://example.test/wal/529")
         history = [e for e in events if e["type"] == "artifact" and e["label"] == "Web History"]
-        self.assertEqual(sum(len(e["payload"]["table"]["rows"]) for e in history), 530)
-        self.assertEqual(len(history), 3)
+        self.assertEqual(len(history), 530)
+        self.assertTrue(all(event["payload"]["kind"] == "browser_history" for event in history))
         self.assertTrue(any(path.endswith("History-wal") for path in materialized))
 
 
