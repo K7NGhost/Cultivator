@@ -1,3 +1,6 @@
+import { ArtifactTreeViewer } from "../components/ArtifactTreeViewer";
+import type { ArtifactTreeNode } from "../model/artifactTree";
+import { formatEntryHitLabel } from "../utils/artifactEntryLabel";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AutoSizer,
@@ -10,43 +13,14 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
-  Car,
   Check,
   ChevronDown,
-  ChevronRight,
-  Clock,
-  Contact,
   Database,
-  FileText,
-  FolderOpen,
-  Image,
-  MapPin,
-  MessageSquare,
   RefreshCw,
-  Search,
-  Shield,
-  Smartphone,
-  Table2,
-  Trash2,
-  User,
-  Wifi,
-  type LucideIcon,
 } from "lucide-react";
-import {
-  Tree,
-  type NodeRendererProps,
-  type TreeApi,
-} from "react-arborist";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  ContextMenu,
-  ContextMenuCheckboxItem,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
 import {
   Dialog,
   DialogContent,
@@ -103,19 +77,6 @@ type LoadState = {
   isLoading: boolean;
 };
 
-type ArtifactTreeNode = {
-  id: string;
-  name: string;
-  kind: "category" | "group" | "artifact";
-  count: number;
-  entryCount: number;
-  occurrenceCount: number;
-  icon?: string;
-  artifact?: StoredArtifactRecord;
-  artifacts?: StoredArtifactRecord[];
-  children?: ArtifactTreeNode[];
-};
-
 type ArtifactEntryViewMode = "selected" | "all";
 type CustomTableSortDirection = "asc" | "desc";
 
@@ -147,36 +108,6 @@ type ArtifactRemovalTarget =
       category: string;
       artifacts: StoredArtifactRecord[];
     };
-
-function useElementSize<TElement extends HTMLElement>() {
-  const ref = useRef<TElement | null>(null);
-  const [size, setSize] = useState({ width: 0, height: 0 });
-
-  useLayoutEffect(() => {
-    const element = ref.current;
-
-    if (!element) {
-      return;
-    }
-
-    const resizeObserver = new ResizeObserver(([entry]) => {
-      setSize({
-        width: entry.contentRect.width,
-        height: entry.contentRect.height,
-      });
-    });
-
-    resizeObserver.observe(element);
-    setSize({
-      width: element.clientWidth,
-      height: element.clientHeight,
-    });
-
-    return () => resizeObserver.disconnect();
-  }, []);
-
-  return { ref, size };
-}
 
 function useNativeScrollbarSize() {
   const [scrollbarSize, setScrollbarSize] = useState(0);
@@ -277,43 +208,6 @@ function getPayloadGroup(artifact: StoredArtifactRecord) {
   return id && label ? { id, label } : null;
 }
 
-function getArtifactTreeIcon(iconName: string | undefined): LucideIcon {
-  switch (iconName?.toLowerCase()) {
-    case "car":
-      return Car;
-    case "clock":
-      return Clock;
-    case "contact":
-    case "contacts":
-      return Contact;
-    case "image":
-      return Image;
-    case "map-pin":
-    case "map":
-      return MapPin;
-    case "message":
-    case "message-square":
-      return MessageSquare;
-    case "search":
-      return Search;
-    case "shield":
-      return Shield;
-    case "smartphone":
-    case "phone":
-      return Smartphone;
-    case "table":
-    case "table-2":
-      return Table2;
-    case "user":
-      return User;
-    case "wifi":
-    case "wireless":
-      return Wifi;
-    default:
-      return FileText;
-  }
-}
-
 function getArtifactModel(kind: string): ArtifactModelDefinition | undefined {
   return artifactModelsByKind.get(
     kind as ArtifactModelDefinition["kind"],
@@ -356,22 +250,6 @@ function getCombinedCustomTableData(
   artifacts: StoredArtifactRecord[],
 ): CustomTableView | null {
   return combineCustomTableArtifacts(artifacts);
-}
-
-function formatEntryHitLabel(
-  entryCount: number,
-  occurrenceCount: number,
-  fileHits: number,
-) {
-  const entryLabel = entryCount === 1 ? "entry" : "entries";
-  const occurrenceLabel = occurrenceCount === 1 ? "occurrence" : "occurrences";
-  const fileLabel = fileHits === 1 ? "file hit" : "file hits";
-  const entryText = `${entryCount.toLocaleString()} ${entryLabel}`;
-  const fileText = `${fileHits.toLocaleString()} ${fileLabel}`;
-
-  return occurrenceCount === entryCount
-    ? `${entryText} / ${fileText}`
-    : `${entryText} / ${occurrenceCount.toLocaleString()} ${occurrenceLabel} / ${fileText}`;
 }
 
 function formatTableCell(value: unknown) {
@@ -1234,274 +1112,6 @@ export function ArtifactsPage() {
         </DialogContent>
       </Dialog>
     </div>
-  );
-}
-
-function ArtifactTreeViewer({
-  artifacts,
-  emptyText,
-  entryCount,
-  occurrenceCount,
-  showEmptyArtifacts,
-  onShowEmptyArtifactsChange,
-  onSelectAllEvidence,
-  onSelectArtifactNode,
-  onRequestRemoveArtifact,
-  onRequestRemoveCategory,
-  selectedTreeNodeId,
-  treeData,
-}: {
-  artifacts: StoredArtifactRecord[];
-  emptyText: string;
-  entryCount: number;
-  occurrenceCount: number;
-  showEmptyArtifacts: boolean;
-  onShowEmptyArtifactsChange: (showEmptyArtifacts: boolean) => void;
-  onSelectAllEvidence: () => void;
-  onSelectArtifactNode: (artifactNode: ArtifactTreeNode) => void;
-  onRequestRemoveArtifact: (artifactNode: ArtifactTreeNode) => void;
-  onRequestRemoveCategory: (categoryNode: ArtifactTreeNode) => void;
-  selectedTreeNodeId: string | null;
-  treeData: ArtifactTreeNode[];
-}) {
-  const treePanel = useElementSize<HTMLDivElement>();
-  const treeRef = useRef<TreeApi<ArtifactTreeNode> | undefined>(undefined);
-
-  return (
-    <section
-      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r bg-background"
-      aria-label="Artifact navigation"
-    >
-      <div className="flex h-10 shrink-0 items-end border-b px-2">
-        <div className="flex h-full items-center border-b-2 border-primary px-3 text-[11px] font-semibold uppercase">
-          Artifacts
-        </div>
-      </div>
-
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            className={cn(
-              "h-10 w-full shrink-0 justify-start rounded-none border-b px-6 text-sm font-semibold uppercase hover:bg-accent",
-              selectedTreeNodeId === null &&
-                "bg-primary/20 text-foreground hover:bg-primary/25 dark:bg-primary/25 dark:hover:bg-primary/30",
-            )}
-            title={formatEntryHitLabel(
-              entryCount,
-              occurrenceCount,
-              artifacts.length,
-            )}
-            onClick={onSelectAllEvidence}
-          >
-            <span className="truncate">All Evidence</span>
-            <span className="ml-auto tabular-nums">
-              {entryCount.toLocaleString()}
-            </span>
-          </Button>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="min-w-48">
-          <ContextMenuCheckboxItem
-            checked={showEmptyArtifacts}
-            className="text-xs"
-            onCheckedChange={(checked) => {
-              onShowEmptyArtifactsChange(checked === true);
-            }}
-          >
-            Show empty artifacts
-          </ContextMenuCheckboxItem>
-        </ContextMenuContent>
-      </ContextMenu>
-
-      <div ref={treePanel.ref} className="min-h-0 flex-1">
-        {treeData.length === 0 ? (
-          <div className="grid h-full place-items-center px-3 text-center text-xs text-muted-foreground">
-            {emptyText}
-          </div>
-        ) : (
-          treePanel.size.height > 0 && (
-            <Tree
-              ref={treeRef}
-              data={treeData}
-              width="100%"
-              height={treePanel.size.height}
-              rowHeight={40}
-              indent={0}
-              openByDefault={false}
-              disableDrag
-              disableDrop
-              selection={selectedTreeNodeId ?? undefined}
-              aria-label="Artifacts grouped by category"
-            >
-              {(props) => (
-                <ArtifactTreeRow
-                  {...props}
-                  onSelectArtifactNode={onSelectArtifactNode}
-                  onRequestRemoveArtifact={onRequestRemoveArtifact}
-                  onRequestRemoveCategory={onRequestRemoveCategory}
-                />
-              )}
-            </Tree>
-          )
-        )}
-      </div>
-    </section>
-  );
-}
-
-function ArtifactTreeRow({
-  node,
-  onSelectArtifactNode,
-  onRequestRemoveArtifact,
-  onRequestRemoveCategory,
-  style,
-}: NodeRendererProps<ArtifactTreeNode> & {
-  onSelectArtifactNode: (artifactNode: ArtifactTreeNode) => void;
-  onRequestRemoveArtifact: (artifactNode: ArtifactTreeNode) => void;
-  onRequestRemoveCategory: (categoryNode: ArtifactTreeNode) => void;
-}) {
-  const connectorWidth = node.level * 14;
-  const isCategory = node.data.kind === "category";
-  const displayName = isCategory
-    ? node.data.name.toLowerCase() === "other"
-      ? "Custom"
-      : node.data.name.replace(/[_-]+/g, " ")
-    : node.data.name;
-  const Icon =
-    node.data.kind === "artifact"
-      ? getArtifactTreeIcon(node.data.icon)
-      : node.data.kind === "group"
-        ? FolderOpen
-        : FileText;
-  const iconClassName =
-    node.data.kind === "artifact"
-      ? "text-muted-foreground"
-      : node.data.kind === "group"
-        ? "text-amber-600 dark:text-amber-400"
-        : "text-muted-foreground";
-  const countTitle = formatEntryHitLabel(
-    node.data.entryCount,
-    node.data.occurrenceCount,
-    node.data.count,
-  );
-
-  const row = (
-    <div style={style}>
-      <div
-        className={cn(
-          "flex h-full items-center border-b border-border/40",
-          node.isSelected && !isCategory && "bg-primary/15",
-        )}
-        style={{ paddingLeft: `${isCategory ? 2 : connectorWidth + 2}px` }}
-      >
-        {node.isLeaf ? (
-          <span className="size-6 shrink-0" aria-hidden="true" />
-        ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="size-6 shrink-0 rounded-none"
-            aria-label={
-              node.isOpen ? "Collapse artifact group" : "Expand artifact group"
-            }
-            onClick={() => node.toggle()}
-          >
-            <ChevronRight
-              className={cn(
-                "size-3.5 text-muted-foreground transition-transform",
-                node.isOpen && "rotate-90",
-              )}
-              aria-hidden="true"
-            />
-          </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          className={cn(
-            "h-full min-w-0 flex-1 justify-start gap-1.5 rounded-none px-1.5 hover:bg-accent",
-            isCategory
-              ? "text-sm font-semibold uppercase"
-              : "text-xs font-medium",
-          )}
-          onClick={() => {
-            if (node.data.kind === "artifact") {
-              node.select();
-              onSelectArtifactNode(node.data);
-            } else if (node.isInternal) {
-              node.toggle();
-            }
-          }}
-        >
-          {!isCategory ? (
-            <Icon
-              className={cn("size-3.5 shrink-0", iconClassName)}
-              aria-hidden="true"
-            />
-          ) : null}
-          <span className="min-w-0 flex-1 truncate text-left">
-            {displayName}
-          </span>
-          <span
-            className={cn(
-              "shrink-0 tabular-nums",
-              isCategory ? "text-sm font-semibold" : "text-xs font-medium",
-            )}
-            title={countTitle}
-          >
-            {node.data.entryCount.toLocaleString()}
-          </span>
-        </Button>
-      </div>
-    </div>
-  );
-
-  const artifact = node.data.artifact;
-
-  if (node.data.kind === "category") {
-    return (
-      <ContextMenu>
-        <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-        <ContextMenuContent className="min-w-48">
-          <ContextMenuItem
-            variant="destructive"
-            disabled={node.data.count === 0}
-            onSelect={() => {
-              node.select();
-              onRequestRemoveCategory(node.data);
-            }}
-          >
-            <Trash2 className="size-3.5" aria-hidden="true" />
-            Remove category artifacts
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
-    );
-  }
-
-  if (!artifact) {
-    return row;
-  }
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-      <ContextMenuContent className="min-w-44">
-        <ContextMenuItem
-          variant="destructive"
-          onSelect={() => {
-            node.select();
-            onSelectArtifactNode(node.data);
-            onRequestRemoveArtifact(node.data);
-          }}
-        >
-          <Trash2 className="size-3.5" aria-hidden="true" />
-          Remove artifact
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
   );
 }
 
