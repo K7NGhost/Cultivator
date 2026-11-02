@@ -2048,7 +2048,7 @@ fn seed_cultivator_api_stub(plugin_root: &Path) -> Result<(), String> {
 #[cfg(feature = "python-plugins")]
 const PYTHON_PLUGIN_PROCESS_RUNNER: &str = crate::scripting::PLUGIN_WORKER;
 
-const CULTIVATOR_API_STUB: &str = r#"from typing import Any, Iterator, Literal, Optional, TypedDict
+const CULTIVATOR_API_STUB: &str = r#"from typing import Any, Iterator, Literal, Optional, Required, TypedDict
 
 class SearchMatch(TypedDict):
     path: str
@@ -2061,6 +2061,7 @@ class SearchMatch(TypedDict):
 # ArtifactCategory is used by UI filters and reports. Known model helpers fill
 # this automatically. Custom table artifacts may use any lowercase category slug.
 ArtifactCategory = Literal[
+    "social",
     "accounts",
     "applications",
     "browser",
@@ -2258,6 +2259,80 @@ class TimelineArtifact(BaseArtifact, total=False):
     actor: str
     target: str
 
+class RefinedResultArtifact(BaseArtifact, total=False):
+    kind: Literal["refined_result"]
+    category: Literal["search"]
+    finding: Required[str]
+    summary: str
+    rationale: str
+    relatedArtifactIds: list[str]
+    ruleId: str
+    matchedAt: str
+
+class SocialProfileArtifact(BaseArtifact, total=False):
+    kind: Literal["social_profile"]
+    category: Literal["social"]
+    platform: Required[str]
+    username: Required[str]
+    profileId: str
+    displayName: str
+    url: str
+    createdAt: str
+    lastActiveAt: str
+
+class SocialPostArtifact(BaseArtifact, total=False):
+    kind: Literal["social_post"]
+    category: Literal["social"]
+    platform: Required[str]
+    postId: str
+    author: str
+    authorId: str
+    body: str
+    url: str
+    postedAt: str
+    editedAt: str
+    attachments: list[str]
+    replyToId: str
+    likeCount: int
+    shareCount: int
+
+class DocumentArtifact(BaseArtifact, total=False):
+    kind: Literal["document"]
+    category: Literal["files"]
+    path: Required[str]
+    name: str
+    title: str
+    author: str
+    mimeType: str
+    size: int
+    sha256: str
+    pageCount: int
+    createdAt: str
+    modifiedAt: str
+
+class EncryptedItemArtifact(BaseArtifact, total=False):
+    kind: Literal["encrypted_item"]
+    category: Literal["credentials"]
+    path: Required[str]
+    encryptionType: str
+    algorithm: str
+    keyIdentifier: str
+    provider: str
+    isLocked: bool
+
+class ConnectedDeviceArtifact(BaseArtifact, total=False):
+    kind: Literal["connected_device"]
+    category: Literal["networks"]
+    name: Required[str]
+    deviceType: str
+    identifier: str
+    manufacturer: str
+    model: str
+    serialNumber: str
+    connectionType: str
+    firstConnectedAt: str
+    lastConnectedAt: str
+
 class GenericArtifact(BaseArtifact, total=False):
     """Fallback model for plugin-specific records."""
     kind: Literal["record"]
@@ -2280,7 +2355,13 @@ class CustomTableArtifact(BaseArtifact, total=False):
     table: CustomTablePayload
 
 Artifact = (
-    AccountArtifact
+    RefinedResultArtifact
+    | SocialProfileArtifact
+    | SocialPostArtifact
+    | DocumentArtifact
+    | EncryptedItemArtifact
+    | ConnectedDeviceArtifact
+    | AccountArtifact
     | ApplicationArtifact
     | BrowserHistoryArtifact
     | CallArtifact
@@ -2329,6 +2410,18 @@ def datetime_from_iso(text: str) -> str: ...
 def datetime_from_datetime(value: Any) -> str: ...
 
 def account(label: str, **fields: Any) -> AccountArtifact: ...
+
+def refined_result(label: str, *, finding: str, **fields: Any) -> RefinedResultArtifact: ...
+
+def social_profile(label: str, *, platform: str, username: str, **fields: Any) -> SocialProfileArtifact: ...
+
+def social_post(label: str, *, platform: str, **fields: Any) -> SocialPostArtifact: ...
+
+def document(label: str, *, path: str, **fields: Any) -> DocumentArtifact: ...
+
+def encrypted_item(label: str, *, path: str, **fields: Any) -> EncryptedItemArtifact: ...
+
+def connected_device(label: str, *, name: str, **fields: Any) -> ConnectedDeviceArtifact: ...
 
 def application(label: str, **fields: Any) -> ApplicationArtifact: ...
 
@@ -2708,6 +2801,12 @@ def run(context):
           <tr><td><code>voice_mail</code></td><td><code>VoiceMailArtifact</code></td><td><code>communications</code></td><td><code>phone: str</code>, <code>contactName: str</code>, <code>transcript: str</code>, <code>receivedAt: str</code>, <code>durationSeconds: float</code></td></tr>
           <tr><td><code>web_bookmark</code></td><td><code>WebBookmarkArtifact</code></td><td><code>browser</code></td><td><code>url: str</code>, <code>title: str</code>, <code>folder: str</code>, <code>createdAt: str</code>, <code>browser: str</code></td></tr>
           <tr><td><code>wireless_network</code></td><td><code>WirelessNetworkArtifact</code></td><td><code>networks</code></td><td><code>ssid: str</code>, <code>bssid: str</code>, <code>security: str</code>, <code>lastConnectedAt: str</code></td></tr>
+          <tr><td><code>refined_result</code></td><td><code>RefinedResultArtifact</code></td><td><code>search</code></td><td><code>finding: str</code>; summary, rationale, relatedArtifactIds, ruleId, matchedAt</td></tr>
+          <tr><td><code>social_profile</code></td><td><code>SocialProfileArtifact</code></td><td><code>social</code></td><td><code>platform: str, username: str</code>; profileId, displayName, url, createdAt, lastActiveAt</td></tr>
+          <tr><td><code>social_post</code></td><td><code>SocialPostArtifact</code></td><td><code>social</code></td><td><code>platform: str</code>; postId, author, authorId, body, url, postedAt, editedAt, attachments, replyToId, likeCount, shareCount</td></tr>
+          <tr><td><code>document</code></td><td><code>DocumentArtifact</code></td><td><code>files</code></td><td><code>path: str</code>; name, title, author, mimeType, size, sha256, pageCount, createdAt, modifiedAt</td></tr>
+          <tr><td><code>encrypted_item</code></td><td><code>EncryptedItemArtifact</code></td><td><code>credentials</code></td><td><code>path: str</code>; encryptionType, algorithm, keyIdentifier, provider, isLocked</td></tr>
+          <tr><td><code>connected_device</code></td><td><code>ConnectedDeviceArtifact</code></td><td><code>networks</code></td><td><code>name: str</code>; deviceType, identifier, manufacturer, model, serialNumber, connectionType, firstConnectedAt, lastConnectedAt</td></tr>
           <tr><td><code>record</code></td><td><code>GenericArtifact</code></td><td><code>other</code></td><td><code>fields: dict[str, Any]</code></td></tr>
         </tbody>
       </table>

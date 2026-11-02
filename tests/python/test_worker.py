@@ -15,6 +15,56 @@ WORKER = Path(__file__).resolve().parents[2] / "src-tauri/src/scripting/worker/p
 
 
 class WorkerTests(unittest.TestCase):
+    def test_standard_models_cover_every_main_category_and_preserve_source_references(self):
+        result = self.run_plugin('''
+import cultivator_api as api
+
+def run(context):
+    source = {"filePath": context["file"]["path"], "parser": "standard-model-fixture"}
+    return [
+        api.refined_result("Finding", finding="Matching evidence", relatedArtifactIds=["support-1"], source=source),
+        api.browser_history("Web page", url="https://example.test", source=source),
+        api.message("Message", body="Example", source=source),
+        api.social_profile("Profile", platform="Example", username="example_user", source=source),
+        api.media("Media", path=context["file"]["path"], source=source),
+        api.email("Email", subject="Example", source=source),
+        api.document("Document", path=context["file"]["path"], pageCount=2, source=source),
+        api.application_usage("Usage", application="Example", source=source),
+        api.system_artifact("Setting", key="name", value="Example", source=source),
+        api.credential("Credential", username="example", source=source),
+        api.connected_device("Peripheral", name="Example device", connectionType="USB", source=source),
+        api.location("Location", latitude=40.0, longitude=-74.0, source=source),
+        api.create_artifact("record", "Custom", fields={"example": True}, source=source),
+        api.social_post("Post", platform="Example", body="Example post", attachments=["evidence.jpg"], source=source),
+        api.encrypted_item("Encrypted", path=context["file"]["path"], isLocked=True, source=source),
+    ]
+''')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        records = json.loads(result.stdout)["records"]
+        self.assertEqual(len(records), 15)
+        by_kind = {record["resultKind"]: record for record in records}
+        expected = {"refined_result": "search", "social_profile": "social", "social_post": "social",
+                    "document": "files", "encrypted_item": "credentials", "connected_device": "networks"}
+        for kind, category in expected.items():
+            self.assertEqual(by_kind[kind]["payload"]["category"], category)
+        for record in records:
+            self.assertEqual(record["filePath"], record["payload"]["source"]["filePath"])
+            self.assertEqual(record["payload"]["source"]["parser"], "standard-model-fixture")
+        self.assertEqual(by_kind["encrypted_item"]["payload"]["isLocked"], True)
+
+    def test_standard_model_editor_stub_is_valid_and_exposes_required_fields(self):
+        import ast
+        import re
+        rust = (WORKER.parents[2] / "plugins.rs").read_text(encoding="utf-8")
+        stub = re.search(r'const CULTIVATOR_API_STUB: &str = r#"(.*?)"#;', rust, re.S).group(1)
+        module = ast.parse(stub)
+        helpers = {node.name: node for node in module.body if isinstance(node, ast.FunctionDef)}
+        required = {"refined_result": ["finding"], "social_profile": ["platform", "username"],
+                    "social_post": ["platform"], "document": ["path"], "encrypted_item": ["path"], "connected_device": ["name"]}
+        for helper, fields in required.items():
+            self.assertEqual([argument.arg for argument in helpers[helper].args.kwonlyargs], fields)
+            self.assertEqual(helpers[helper].args.kw_defaults, [None] * len(fields))
+
     def run_plugin(self, script, *, protocol=1, with_provenance=False):
         with tempfile.TemporaryDirectory(prefix="cultivator-worker-") as directory:
             root = Path(directory)

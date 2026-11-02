@@ -1,7 +1,12 @@
+import type { ArtifactCategoryId } from "./artifactCategoryDefinitions";
+import type { ConnectedDeviceArtifact, DocumentArtifact, EncryptedItemArtifact, RefinedResultArtifact, SocialPostArtifact, SocialProfileArtifact } from "./standardArtifacts";
+
+export type { ConnectedDeviceArtifact, DocumentArtifact, EncryptedItemArtifact, RefinedResultArtifact, SocialPostArtifact, SocialProfileArtifact } from "./standardArtifacts";
+
 /**
- * High-level grouping used for filtering, navigation, and report sections.
- * A model's `category` should match its `kind`, for example `contact` uses
- * `contacts` and `browser_history` uses `browser`.
+ * Stable payload category used by the plugin API and existing case records.
+ * Main artifact-tree categories are defined in artifactCategoryDefinitions.
+ * For example, `contact` retains `contacts` and `browser_history` retains `browser`.
  */
 export type ArtifactCategory =
   | "accounts"
@@ -21,6 +26,7 @@ export type ArtifactCategory =
   | "networks"
   | "notes"
   | "search"
+  | "social"
   | "system"
   | "timeline"
   | "other"
@@ -576,6 +582,12 @@ export type CustomTableArtifact = BaseArtifact & {
 
 /** Discriminated union of every supported artifact payload model. */
 export type Artifact =
+  | ConnectedDeviceArtifact
+  | DocumentArtifact
+  | EncryptedItemArtifact
+  | RefinedResultArtifact
+  | SocialPostArtifact
+  | SocialProfileArtifact
   | AccountArtifact
   | ApplicationArtifact
   | BrowserHistoryArtifact
@@ -632,6 +644,8 @@ export type ArtifactModelField = {
  * for artifact creation forms, validation hints, and API documentation.
  */
 export type ArtifactModelDefinition = {
+  schemaVersion: 1;
+  navigationCategory: ArtifactCategoryId;
   kind: Artifact["kind"];
   category: ArtifactCategory;
   label: string;

@@ -1,7 +1,11 @@
 export {
   artifactModelDefinitions,
   artifactModelsByKind,
+  artifactModelsByCategory,
 } from "./model/artifactModels";
+export { artifactCategoryDefinitions, artifactCategoryByKind } from "./model/artifactCategoryDefinitions";
+export type { ArtifactByCategory, ArtifactCategoryDefinition, ArtifactCategoryId, ArtifactNavigationCategory } from "./model/artifactCategoryDefinitions";
+export type { ConnectedDeviceArtifact, DocumentArtifact, EncryptedItemArtifact, RefinedResultArtifact, SocialPostArtifact, SocialProfileArtifact } from "./model/standardArtifacts";
 export type {
   AccountArtifact,
   ApplicationArtifact,

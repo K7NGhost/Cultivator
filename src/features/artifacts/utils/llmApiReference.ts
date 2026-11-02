@@ -1,6 +1,10 @@
 import { artifactModelDefinitions } from "../model/artifactModels";
+import { artifactCategoryDefinitions } from "../model/artifactCategoryDefinitions";
 
 export function buildCultivatorApiReferenceForLlms() {
+  const categories = artifactCategoryDefinitions.map((category) =>
+    `- ${category.label} (${category.id}): ${category.modelKinds.join(", ")}. Primary model: ${category.primaryKind}.`,
+  ).join("\n");
   const artifactModels = artifactModelDefinitions
     .map((model) => {
       const fields = model.fields
@@ -15,6 +19,8 @@ export function buildCultivatorApiReferenceForLlms() {
         `### ${model.label}`,
         `kind: ${model.kind}`,
         `category: ${model.category}`,
+        `main category: ${model.navigationCategory}`,
+        `schema version: ${model.schemaVersion}`,
         `description: ${model.description}`,
         "fields:",
         fields,
@@ -137,6 +143,12 @@ Artifact helper functions create dictionaries with kind, category, and label:
 
 \`\`\`python
 cultivator_api.account(label, **fields)
+cultivator_api.refined_result(label, **fields)
+cultivator_api.social_profile(label, **fields)
+cultivator_api.social_post(label, **fields)
+cultivator_api.document(label, **fields)
+cultivator_api.encrypted_item(label, **fields)
+cultivator_api.connected_device(label, **fields)
 cultivator_api.application(label, **fields)
 cultivator_api.browser_history(label, **fields)
 cultivator_api.call(label, **fields)
@@ -220,7 +232,16 @@ def run(context):
 
 ## Artifact Models
 
-All artifacts share these optional base fields:
+### Main category catalog
+
+${categories}
+
+Known model kinds determine the main category shown in the artifact tree. The payload's
+category retains its stable API slug (for example, browser_history uses browser).
+Unknown kinds and custom tables appear under Custom. Existing case payloads remain readable.
+
+Every model requires kind, category, and label. Helpers fill kind and category automatically.
+These common fields support provenance and review:
 - kind: str
 - category: str
 - label: str

@@ -1,6 +1,8 @@
 import type { ArtifactModelDefinition } from "./types";
+import { artifactCategoryByKind, artifactCategoryDefinitions } from "./artifactCategoryDefinitions";
+import { standardArtifactModelDefinitions } from "./standardArtifactModels";
 
-export const artifactModelDefinitions: ArtifactModelDefinition[] = [
+const existingArtifactModelDefinitions: Omit<ArtifactModelDefinition, "schemaVersion" | "navigationCategory">[] = [
   {
     kind: "account",
     category: "accounts",
@@ -199,6 +201,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "body", label: "Body", type: "string" },
       { key: "sentAt", label: "Sent", type: "datetime" },
       { key: "receivedAt", label: "Received", type: "datetime" },
+      { key: "service", label: "Service", type: "string" },
     ],
   },
   {
@@ -214,6 +217,9 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "subject", label: "Subject", type: "string" },
       { key: "sentAt", label: "Sent", type: "datetime" },
       { key: "receivedAt", label: "Received", type: "datetime" },
+      { key: "cc", label: "CC", type: "string[]" },
+      { key: "bcc", label: "BCC", type: "string[]" },
+      { key: "body", label: "Body", type: "string" },
     ],
   },
   {
@@ -228,6 +234,8 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "recipients", label: "Recipients", type: "string[]" },
       { key: "attachments", label: "Attachments", type: "string[]" },
       { key: "sentAt", label: "Sent", type: "datetime" },
+      { key: "body", label: "Body", type: "string" },
+      { key: "receivedAt", label: "Received", type: "datetime" },
     ],
   },
   {
@@ -242,6 +250,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "service", label: "Service", type: "string" },
       { key: "startedAt", label: "Started", type: "datetime" },
       { key: "lastMessageAt", label: "Last message", type: "datetime" },
+      { key: "title", label: "Title", type: "string" },
     ],
   },
   {
@@ -256,6 +265,8 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "recipients", label: "Recipients", type: "string[]" },
       { key: "body", label: "Body", type: "string" },
       { key: "sentAt", label: "Sent", type: "datetime" },
+      { key: "receivedAt", label: "Received", type: "datetime" },
+      { key: "service", label: "Service", type: "string" },
     ],
   },
   {
@@ -270,6 +281,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "email", label: "Email", type: "string" },
       { key: "service", label: "Service", type: "string" },
       { key: "identifier", label: "Identifier", type: "string" },
+      { key: "phone", label: "Phone", type: "string" },
     ],
   },
   {
@@ -284,6 +296,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "transcript", label: "Transcript", type: "string" },
       { key: "receivedAt", label: "Received", type: "datetime" },
       { key: "durationSeconds", label: "Duration", type: "number" },
+      { key: "audioPath", label: "Audio path", type: "string" },
     ],
   },
   {
@@ -298,6 +311,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "endsAt", label: "Ends", type: "datetime" },
       { key: "location", label: "Location", type: "string" },
       { key: "attendees", label: "Attendees", type: "string[]" },
+      { key: "organizer", label: "Organizer", type: "string" },
     ],
   },
   {
@@ -326,6 +340,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "origin", label: "Origin", type: "string" },
       { key: "destination", label: "Destination", type: "string" },
       { key: "points", label: "Points", type: "json" },
+      { key: "distanceMeters", label: "Distance (meters)", type: "number" },
     ],
   },
   {
@@ -354,6 +369,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "path", label: "Path", type: "string" },
       { key: "createdAt", label: "Created", type: "datetime" },
       { key: "expiresAt", label: "Expires", type: "datetime" },
+      { key: "valuePreview", label: "Value preview", type: "string" },
     ],
   },
   {
@@ -368,6 +384,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "startedAt", label: "Started", type: "datetime" },
       { key: "endedAt", label: "Ended", type: "datetime" },
       { key: "durationSeconds", label: "Duration", type: "number" },
+      { key: "eventType", label: "Event type", type: "string" },
     ],
   },
   {
@@ -381,6 +398,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "title", label: "Title", type: "string" },
       { key: "visitedAt", label: "Visited", type: "datetime" },
       { key: "browser", label: "Browser", type: "string" },
+      { key: "visitCount", label: "Visits", type: "number" },
     ],
   },
   {
@@ -407,6 +425,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "title", label: "Title", type: "string" },
       { key: "folder", label: "Folder", type: "string" },
       { key: "createdAt", label: "Created", type: "datetime" },
+      { key: "browser", label: "Browser", type: "string" },
     ],
   },
   {
@@ -434,6 +453,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "address", label: "Address", type: "string" },
       { key: "pairedAt", label: "Paired", type: "datetime" },
       { key: "lastConnectedAt", label: "Last connected", type: "datetime" },
+      { key: "deviceClass", label: "Device class", type: "string" },
     ],
   },
   {
@@ -474,6 +494,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "bssid", label: "BSSID", type: "string" },
       { key: "security", label: "Security", type: "string" },
       { key: "lastConnectedAt", label: "Last connected", type: "datetime" },
+      { key: "connectedAt", label: "Connected", type: "datetime" },
     ],
   },
   {
@@ -487,6 +508,7 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
       { key: "title", label: "Title", type: "string" },
       { key: "body", label: "Body", type: "string" },
       { key: "receivedAt", label: "Received", type: "datetime" },
+      { key: "action", label: "Action", type: "string" },
     ],
   },
   {
@@ -526,6 +548,19 @@ export const artifactModelDefinitions: ArtifactModelDefinition[] = [
   },
 ];
 
+export const artifactModelDefinitions: ArtifactModelDefinition[] = [
+  ...existingArtifactModelDefinitions, ...standardArtifactModelDefinitions,
+].map((definition) => {
+  const category = artifactCategoryByKind.get(definition.kind);
+  if (!category) throw new Error(`No main category defined for ${definition.kind}.`);
+  return { ...definition, schemaVersion: 1, navigationCategory: category.id };
+});
+
 export const artifactModelsByKind = new Map(
   artifactModelDefinitions.map((definition) => [definition.kind, definition]),
+);
+
+export const artifactModelsByCategory = new Map(
+  artifactCategoryDefinitions.map((category) => [category.id,
+    artifactModelDefinitions.filter((model) => model.navigationCategory === category.id)]),
 );

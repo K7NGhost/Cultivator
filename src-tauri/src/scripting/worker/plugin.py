@@ -17,6 +17,12 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
 ARTIFACT_CATEGORIES = {
+    "refined_result": "search",
+    "social_profile": "social",
+    "social_post": "social",
+    "document": "files",
+    "encrypted_item": "credentials",
+    "connected_device": "networks",
     "account": "accounts",
     "application": "applications",
     "browser_history": "browser",
@@ -272,6 +278,12 @@ def datetime_from_datetime(value):
     return value.isoformat()
 
 
+def refined_result(label, **fields): return create_artifact("refined_result", label, **fields)
+def social_profile(label, **fields): return create_artifact("social_profile", label, **fields)
+def social_post(label, **fields): return create_artifact("social_post", label, **fields)
+def document(label, **fields): return create_artifact("document", label, **fields)
+def encrypted_item(label, **fields): return create_artifact("encrypted_item", label, **fields)
+def connected_device(label, **fields): return create_artifact("connected_device", label, **fields)
 def account(label, **fields): return create_artifact("account", label, **fields)
 def application(label, **fields): return create_artifact("application", label, **fields)
 def browser_history(label, **fields): return create_artifact("browser_history", label, **fields)
@@ -363,6 +375,7 @@ for name, value in list(globals().items()):
         "create_table_artifact", "add_table_row", "add_artifact", "create_group",
         "datetime_from_unix", "datetime_from_iso", "datetime_from_datetime", "account",
         "application", "browser_history", "call", "contact", "credential",
+        "refined_result", "social_profile", "social_post", "document", "encrypted_item", "connected_device",
         "file_artifact", "location", "media", "message", "note",
         "sms", "mms", "email", "chat", "instant_message", "user_account",
         "voice_mail", "calendar_entry", "password", "journey",
