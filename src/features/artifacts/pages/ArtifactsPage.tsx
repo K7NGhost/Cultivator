@@ -1,4 +1,5 @@
 import { ArtifactTreeViewer } from "../components/ArtifactTreeViewer";
+import { useLocation } from "react-router-dom";
 import { ArtifactLocationPreview } from "../components/ArtifactLocationPreview";
 import { detectCoordinatePairs } from "../utils/artifactLocations";
 import type { ArtifactTreeNode } from "../model/artifactTree";
@@ -678,6 +679,7 @@ function findArtifactNodeContainingArtifact(
 
 export function ArtifactsPage() {
   const { activeCase } = useCases();
+  const requestedArtifactId = new URLSearchParams(useLocation().search).get("artifactId");
   const [artifacts, setArtifacts] = useState<StoredArtifactRecord[]>([]);
   const [plugins, setPlugins] = useState<PythonPlugin[]>([]);
   const [datasources, setDatasources] = useState<DataSourceRecord[]>([]);
@@ -735,6 +737,14 @@ export function ArtifactsPage() {
     selectedArtifactOptions.find((artifact) => artifact.id === selectedArtifactId) ??
     selectedArtifactOptions[0] ??
     null;
+
+  useEffect(() => {
+    if (requestedArtifactId && artifacts.some((artifact) => artifact.id === requestedArtifactId)) {
+      setSelectedDatasourceId("all");
+      setSelectedArtifactNodeId(null);
+      setSelectedArtifactId(requestedArtifactId);
+    }
+  }, [requestedArtifactId, artifacts]);
 
   async function refreshArtifacts() {
     if (!activeCase) {

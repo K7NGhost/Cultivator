@@ -19,6 +19,7 @@ import { EvidenceProvider } from "@/features/evidence";
 import { FilesPage } from "@/features/files/pages/FilesPage";
 import { MediaPage } from "@/features/media/pages/MediaPage";
 import { DronePage } from "@/features/drone/pages/DronePage";
+import { TimelinePage } from "@/features/timeline/pages/TimelinePage";
 import { PluginsPage } from "@/features/plugins/pages/PluginsPage";
 import { usePluginJobMonitor } from "@/features/plugins/hooks/usePluginJobMonitor";
 import { SearchPage } from "@/features/search/pages/SearchPage";
@@ -55,12 +56,7 @@ const workspaceRoutes = [
   },
   {
     path: "/timeline",
-    element: (
-      <PlaceholderPage
-        title="Timeline"
-        description="Timestamps correlated from file metadata and plugin outputs."
-      />
-    ),
+    element: <TimelinePage />,
   },
   {
     path: "/reports",

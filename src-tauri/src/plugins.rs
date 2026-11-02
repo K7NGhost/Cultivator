@@ -34,6 +34,7 @@ mod job_progress;
 mod media_classifications;
 mod media_queries;
 mod media_directories;
+pub mod timeline;
 pub mod media_hashsets;
 pub use media_directories::{list_media_directories, MediaDirectory};
 pub use execution::{
