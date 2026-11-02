@@ -238,7 +238,7 @@ ${categories}
 
 Known model kinds determine the main category shown in the artifact tree. The payload's
 category retains its stable API slug (for example, browser_history uses browser).
-Unknown kinds and custom tables appear under Custom. Existing case payloads remain readable.
+Unknown kinds and custom tables are automatically placed in main categories using recognized payload categories, artifact names, and parser or group metadata. Unrecognized outputs remain under Custom. This navigation routing preserves table contents and evidence provenance and does not convert custom tables into standard models. Existing case payloads remain readable.
 
 Every model requires kind, category, and label. Helpers fill kind and category automatically.
 These common fields support provenance and review:

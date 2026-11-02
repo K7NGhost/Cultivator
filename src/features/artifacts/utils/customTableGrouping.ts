@@ -88,6 +88,9 @@ function parseCustomTable(artifact: StoredArtifactRecord): ParsedCustomTable | n
   }
 
   const table = payload.table;
+  const parser = isObject(payload.parser) ? payload.parser : {};
+  const definition = isObject(parser.artifact) ? parser.artifact : {};
+  const objectColumns = Array.isArray(definition.object_columns) ? definition.object_columns.filter(isObject) : [];
 
   if (!Array.isArray(table.columns) || !Array.isArray(table.rows)) {
     return null;
@@ -95,10 +98,23 @@ function parseCustomTable(artifact: StoredArtifactRecord): ParsedCustomTable | n
 
   const columns = table.columns
     .filter(isObject)
-    .map((column) => ({
-      key: typeof column.key === "string" ? column.key : "",
-      label: typeof column.label === "string" ? column.label : "",
-    }))
+    .map((column): CustomTableColumn => {
+      const result: CustomTableColumn = {
+        key: typeof column.key === "string" ? column.key : "",
+        label: typeof column.label === "string" ? column.label : "",
+      };
+      const typed = objectColumns.find((field) => field.name === result.key);
+      const format = column.format ?? column.type ?? typed?.type;
+      if (format === "datetime" || format === "date") {
+        result.format = format;
+        if (column.timestampUnit === "seconds" || column.timestampUnit === "milliseconds") {
+          result.timestampUnit = column.timestampUnit;
+        } else if (typed?.type === "datetime" || typed?.type === "date") {
+          result.timestampUnit = "seconds";
+        }
+      }
+      return result;
+    })
     .filter((column) => column.key.length > 0 && column.label.length > 0);
 
   if (columns.length === 0) {

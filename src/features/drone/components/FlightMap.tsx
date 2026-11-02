@@ -9,6 +9,7 @@ import {
   Satellite,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { OpenLocationInBrowserButton } from "@/components/OpenLocationInBrowserButton";
 import {
   MapCanvas,
   type Basemap,
@@ -59,14 +60,15 @@ export function FlightMap({
       className="flex min-h-[400px] flex-1 flex-col overflow-hidden bg-background"
       aria-label="Flight path and playback"
     >
-      <div className="flex items-center justify-between border-b px-2 py-1">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1">
         <div className="flex items-center gap-2 text-xs font-medium">
           <MapPin className="size-4 text-muted-foreground" /> Flight path{" "}
           <span className="ml-2 text-xs font-normal text-muted-foreground">
             {actualPointCount.toLocaleString()} receiver positions
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <OpenLocationInBrowserButton latitude={selected.latitude} longitude={selected.longitude} />
           <Satellite className="size-3.5 text-muted-foreground" />
           <select
             aria-label="Map basemap"

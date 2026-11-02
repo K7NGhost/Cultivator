@@ -566,6 +566,8 @@ export type GenericArtifact = BaseArtifact & {
 export type CustomTableColumn = {
   key: string;
   label: string;
+  format?: "datetime" | "date";
+  timestampUnit?: "seconds" | "milliseconds";
 };
 
 export type CustomTablePayload = {

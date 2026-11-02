@@ -1,4 +1,6 @@
 import { ArtifactTreeViewer } from "../components/ArtifactTreeViewer";
+import { ArtifactLocationPreview } from "../components/ArtifactLocationPreview";
+import { detectCoordinatePairs } from "../utils/artifactLocations";
 import type { ArtifactTreeNode } from "../model/artifactTree";
 import { formatEntryHitLabel } from "../utils/artifactEntryLabel";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -57,13 +59,14 @@ import {
   listArtifacts,
 } from "../services/artifactRepository";
 import {
-  combineCustomTableArtifacts,
   getArtifactEntryMetrics,
   getCustomTableRowSources,
   type CustomTableView,
   type CustomTableViewRow,
 } from "../utils/customTableGrouping";
 import { getCustomTableViewportLayout } from "../utils/customTableLayout";
+import { getArtifactTableView } from "../utils/artifactTableView";
+import { formatArtifactTableCell } from "../utils/artifactTableFormatting";
 import type {
   ArtifactModelDefinition,
   StoredArtifactRecord,
@@ -244,12 +247,6 @@ function getPayloadStringList(
   return value.filter(
     (item): item is string => typeof item === "string" && item.length > 0,
   );
-}
-
-function getCombinedCustomTableData(
-  artifacts: StoredArtifactRecord[],
-): CustomTableView | null {
-  return combineCustomTableArtifacts(artifacts);
 }
 
 function formatTableCell(value: unknown) {
@@ -1112,7 +1109,9 @@ function ArtifactPropertiesPanel({
   pluginName?: string;
 }) {
   const [entryViewMode, setEntryViewMode] =
-    useState<ArtifactEntryViewMode>("selected");
+    useState<ArtifactEntryViewMode>("all");
+  const combinedTable = useMemo(() => getArtifactTableView(artifactOptions), [artifactOptions]);
+  const selectedTable = useMemo(() => getArtifactTableView(artifact ? [artifact] : []), [artifact]);
 
   if (!artifact) {
     return (
@@ -1124,10 +1123,10 @@ function ArtifactPropertiesPanel({
 
   const model = getArtifactModel(artifact.resultKind);
   const category = getPayloadCategory(artifact);
-  const combinedCustomTable = getCombinedCustomTableData(artifactOptions);
   const canViewAllEntries =
-    artifactOptions.length > 1 && combinedCustomTable !== null;
+    artifactOptions.length > 1 && combinedTable !== null;
   const isViewingAllEntries = canViewAllEntries && entryViewMode === "all";
+  const tableView = isViewingAllEntries ? combinedTable : selectedTable;
   const fileSelectorLabel = isViewingAllEntries
     ? "All entries"
     : formatArtifactFileLabel(artifact);
@@ -1146,7 +1145,7 @@ function ArtifactPropertiesPanel({
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <Tabs
-        defaultValue="preview"
+        defaultValue="table"
         className="flex h-full min-h-0 min-w-0 flex-col gap-0"
       >
         <div className="flex h-8 shrink-0 items-center justify-between border-b px-2">
@@ -1163,6 +1162,12 @@ function ArtifactPropertiesPanel({
               className="h-7 rounded-none p-0"
               aria-label="Artifact detail view"
             >
+              <TabsTrigger
+                value="table"
+                className="h-7 rounded-none px-2 text-xs"
+              >
+                Table
+              </TabsTrigger>
               <TabsTrigger
                 value="preview"
                 className="h-7 rounded-none px-2 text-xs"
@@ -1243,11 +1248,32 @@ function ArtifactPropertiesPanel({
             </DropdownMenu>
             <Badge variant="secondary" className="h-5 shrink-0 rounded-sm text-[11px]">
               {isViewingAllEntries
-                ? combinedCustomTable.rows.length.toLocaleString()
+                ? combinedTable.rows.length.toLocaleString()
                 : artifactOptions.length.toLocaleString()}
             </Badge>
           </div>
         )}
+
+        <TabsContent
+          value="table"
+          className="m-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
+        >
+          {tableView ? (
+            <CustomTableArtifactPreview
+              table={tableView}
+              subtitle={isViewingAllEntries ? "All entries" : undefined}
+              selectedArtifactId={artifact.resultKind !== "custom_table" ? artifact.id : undefined}
+              onSelectArtifactId={artifact.resultKind !== "custom_table" ? (id) => {
+                const selected = artifactOptions.find((option) => option.id === id);
+                if (selected) onSelectArtifact(selected);
+              } : undefined}
+            />
+          ) : (
+            <div className="grid h-full place-items-center text-xs text-muted-foreground">
+              No table data is available for this artifact.
+            </div>
+          )}
+        </TabsContent>
 
         <TabsContent
           value="preview"
@@ -1255,8 +1281,11 @@ function ArtifactPropertiesPanel({
         >
           <ArtifactPreviewPanel
             artifact={artifact}
-            artifactOptions={artifactOptions}
-            entryViewMode={isViewingAllEntries ? "all" : "selected"}
+            table={tableView}
+            onSelectArtifactId={(id) => {
+              const selected = artifactOptions.find((option) => option.id === id);
+              if (selected) onSelectArtifact(selected);
+            }}
           />
         </TabsContent>
 
@@ -1303,30 +1332,16 @@ function ArtifactPropertiesPanel({
 
 function ArtifactPreviewPanel({
   artifact,
-  artifactOptions,
-  entryViewMode,
+  table,
+  onSelectArtifactId,
 }: {
   artifact: StoredArtifactRecord;
-  artifactOptions: StoredArtifactRecord[];
-  entryViewMode: ArtifactEntryViewMode;
+  table: CustomTableView | null;
+  onSelectArtifactId: (id: string) => void;
 }) {
-  const combinedCustomTable =
-    entryViewMode === "all" ? getCombinedCustomTableData(artifactOptions) : null;
-  const customTable = combineCustomTableArtifacts([artifact]);
-
-  if (combinedCustomTable) {
-    return (
-      <CustomTableArtifactPreview
-        table={combinedCustomTable}
-        subtitle="All entries"
-      />
-    );
+  if (table && detectCoordinatePairs(table.columns).length > 0) {
+    return <ArtifactLocationPreview table={table} selectedArtifactId={artifact.id} onSelectArtifactId={onSelectArtifactId} />;
   }
-
-  if (customTable) {
-    return <CustomTableArtifactPreview table={customTable} />;
-  }
-
   if (artifact.resultKind === "message" && isPayloadObject(artifact.payload)) {
     return <MessageArtifactPreview artifact={artifact} payload={artifact.payload} />;
   }
@@ -1356,9 +1371,13 @@ function ArtifactPreviewPanel({
 function CustomTableArtifactPreview({
   subtitle,
   table,
+  selectedArtifactId,
+  onSelectArtifactId,
 }: {
   subtitle?: string;
   table: CustomTableView;
+  selectedArtifactId?: string;
+  onSelectArtifactId?: (id: string) => void;
 }) {
   const scrollbarSize = useNativeScrollbarSize();
   const [sort, setSort] = useState<CustomTableSortState>(() => ({
@@ -1448,20 +1467,38 @@ function CustomTableArtifactPreview({
                 }: ListRowProps) => {
                   const sourceRowIndex = sortedIndexes[index] ?? index;
                   const groupedRow = table.rows[sourceRowIndex];
+                  const sourceId = groupedRow ? table.sources[groupedRow.primarySourceIndex]?.artifactId : undefined;
+                  const selected = selectedArtifactId !== undefined && sourceId === selectedArtifactId;
+                  const selectRow = () => {
+                    if (sourceId) onSelectArtifactId?.(sourceId);
+                  };
 
                   return (
                     <div
                       key={key}
                       role="row"
+                      aria-selected={onSelectArtifactId ? selected : undefined}
+                      tabIndex={onSelectArtifactId ? 0 : undefined}
+                      onClick={onSelectArtifactId ? selectRow : undefined}
+                      onKeyDown={onSelectArtifactId ? (event) => {
+                        if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+                          event.preventDefault();
+                          selectRow();
+                        }
+                      } : undefined}
                       style={{ ...style, width: layout.tableContentWidth }}
                       className={cn(
                         "flex border-b text-xs hover:bg-muted/40",
                         index % 2 === 1 && "bg-muted/15",
+                        onSelectArtifactId && "cursor-pointer focus-visible:outline focus-visible:outline-ring focus-visible:-outline-offset-2",
+                        selected && "bg-primary/10",
                       )}
                     >
                       {table.columns.map((column, columnIndex) => {
-                        const value = formatTableCell(
+                        const rawValue = formatTableCell(groupedRow?.values[column.key]);
+                        const value = formatArtifactTableCell(
                           groupedRow?.values[column.key],
+                          column,
                         );
                         const isLastDataColumn =
                           columnIndex === table.columns.length - 1;
@@ -1475,7 +1512,7 @@ function CustomTableArtifactPreview({
                               (showSources || !isLastDataColumn) && "border-r",
                             )}
                             style={{ width: layout.columnWidths[columnIndex] }}
-                            title={value}
+                            title={value === rawValue ? value : `${value}\nRaw: ${rawValue}`}
                           >
                             <span className="block min-w-0 truncate">
                               {value || "-"}

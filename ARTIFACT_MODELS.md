@@ -38,7 +38,12 @@ Schema version 1 belongs to the model definition. It does not rewrite existing
 case payloads. Payload `category` remains the established API slug, such as
 `browser`, `messages`, or `files`; `navigationCategory` on the model definition
 provides the main category ID. Known `kind` values determine tree placement.
-Unknown kinds, generic records, and custom tables continue to appear under Custom.
+Unknown kinds, generic records, and custom tables use automatic navigation routing:
+recognized payload categories take priority, followed by artifact names and parser
+or group metadata. For example, Safari bookmarks appear under Web Related and
+Instagram messages under Communication. Unrecognized outputs remain under Custom.
+Routing applies to existing case records without reparsing. It changes display
+placement only; table contents, model kinds, and evidence provenance are preserved.
 
 ## Additional models
 

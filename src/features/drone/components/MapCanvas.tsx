@@ -1,3 +1,5 @@
+import { basemapStyle, localStyle, type Basemap } from "@/lib/maps/mapStyles";
+import { hasBasemapStyle, installBasemapImageResolver } from "@/lib/maps/mapImages";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Flag, MapPin } from "lucide-react";
@@ -7,7 +9,6 @@ import type {
   Popup,
   GeoJSONSource,
   Map as MapLibreMap,
-  StyleSpecification,
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -33,7 +34,7 @@ export type MapStatus = {
   offline?: boolean;
   message?: string;
 };
-export type Basemap = "streets" | "satellite";
+export type { Basemap } from "@/lib/maps/mapStyles";
 
 type Props = {
   basemap: Basemap;
@@ -42,68 +43,6 @@ type Props = {
   showPath: boolean;
   onStatus: (status: MapStatus) => void;
 };
-
-function themeColor(variable: string) {
-  if (variable === "--color-primary") return "#14b8a6";
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 1;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Cannot resolve the map theme colors.");
-  context.fillStyle = getComputedStyle(document.documentElement)
-    .getPropertyValue(variable === "--color-primary" ? "--primary" : "--muted")
-    .trim();
-  context.fillRect(0, 0, 1, 1);
-  const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
-  return `rgb(${r},${g},${b})`;
-}
-
-function styleUrl() {
-  return (
-    import.meta.env.VITE_MAP_STYLE_URL ||
-    `https://tiles.openfreemap.org/styles/${document.documentElement.classList.contains("dark") ? "dark" : "positron"}`
-  );
-}
-
-function basemapStyle(basemap: Basemap): string | StyleSpecification {
-  if (basemap === "streets") return styleUrl();
-  return {
-    version: 8,
-    sources: {
-      "satellite-imagery": {
-        type: "raster",
-        tiles: [
-          "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        ],
-        tileSize: 256,
-        maxzoom: 19,
-        attribution:
-          'Imagery &copy; <a href="https://www.esri.com/" target="_blank" rel="noopener noreferrer">Esri</a> and its data providers',
-      },
-    },
-    layers: [
-      {
-        id: "satellite-imagery",
-        type: "raster",
-        source: "satellite-imagery",
-        paint: { "raster-fade-duration": 0 },
-      },
-    ],
-  };
-}
-
-function localStyle(): StyleSpecification {
-  return {
-    version: 8,
-    sources: {},
-    layers: [
-      {
-        id: "local-background",
-        type: "background",
-        paint: { "background-color": themeColor("--color-base-200") },
-      },
-    ],
-  };
-}
 
 function updateDroneMarker(
   map: MapLibreMap,
@@ -246,6 +185,7 @@ export const MapCanvas = forwardRef<MapHandle, Props>(
             attributionControl: { compact: true },
           });
           mapRef.current = map;
+          installBasemapImageResolver(map);
           const droneElement = document.createElement("div");
           droneElement.className =
             "flex size-7 items-center justify-center text-primary";
@@ -337,7 +277,7 @@ export const MapCanvas = forwardRef<MapHandle, Props>(
             local = false;
             latest.current.onStatus({ phase: "loading" });
             window.clearTimeout(loadTimeout);
-            loadTimeout = window.setTimeout(fallback, 12_000);
+            loadTimeout = window.setTimeout(fallback, 30_000);
             map.setStyle(basemapStyle(latest.current.basemap));
           }
           retryRef.current = loadBasemap;
@@ -359,13 +299,13 @@ export const MapCanvas = forwardRef<MapHandle, Props>(
           });
           map.on("error", () => {
             if (disposed || local) return;
-            if (!map?.getLayer("flight-route")) fallback();
+            if (!map || !hasBasemapStyle(map)) fallback();
             else
               latest.current.onStatus({
                 phase: "ready",
                 offline: true,
                 message:
-                  "Some basemap tiles could not load. The GPS route remains available.",
+                  "Some basemap resources could not load. The GPS route remains available.",
               });
           });
           resizeObserver = new ResizeObserver(() => map?.resize());
@@ -387,7 +327,7 @@ export const MapCanvas = forwardRef<MapHandle, Props>(
             attributes: true,
             attributeFilter: ["class"],
           });
-          loadTimeout = window.setTimeout(fallback, 12_000);
+          loadTimeout = window.setTimeout(fallback, 30_000);
         })
         .catch((error) => {
           if (!disposed)
