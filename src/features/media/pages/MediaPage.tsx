@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
@@ -10,6 +10,7 @@ import {
   Camera,
   Clapperboard,
   FileImage,
+  Expand,
   Film,
   FolderSearch,
   Images,
@@ -63,7 +64,7 @@ import { useCustomClassifications } from "../services/useCustomClassifications";
 import type { CustomClassificationActions } from "../components/CustomClassificationManager";
 import { VicClassificationControls, VicFilterSidebar, type VisualGalleryControls } from "../components/VicClassification";
 import { nextReviewImage } from "../services/nextReviewImage";
-import { GALLERY_TILE_SIZES, readGalleryTileWidth, saveGalleryTileWidth } from "../model/galleryTileSize";
+import { GALLERY_TILE_SIZES, galleryTileLayout, parseGalleryTileSize, readGalleryTileSize, saveGalleryTileSize, type GalleryTileSize } from "../model/galleryTileSize";
 import { cn } from "@/lib/utils";
 import { VirtualMediaCache } from "../services/virtualMediaCache";
 import { galleryScrollAnchor } from "../services/galleryScrollAnchor";
@@ -72,6 +73,8 @@ import { useGalleryActive } from "../services/useGalleryActive";
 import { clearVideoThumbnails } from "../utils/videoThumbnails";
 import { GalleryPrefetch, galleryPrefetchRange } from "../services/galleryPrefetch";
 import { clearPreparedThumbnails, prepareThumbnail, useThumbnailEpoch } from "../services/preparedThumbnails";
+
+const MediaImageViewer = lazy(() => import("../components/MediaImageViewer"));
 
 type GalleryClassification = {
   showFaceBoxes: boolean;
@@ -86,8 +89,8 @@ type GalleryClassification = {
   saving: boolean;
 };
 type MediaGalleryProps = {
-  tileWidth: number;
-  onTileWidthChange: (width: number) => void;
+  tileSize: GalleryTileSize;
+  onTileSizeChange: (size: GalleryTileSize) => void;
   classification?: GalleryClassification;
   directorySearch?: ReactNode;
   caseDatabasePath: string | null;
@@ -98,6 +101,7 @@ type MediaGalleryProps = {
   mediaType: "image" | "video";
   fetchPage: (type: "image" | "video", offset: number) => Promise<FileViewMediaPage>;
   onSelectItem: (item: MediaItem) => void;
+  onOpenImage?: (item: MediaItem) => void;
   selectedItem: MediaItem | null;
   tiles: MediaItem[];
   title: string;
@@ -119,6 +123,7 @@ type VirtualizedMediaGridData = {
   columnCount: number;
   mediaType: "image" | "video";
   onSelectItem: (item: MediaItem) => void;
+  onOpenImage?: (item: MediaItem) => void;
   selectedPath: string | null;
   cache: VirtualMediaCache;
 };
@@ -135,8 +140,8 @@ export function MediaPage() {
     setShowFaceBoxes(visible);
     try { localStorage.setItem("cultivator.media.showFaceBoxes", String(visible)); } catch { /* Keep the session preference. */ }
   };
-  const [tileWidth, setTileWidth] = useState<number>(readGalleryTileWidth);
-  const handleTileWidthChange = (width: number) => { setTileWidth(width); saveGalleryTileWidth(width); };
+  const [tileSize, setTileSize] = useState<GalleryTileSize>(readGalleryTileSize);
+  const handleTileSizeChange = (size: GalleryTileSize) => { setTileSize(size); saveGalleryTileSize(size); };
   const galleryActive = useGalleryActive();
   useEffect(() => {
     if (!galleryActive) { clearPreparedThumbnails(); clearVideoThumbnails(); }
@@ -148,6 +153,7 @@ export function MediaPage() {
   });
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
   const [playerItem, setPlayerItem] = useState<MediaItem | null>(null);
+  const [viewer, setViewer] = useState<{ item: MediaItem; context: string } | null>(null);
   const [dataSources, setDataSources] = useState<DataSourceRecord[]>([]);
   const [selectedDataSourceId, setSelectedDataSourceId] = useState<string | null>(
     null,
@@ -160,6 +166,7 @@ export function MediaPage() {
   const selectedItemRef = useRef(selectedItem);
   selectedItemRef.current = selectedItem;
   const classificationContext = JSON.stringify([activeCase?.databasePath, selectedDataSourceId, mediaSource]);
+  useEffect(() => { setViewer(null); }, [classificationContext, galleryActive]);
   const [directorySelection, setDirectorySelection] = useState<{ context: string; path: string } | null>(null);
   const directoryFilter = directorySelection?.context === classificationContext ? directorySelection.path : null;
   const [hashsetSelection, setHashsetSelection] = useState<{ context: string; filter: HashsetFilter } | null>(null);
@@ -578,8 +585,8 @@ export function MediaPage() {
         <TabsContent value="photos" className="m-0 min-h-0 flex-1">
           <MediaGallery
             directorySearch={mediaFilters("image")}
-            tileWidth={tileWidth}
-            onTileWidthChange={handleTileWidthChange}
+            tileSize={tileSize}
+            onTileSizeChange={handleTileSizeChange}
             classification={{
               showFaceBoxes, onShowFaceBoxesChange: handleShowFaceBoxesChange,
               custom: { categories: customClassifications.categories, disabled: !customClassifications.ready || customClassifications.busy,
@@ -611,14 +618,15 @@ export function MediaPage() {
             fetchPage={fetchPage}
             selectedItem={selectedItem?.mediaType === "image" ? selectedItem : null}
             onSelectItem={handleSelectItem}
+            onOpenImage={item => setViewer({ item, context: classificationContext })}
             totalCount={fileViewPages.image?.totalCount}
           />
         </TabsContent>
         <TabsContent value="videos" className="m-0 min-h-0 flex-1">
           <MediaGallery
             directorySearch={mediaFilters("video")}
-            tileWidth={tileWidth}
-            onTileWidthChange={handleTileWidthChange}
+            tileSize={tileSize}
+            onTileSizeChange={handleTileSizeChange}
             caseDatabasePath={activeCase?.databasePath ?? null}
             title="Video Gallery"
             icon={Video}
@@ -639,14 +647,17 @@ export function MediaPage() {
         </TabsContent>
       </Tabs>
 
+      {galleryActive && viewer?.context === classificationContext && <Suspense fallback={null}>
+        <MediaImageViewer key={viewer.item.path} item={viewer.item} onClose={() => setViewer(null)} />
+      </Suspense>}
       <VideoPlayerSheet item={galleryActive ? playerItem : null} onOpenChange={setPlayerItem} />
     </div>
   );
 }
 
 function MediaGallery({
-  tileWidth,
-  onTileWidthChange,
+  tileSize,
+  onTileSizeChange,
   classification,
   directorySearch,
   caseDatabasePath,
@@ -657,6 +668,7 @@ function MediaGallery({
   mediaType,
   fetchPage,
   onSelectItem,
+  onOpenImage,
   selectedItem,
   tiles,
   title,
@@ -677,12 +689,14 @@ function MediaGallery({
           <Badge variant="secondary" className="h-5 rounded-sm text-[11px]">
             {(totalCount ?? tiles.length).toLocaleString()}{classification?.visual?.collapseSimilar && !classification.visual.stackId ? " groups" : ""}
           </Badge>
+          {onOpenImage && <Button size="icon-xs" variant="ghost" title="Open image" aria-label="Open selected image"
+            disabled={!selectedItem} onClick={() => { if (selectedItem) onOpenImage(selectedItem); }}><Expand /></Button>}
           <label className="ml-auto flex shrink-0 items-center gap-1 text-[11px]">
             Tile size
-            <select aria-label={`${title} tile size`} value={tileWidth}
+            <select aria-label={`${title} tile size`} value={tileSize}
               className="h-6 rounded-sm border bg-background px-1 text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              onChange={(event) => onTileWidthChange(Number(event.target.value))}>
-              {GALLERY_TILE_SIZES.map((size) => <option key={size.width} value={size.width}>{size.label}</option>)}
+              onChange={(event) => onTileSizeChange(parseGalleryTileSize(event.target.value))}>
+              {GALLERY_TILE_SIZES.map((size) => <option key={size.value} value={size.value}>{size.label}</option>)}
             </select>
           </label>
         </div>
@@ -691,12 +705,13 @@ function MediaGallery({
             <VirtualizedMediaGrid
               showFaceBoxes={classification?.showFaceBoxes ?? true}
               customCategories={classification?.custom.categories}
-              tileWidth={tileWidth}
+              tileSize={tileSize}
               focusTarget={classification?.focusTarget}
               onClassify={classification?.onClassify}
               classificationSaving={classification?.saving}
               caseDatabasePath={caseDatabasePath}
               mediaType={mediaType}
+              onOpenImage={onOpenImage}
               onSelectItem={onSelectItem}
               selectedPath={selectedItem?.path ?? null}
               tiles={tiles}
@@ -719,13 +734,14 @@ function MediaGallery({
 function VirtualizedMediaGrid({
   showFaceBoxes,
   customCategories,
-  tileWidth,
+  tileSize,
   focusTarget,
   onClassify,
   classificationSaving,
   caseDatabasePath,
   mediaType,
   onSelectItem,
+  onOpenImage,
   selectedPath,
   tiles,
   totalCount,
@@ -733,13 +749,14 @@ function VirtualizedMediaGrid({
 }: {
   showFaceBoxes: boolean;
   customCategories?: ClassificationDefinition[];
-  tileWidth: number;
+  tileSize: GalleryTileSize;
   focusTarget?: GalleryClassification["focusTarget"];
   onClassify?: GalleryClassification["onClassify"];
   classificationSaving?: boolean;
   caseDatabasePath: string | null;
   mediaType: "image" | "video";
   onSelectItem: (item: MediaItem) => void;
+  onOpenImage?: (item: MediaItem) => void;
   selectedPath: string | null;
   tiles: MediaItem[];
   totalCount: number;
@@ -764,7 +781,8 @@ function VirtualizedMediaGrid({
     cache.activate();
     return () => cache.dispose();
   }, [cache]);
-  const thumbnailEdge = tileWidth * (window.devicePixelRatio || 1) <= 144 ? 128 : 256;
+  const { columnCount, columnWidth } = galleryTileLayout(size.width, tileSize);
+  const thumbnailEdge = columnWidth * (window.devicePixelRatio || 1) <= 144 ? 128 : 256;
   const prefetch = useMemo(() => new GalleryPrefetch(
     (index) => cache.itemAt(index),
     (item, priority) => prepareThumbnail(caseDatabasePath!, item, priority, thumbnailEdge),
@@ -780,14 +798,6 @@ function VirtualizedMediaGrid({
     cache.setRange(range.start, range.stop);
     if (mediaType === "image" && caseDatabasePath) prefetch.update(range);
   }, [cache, prefetch, visibleRange, settings, size.height, galleryActive, totalCount, mediaType, caseDatabasePath, revision, thumbnailEdge]);
-  const columnCount = Math.max(
-    1,
-    Math.floor(Math.max(size.width, tileWidth) / tileWidth),
-  );
-  const columnWidth = Math.max(
-    Math.min(tileWidth, Math.max(1, size.width)),
-    Math.floor(Math.max(1, size.width) / columnCount),
-  );
   const rowHeight =
     Math.round((columnWidth - MEDIA_TILE_GAP) * MEDIA_TILE_ASPECT_RATIO) +
     (mediaType === "image" ? 38 : 0) +
@@ -822,6 +832,7 @@ function VirtualizedMediaGrid({
     columnCount,
     mediaType,
     onSelectItem,
+    onOpenImage,
     selectedPath,
     cache,
   };
@@ -896,6 +907,7 @@ function MediaGridCell({
         isSelected={data.selectedPath === tile.path}
         mediaType={data.mediaType}
         tile={tile}
+        onOpenImage={data.onOpenImage}
         onSelectItem={data.onSelectItem}
       />
     </div>
@@ -914,6 +926,7 @@ function MediaTilePreview({
   isSelected,
   mediaType,
   onSelectItem,
+  onOpenImage,
   tile,
 }: {
   showFaceBoxes: boolean;
@@ -927,6 +940,7 @@ function MediaTilePreview({
   isSelected: boolean;
   mediaType: "image" | "video";
   onSelectItem: (item: MediaItem) => void;
+  onOpenImage?: (item: MediaItem) => void;
   tile: MediaItem;
 }) {
   const classification = mediaType === "image" ? vicClassification(tile.vicCategory, customCategories) : undefined;
@@ -944,9 +958,13 @@ function MediaTilePreview({
       aria-pressed={isSelected}
       data-media-path={tile.path}
       title={tile.path}
+      onDoubleClick={() => onOpenImage?.(tile)}
       onClick={() => onSelectItem(tile)}
       onContextMenu={() => onSelectItem(tile)}
       onKeyDown={(event) => {
+        if (event.key === "Enter" && onOpenImage) {
+          event.preventDefault(); onOpenImage(tile); return;
+        }
         if (onClassify && !classificationSaving && !event.repeat && !event.ctrlKey && !event.altKey && !event.metaKey && /^[0-4]$/.test(event.key)) {
           event.preventDefault(); onSelectItem(tile); onClassify(tile, Number(event.key) as VicCategory, itemIndex);
         }
@@ -988,6 +1006,9 @@ function MediaTilePreview({
     <ContextMenu>
       <ContextMenuTrigger asChild>{tileButton}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-44">
+        {onOpenImage && <ContextMenuItem className="text-xs" onSelect={() => onOpenImage(tile)}>
+          <Expand className="size-3.5" aria-hidden="true" />Open image
+        </ContextMenuItem>}
         {onClassify && <>
           {[...VIC_CATEGORIES, ...(customCategories ?? [])].map((entry) => <ContextMenuItem key={entry.value} className="gap-2 text-xs" disabled={classificationSaving}
             onSelect={() => onClassify(tile, entry.value)}>
