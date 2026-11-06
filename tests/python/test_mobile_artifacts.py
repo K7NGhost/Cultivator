@@ -18,6 +18,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import unittest
@@ -36,9 +37,9 @@ def interpreter(platform):
     return Path(candidate) if candidate else None
 
 
-def invoke_worker(platform, request, *, provide=None, timeout=180):
+def invoke_worker(platform, request, *, provide=None, timeout=180, worker_path=WORKER):
     python = interpreter(platform)
-    process = subprocess.Popen([str(python), "-I", "-B", str(WORKER), str(BUNDLES / platform)],
+    process = subprocess.Popen([str(python), "-I", "-B", str(worker_path), str(BUNDLES / platform)],
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                text=True, encoding="utf-8", errors="strict")
     events, materialized = [], []
@@ -290,6 +291,188 @@ class MobileIntegrationTests(unittest.TestCase):
             path.parent.mkdir(parents=True)
             path.write_text("ro.build.version.release=15\nro.product.model=Cultivator Fixture\n", encoding="utf-8")
         self.exercise("android", fixture, "Cultivator Fixture")
+
+    def test_android_failed_modules_do_not_stop_later_parsers(self):
+        self.require_python("android")
+        with tempfile.TemporaryDirectory(prefix="cultivator-mobile-failures-") as directory:
+            case = Path(directory)
+            root = case / "input"
+            (root / "system").mkdir(parents=True)
+            (root / "system/build.prop").write_text("ro.product.system.model=After failed parsers\n", encoding="utf-8")
+            index = case / "index.ndjson"
+            create_index(root, index)
+            # Run the real dispatcher, LAVA output and import path, injecting
+            # failures without modifying the bundled parser snapshot.
+            runner = case / "worker.py"
+            runner.write_text(f'''
+import importlib.util
+from dataclasses import replace
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("mobile_worker", {str(WORKER)!r})
+worker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(worker)
+original_catalog = worker.load_catalog
+def load_catalog(bundle):
+    loader, catalog = original_catalog(bundle)
+    build = next(p for p in loader.plugins if p.module_name == "build")
+    def broken(*args):
+        raise ValueError("malformed cached media")
+    def exits(*args):
+        raise SystemExit(1)
+    loader._plugins = {{p.name: p for p in (
+        replace(build, name="fixture_exception", category="A", method=broken),
+        replace(build, name="fixture_exit", category="B", method=exits),
+        replace(build, name="fixture_search", category="C", search="*/broken-search"),
+        replace(build, category="Z"),
+    )}}
+    return loader, catalog
+worker.load_catalog = load_catalog
+original_seeker = worker.evidence_seeker
+def evidence_seeker(base, index):
+    class Seeker(original_seeker(base, index)):
+        def search(self, pattern, *args, **kwargs):
+            if pattern == "*/broken-search":
+                raise OSError("unable to stage parser input")
+            return super().search(pattern, *args, **kwargs)
+    return Seeker
+worker.evidence_seeker = evidence_seeker
+worker.main()
+''', encoding="utf-8")
+            events, _ = invoke_worker("android", {
+                "roots": [{"path": str(root), "indexPath": str(index)}],
+                "outputRoot": str(case / "output"), "options": {},
+            }, worker_path=runner)
+            self.assertEqual(events[-1]["type"], "done")
+            self.assertEqual({f["artifact_name"] for f in events[-1]["failures"]},
+                             {"fixture_exception", "fixture_exit", "fixture_search"})
+            artifacts = [e for e in events if e["type"] == "artifact"]
+            self.assertIn("After failed parsers", json.dumps(artifacts))
+            progress = [e for e in events if e["type"] == "progress"]
+            self.assertEqual([e["completed"] for e in progress], [1, 2, 3, 4])
+            self.assertEqual(progress[-1]["completed"], progress[-1]["total"])
+            coverage = json.loads((case / "output/coverage.json").read_text())
+            self.assertEqual(len(coverage[0]["modules"]), 4)
+
+    def test_archives_parse_directly_without_extracting_unrelated_members(self):
+        for platform in ("ios", "android", "vehicle"):
+            if not interpreter(platform):
+                continue
+            for archive_format in ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz"):
+                with self.subTest(platform=platform, archive_format=archive_format):
+                    self.require_python(platform)
+                    with tempfile.TemporaryDirectory(prefix="cultivator-mobile-archive-") as directory:
+                        case = Path(directory)
+                        if platform == "ios":
+                            member = "System/Library/CoreServices/SystemVersion.plist"
+                            contents = plistlib.dumps({"ProductVersion": "18.3.2", "ProductBuildVersion": "ArchiveFixture"})
+                        elif platform == "android":
+                            member = "system/build.prop"
+                            contents = b"ro.product.system.model=ArchiveFixture\n"
+                        else:
+                            member = "bluetooth_v1.ddb"
+                            contents = b"<KeyValuePairs>\n<Key>device_name</Key>\n<Value>ArchiveFixture</Value>\n</KeyValuesPairs>\n"
+                        path = case / ("device." + archive_format)
+                        unrelated = "unrelated-secret.bin"
+                        members = {member: contents, unrelated: b"leave this compressed"}
+                        if archive_format == "zip":
+                            with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as output:
+                                for name, data in members.items():
+                                    output.writestr(name, data)
+                        else:
+                            mode = {"tar": "w", "tar.gz": "w:gz", "tar.bz2": "w:bz2", "tar.xz": "w:xz"}[archive_format]
+                            with tarfile.open(path, mode) as output:
+                                for name, data in members.items():
+                                    info = tarfile.TarInfo(name)
+                                    info.size, info.mtime = len(data), 1700000000
+                                    output.addfile(info, io.BytesIO(data))
+                        original = hashlib.sha256(path.read_bytes()).hexdigest()
+                        index = case / "index.ndjson"
+                        index.write_text(json.dumps({"path": str(path), "relative": path.name, "kind": "file",
+                                                     "provenance": {"source": "fixture.E01", "evidencePath": "/" + path.name}}) + "\n", encoding="utf-8")
+                        events, materialized = invoke_worker(platform, {
+                            "roots": [{"path": str(path), "indexPath": str(index), "inputType": "archive"}],
+                            "outputRoot": str(case / "output"), "options": {},
+                        })
+                        self.assertEqual(events[-1]["type"], "done")
+                        self.assertEqual(events[-1]["failures"], [], events[-8:])
+                        artifacts = [event for event in events if event["type"] == "artifact"]
+                        self.assertIn("ArchiveFixture", json.dumps(artifacts))
+                        sourced = [event for event in artifacts if event["payload"]["provenance"].get("archiveMember") == member]
+                        self.assertTrue(sourced)
+                        self.assertTrue(all(event["filePath"] == str(path) for event in sourced))
+                        self.assertTrue(all(event["payload"]["provenance"]["source"] == "fixture.E01" for event in sourced))
+                        self.assertEqual(materialized, [str(path)])
+                        self.assertFalse(list((case / "output").rglob(unrelated)))
+                        self.assertFalse(list((case / "output").rglob("_decompressed_input.tar")))
+                        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), original)
+                        self.assertTrue((case / "output/source-1/search-performance.json").is_file())
+
+    def test_archive_seeker_stages_folders_and_sqlite_companions(self):
+        self.require_python("android")
+        script = f'''
+import importlib.util
+import io
+import sys
+import tarfile
+import tempfile
+import zipfile
+from pathlib import Path
+sys.path.insert(0, {str(BUNDLES / "android")!r})
+from scripts.search_files import FileSeekerZip, FileSeekerTar
+spec = importlib.util.spec_from_file_location("mobile_worker", {str(WORKER)!r})
+worker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(worker)
+for archive_format, base in (("zip", FileSeekerZip), ("zip-directories", FileSeekerZip), ("tar", FileSeekerTar), ("tar.gz", FileSeekerTar)):
+    with tempfile.TemporaryDirectory() as temporary:
+        kind = "zip" if archive_format.startswith("zip") else "tar"
+        root = Path(temporary)
+        archive = root / ("input." + archive_format)
+        members = {{"folder/Cache.db": b"db", "folder/Cache.db-wal": b"wal",
+                   "folder/Cache.db-shm": b"shm", "folder/Cache.db-journal": b"journal",
+                   "folder/nested/child.bin": b"child", "unrelated.bin": b"ignore"}}
+        if kind == "zip":
+            with zipfile.ZipFile(archive, "w") as output:
+                if archive_format == "zip-directories":
+                    output.writestr("folder/", b"")
+                for name, data in members.items():
+                    output.writestr(name, data)
+        else:
+            with tarfile.open(archive, "w:gz" if archive_format == "tar.gz" else "w") as output:
+                for name, data in {{**members, "/absolute/held.bin": b"absolute", "../outside.bin": b"outside"}}.items():
+                    info = tarfile.TarInfo(name)
+                    info.size = len(data)
+                    output.addfile(info, io.BytesIO(data))
+                link = tarfile.TarInfo("folder/alias.db")
+                link.type, link.linkname = tarfile.LNKTYPE, "folder/Cache.db"
+                output.addfile(link)
+        index = [{{"path": str(archive), "relative": archive.name, "kind": "file", "provenance": {{}}}}]
+        seeker = worker.archive_seeker(base, index, archive, kind)(str(archive), str(root / "data"))
+        try:
+            assert getattr(seeker, "_spool_path", None) is None
+            assert not (root / "_decompressed_input.tar").exists()
+            found = seeker.search("*/Cache.db")
+            assert len(found) == 1 and Path(found[0]).read_bytes() == b"db", found
+            for suffix in ("-wal", "-shm", "-journal"):
+                assert (root / "data/folder" / ("Cache.db" + suffix)).is_file()
+            found = seeker.search("*/folder")
+            assert len(found) == 1 and Path(found[0]).is_dir(), found
+            assert (root / "data/folder/nested/child.bin").read_bytes() == b"child"
+            assert not (root / "data/unrelated.bin").exists()
+            assert seeker.search("*/folder") == found
+            assert seeker.search("*/Cache.db", return_on_first_hit=True) == str(root / "data/folder/Cache.db")
+            if kind == "tar":
+                found = seeker.search("*/held.bin")
+                assert Path(found[0]).read_bytes() == b"absolute"
+                assert Path(found[0]).is_relative_to(root / "data")
+                assert seeker.search("*outside.bin") == []
+                assert not (root / "outside.bin").exists()
+                assert Path(seeker.search("*/alias.db")[0]).read_bytes() == b"db"
+        finally:
+            seeker.cleanup()
+'''
+        result = subprocess.run([str(interpreter("android")), "-I", "-B", "-c", script],
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_vehicle_ford_and_connected_devices(self):
         def fixture(root):

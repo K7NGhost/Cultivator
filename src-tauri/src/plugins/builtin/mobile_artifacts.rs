@@ -119,7 +119,9 @@ impl Platform {
         };
         manifest.python = self.python().into();
         if !ios {
-            manifest.options.retain(|option| option.id == "normalizeArtifacts");
+            manifest
+                .options
+                .retain(|option| option.id == "normalizeArtifacts");
         }
         manifest.entry = format!("builtin:{}-artifacts", self.name());
         manifest.description = format!("Parse bundled {} artifacts and standardize reviewed outputs. Original columns, source references, parser metadata and unmapped tables are retained.", catalog["project"].as_str().unwrap());
@@ -275,6 +277,28 @@ fn key(path: &Path) -> String {
     }
 }
 
+fn container_input_type(path: &Path, platform: Platform) -> Option<&'static str> {
+    if path.is_dir() {
+        return None;
+    }
+    let name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
+    if matches!(platform, Platform::Vehicle) && name.ends_with(".iva") {
+        Some("iva")
+    } else if path.is_file()
+        || [
+            ".zip", ".ufdr", ".clbx", ".tar", ".tar.gz", ".tgz", ".gz", ".tar.bz2", ".tbz2",
+            ".tbz", ".tar.xz", ".txz",
+        ]
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+    {
+        // The worker verifies the content and chooses the ZIP or TAR seeker.
+        Some("archive")
+    } else {
+        None
+    }
+}
+
 fn write_index(
     root: &Path,
     output: &Path,
@@ -391,23 +415,30 @@ fn run_worker(
     ));
     fs::create_dir_all(&output).map_err(|e| e.to_string())?;
     let normalization_config = normalization::prepare(&output)?;
+    // Windows limits the whole command line to 32,767 characters. Keep the
+    // bundled worker in the case output rather than passing its body via -c.
+    let worker_script = output.join("mobile_worker.py");
+    fs::write(
+        &worker_script,
+        include_str!("../../scripting/worker/mobile_artifacts.py"),
+    )
+    .map_err(|e| e.to_string())?;
     let mut allowed = HashSet::new();
     let mut roots = Vec::new();
     let mut seen = HashSet::new();
     for path in context.paths.clone() {
         checkpoint(context)?;
         let root = PathBuf::from(path);
-        if matches!(platform, Platform::Vehicle)
-            && root
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("iva"))
-        {
+        if let Some(input_type) = container_input_type(&root, platform) {
             let index = output.join(format!("index-{}.ndjson", roots.len()));
             let provenance = if let Some(entry) = evidence::indexed_metadata(&root)? {
                 json!({"source":entry.source,"partition":entry.partition,"evidencePath":entry.evidence_path,"metadata":entry.metadata})
             } else {
                 if !root.is_file() {
-                    return Err(format!("Vehicle export not found: {}", root.display()));
+                    return Err(format!(
+                        "Archive or vehicle export not found: {}",
+                        root.display()
+                    ));
                 }
                 json!({"source":root.to_string_lossy(),"evidencePath":"/"})
             };
@@ -417,7 +448,7 @@ fn run_worker(
             let entry = json!({"path":root.to_string_lossy(),"relative":root.file_name().unwrap_or_default().to_string_lossy(),"kind":"file","provenance":provenance});
             fs::write(&index, format!("{}\n", entry)).map_err(|e| e.to_string())?;
             allowed.insert(key(&root));
-            roots.push(json!({"path":root.to_string_lossy(),"indexPath":index.to_string_lossy(),"inputType":"iva"}));
+            roots.push(json!({"path":root.to_string_lossy(),"indexPath":index.to_string_lossy(),"inputType":input_type}));
             continue;
         }
         if !root.is_dir() {
@@ -459,10 +490,11 @@ fn run_worker(
     if roots.is_empty() {
         if matches!(platform, Platform::Vehicle) {
             return Err(
-                "Select an imported filesystem, logical directory, or Berla .iVa export.".into(),
+                "Select an imported filesystem, directory, ZIP/TAR archive, or Berla .iVa export."
+                    .into(),
             );
         }
-        return Err("Select an imported filesystem, logical directory or extracted mobile backup. Run Archive Extractor first for archives.".into());
+        return Err("Select an imported filesystem, directory, mobile backup, or ZIP/TAR archive (including compressed TAR).".into());
     }
     let artifact_spool = output.join("artifacts.ndjson");
     let mut artifact_writer =
@@ -474,8 +506,11 @@ fn run_worker(
         // for each root prevents one device's state from affecting another device.
         let mut worker = PythonWorker::start(
             python,
-            include_str!("../../scripting/worker/mobile_artifacts.py"),
-            &[bundle.to_string_lossy().into_owned()],
+            "import pathlib,sys; p=sys.argv.pop(1); exec(compile(pathlib.Path(p).read_text(encoding='utf-8'),p,'exec'))",
+            &[
+                worker_script.to_string_lossy().into_owned(),
+                bundle.to_string_lossy().into_owned(),
+            ],
         )?;
         let source_output = output.join(format!("input-{}", root_number + 1));
         worker.send(&json!({"roots":[root],"outputRoot":source_output.to_string_lossy(),"sourceIndex":root_number,"options":context.options,"normalization":normalization_config}))?;
@@ -538,7 +573,10 @@ fn run_worker(
                         .as_array()
                         .ok_or("Missing parser coverage")?;
                     for failure in failures {
-                        context.log("error", format!("Mobile artifact parser failed: {failure}"));
+                        context.log(
+                            "warn",
+                            format!("Mobile artifact parser failed; remaining parsers continued: {failure}"),
+                        );
                     }
                     saved_rows += response["rows"]
                         .as_u64()
@@ -565,6 +603,75 @@ fn run_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn archive_routing_distinguishes_directories_and_containers() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("directory.zip");
+        fs::create_dir(&folder).unwrap();
+        let unnamed = directory.path().join("archive-without-extension");
+        fs::write(&unnamed, b"worker verifies content").unwrap();
+        for platform in [Platform::Ios, Platform::Android, Platform::Vehicle] {
+            assert_eq!(container_input_type(&folder, platform), None);
+            assert_eq!(container_input_type(&unnamed, platform), Some("archive"));
+            for name in [
+                "device.ZIP",
+                "device.tar",
+                "device.tgz",
+                "device.tar.bz2",
+                "device.tar.xz",
+                "device.ufdr",
+            ] {
+                assert_eq!(
+                    container_input_type(&directory.path().join(name), platform),
+                    Some("archive")
+                );
+            }
+        }
+        assert_eq!(
+            container_input_type(&directory.path().join("device.iVa"), Platform::Vehicle),
+            Some("iva")
+        );
+    }
+
+    #[test]
+    #[ignore = "requires CULTIVATOR_*_TEST_PYTHON with bundled dependencies"]
+    fn parses_archive_datasources_without_archive_extractor() {
+        for (platform, variable, member, contents) in [
+            (Platform::Ios, "CULTIVATOR_IOS_TEST_PYTHON", "System/Library/CoreServices/SystemVersion.plist",
+             b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>ProductVersion</key><string>18.3.2</string><key>ProductBuildVersion</key><string>DirectArchiveFixture</string></dict></plist>".as_slice()),
+            (Platform::Android, "CULTIVATOR_ANDROID_TEST_PYTHON", "system/build.prop",
+             b"ro.product.system.model=DirectArchiveFixture\n".as_slice()),
+            (Platform::Vehicle, "CULTIVATOR_VEHICLE_TEST_PYTHON", "bluetooth_v1.ddb",
+             b"<KeyValuePairs>\n<Key>device_name</Key>\n<Value>DirectArchiveFixture</Value>\n</KeyValuePairs>\n".as_slice()),
+        ] {
+            let case = tempfile::tempdir().unwrap();
+            let archive = case.path().join("device.zip");
+            let mut zip = zip::ZipWriter::new(File::create(&archive).unwrap());
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file(member, options).unwrap();
+            zip.write_all(contents).unwrap();
+            zip.start_file("unrelated-secret.bin", options).unwrap();
+            zip.write_all(b"do not extract").unwrap();
+            zip.finish().unwrap();
+            let before = Sha256::digest(fs::read(&archive).unwrap());
+            let output = case.path().join("output");
+            let mut progress = |_| {};
+            let mut context = BuiltinPluginContext::new(
+                vec![archive.to_string_lossy().into_owned()], Some(output.clone()), json!({}),
+                vec![], &mut progress, &|| false,
+            );
+            let bundle = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/mobile").join(platform.name());
+            let python = PathBuf::from(std::env::var(variable).expect(variable));
+            run_worker(&mut context, &bundle, &python, platform).unwrap();
+            let effects = context.into_effects();
+            let rows = fs::read_to_string(effects.artifact_spool.unwrap()).unwrap();
+            assert!(rows.contains("DirectArchiveFixture"), "{}", platform.name());
+            let run = fs::read_dir(output).unwrap().next().unwrap().unwrap().path();
+            assert!(!run.join("input-1/source-1/data/unrelated-secret.bin").exists());
+            assert_eq!(before, Sha256::digest(fs::read(&archive).unwrap()));
+        }
+    }
+
     #[test]
     fn all_catalog_sources_are_bundled_and_hashed() {
         for platform in [Platform::Ios, Platform::Android, Platform::Vehicle] {

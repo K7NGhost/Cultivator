@@ -6,6 +6,7 @@ served by the parent Inodex reader; upstream seekers create parser working copie
 import base64
 from bisect import bisect_left
 from collections import defaultdict
+from copy import copy
 import contextlib
 import fnmatch
 import glob
@@ -19,8 +20,10 @@ import re
 import sqlite3
 import sys
 import tempfile
+import tarfile
 import traceback
 import time
+import zipfile
 from datetime import datetime, timezone
 
 PROTOCOL = sys.stdout
@@ -156,6 +159,134 @@ class EvidencePathIndex:
                 children.append((ordinal, item["path"]))
             position += 1
         yield from (path for _, path in sorted(children))
+
+
+def archive_seeker(base, index, container, kind):
+    """Index archive headers; let upstream stage only matching members and links."""
+    source = next(item for item in index if path_key(item["path"]) == path_key(container))
+    container_path = str(container)
+
+    class ArchiveSeeker(base):
+        def _read_from_a_decompressed_copy(self, *args):
+            # Upstream normally writes the whole uncompressed TAR as a spool.
+            # Read the compressed source in place instead; never create that copy.
+            emit({"type": "log", "level": "info", "message":
+                  "Reading compressed TAR in place; only parser matches will be extracted."})
+
+        def _index_member_names(self):
+            result = super()._index_member_names()
+            if kind == "zip":
+                return result
+            members, versions = result
+            self._original_names = {}
+            def bounded(member):
+                name = member.name.replace("\\", "/")
+                if ".." in name.split("/"):
+                    return None
+                # Forensic TARs can store absolute device paths. Strip their
+                # leading slash so upstream cannot write outside data_folder.
+                name = name.lstrip("/")
+                if not name or ":" in name.split("/", 1)[0]:
+                    return None
+                self._original_names[name] = member.name
+                safe = copy(member)
+                safe.name = name
+                return safe
+            safe_members = [safe for member in members if (safe := bounded(member)) is not None]
+            safe_versions = {}
+            for name, duplicates in versions.items():
+                entries = [(ordinal, safe) for ordinal, member in duplicates
+                           if (safe := bounded(member)) is not None]
+                if entries:
+                    safe_versions[entries[0][1].name] = entries
+            return safe_members, safe_versions
+
+        def __init__(self, path, data_folder):
+            super().__init__(path, data_folder)
+            self._candidate_attribute = "_search_names" if kind == "zip" else "_search_members"
+            self._archive_candidates = list(getattr(self, self._candidate_attribute))
+            self._members_by_name = {member if kind == "zip" else member.name: member
+                                     for member in self._archive_candidates}
+            records = {}
+            self._synthetic_directories = set()
+            for name, member in self._members_by_name.items():
+                directory = name.endswith("/") if kind == "zip" else member.isdir()
+                record_name = name.rstrip("/") if directory else name
+                if not record_name:
+                    continue
+                records[record_name] = self._record(record_name, "directory" if directory else "file", member)
+                if record_name != name:
+                    self._synthetic_directories.add(record_name)
+            # ZIPs need not contain explicit directory entries. Parsers searching
+            # for a folder must still receive that folder and its children.
+            for name in list(records):
+                parent = name.rstrip("/").rsplit("/", 1)[0] if "/" in name.rstrip("/") else ""
+                while parent:
+                    if parent not in records and parent + "/" not in records:
+                        records[parent] = self._record(parent, "directory")
+                        self._synthetic_directories.add(parent)
+                    parent = parent.rsplit("/", 1)[0] if "/" in parent else ""
+            self._archive_lookup = EvidencePathIndex(list(records.values()))
+            type(self)._cultivator_lookup = self._archive_lookup
+            # Retain the container record for artifacts without a source member.
+            index.extend(records.values())
+
+        def _record(self, name, entry_kind, member=None):
+            info = (self._chosen.get(member) or self.zip_file.getinfo(member)) if kind == "zip" and member is not None else member
+            size = (info.file_size if kind == "zip" else info.size) if info is not None else 0
+            metadata = {"size": size, "kind": entry_kind}
+            if kind == "tar" and info is not None:
+                metadata["times"] = {"modified": {"seconds": info.mtime, "basis": "utc"}}
+            original_name = member if kind == "zip" and member is not None else getattr(self, "_original_names", {}).get(name, name)
+            provenance = {**source.get("provenance", {}), "archiveMember": original_name,
+                          "archivePath": container_path, "metadata": metadata,
+                          "containerProvenance": source.get("provenance", {})}
+            return {"path": name, "relative": name.replace("\\", "/"), "kind": entry_kind,
+                    "containerPath": container_path, "provenance": provenance}
+
+        def _stage(self, pattern, names, first=False, force=False):
+            all_candidates = getattr(self, self._candidate_attribute)
+            setattr(self, self._candidate_attribute,
+                    [self._members_by_name[name] for name in names if name in self._members_by_name])
+            started = time.perf_counter()
+            try:
+                return super().search(pattern, first, force)
+            finally:
+                setattr(self, self._candidate_attribute, all_candidates)
+                self._archive_lookup.stats["stagingSeconds"] += time.perf_counter() - started
+
+        def search(self, pattern, return_on_first_hit=False, force=False):
+            if pattern in self.searched and not force:
+                return super().search(pattern, return_on_first_hit, force)
+            matched = self._archive_lookup.match(pattern, return_on_first_hit)
+            names = [item["path"] for item in matched]
+            result = self._stage(pattern, names, return_on_first_hit, force)
+            directories = [item["path"] for item in matched if item["kind"] == "directory"]
+            for directory in directories:
+                if directory in self._synthetic_directories:
+                    from scripts.search_files import sanitize_file_path
+                    parts = [part for part in sanitize_file_path(directory).replace("\\", "/").split("/")
+                             if part not in ("", ".", "..")]
+                    folder = os.path.join(self.data_folder, *parts)
+                    os.makedirs(folder, exist_ok=True)
+                    if return_on_first_hit:
+                        result = folder
+                    else:
+                        result.append(folder)
+                children = list(self._archive_lookup.descendants(directory))
+                self._stage(glob.escape("root/" + directory.rstrip("/")) + "/*", children, force=force)
+                names.extend(children)
+            # SQLite WAL/SHM/journal files belong beside the matched database.
+            for name in dict.fromkeys(names):
+                for suffix in ("-wal", "-shm", "-journal"):
+                    companion = name + suffix
+                    if companion in self._members_by_name:
+                        self._stage(glob.escape("root/" + companion), [companion], force=force)
+            self.searched[pattern] = [result] if isinstance(result, str) else result
+            return result
+
+    ArchiveSeeker.__name__ = base.__name__
+    return ArchiveSeeker
 
 
 def evidence_seeker(base, index):
@@ -343,7 +474,7 @@ def import_tables(output, root, index, catalog, source_number, normalizer=None):
                 source = sources[0] if sources else root_source
                 if source and source not in sources:
                     sources.append(source)
-                source_reference = {"filePath": source["path"] if source else str(root),
+                source_reference = {"filePath": source.get("containerPath", source["path"]) if source else str(root),
                                     "parser": f"{catalog['project']}:{artifact.get('artifact_key', table)}"}
                 offset = 0
                 while True:
@@ -353,7 +484,7 @@ def import_tables(output, root, index, catalog, source_number, normalizer=None):
                     payload = {
                         "kind": "custom_table", "category": "other", "label": artifact["name"],
                         "source": source_reference,
-                        "sources": [{"filePath": entry["path"], "provenance": entry.get("provenance")} for entry in sources],
+                        "sources": [{"filePath": entry.get("containerPath", entry["path"]), "provenance": entry.get("provenance")} for entry in sources],
                         "group": {"id": f"{catalog['platform']}:{source_number}:{table}", "label": category},
                         "table": {"name": f"{category} / {artifact['name']}", "columns": columns,
                                   "rows": [{column["key"]: json_value(value) for column, value in zip(columns, row)}
@@ -417,6 +548,7 @@ def run(request, bundle):
     core.report.generate_report = lambda *args, **kwargs: None
     original_seeker = core.FileSeekerDir
     original_itunes = getattr(core, "FileSeekerItunes", None)
+    original_zip, original_tar = core.FileSeekerZip, core.FileSeekerTar
     total_rows, failures, coverage = 0, [], []
     roots = request["roots"]
     output_root = Path(request["outputRoot"])
@@ -431,13 +563,24 @@ def run(request, bundle):
         root = Path(item["path"])
         index = load_evidence_index(item["indexPath"])
         core.FileSeekerDir = evidence_seeker(original_seeker, index)
-        extract_type = item.get("inputType", "fs")
+        extract_type = item.get("inputType") or ("fs" if root.is_dir() else
+                       "iva" if catalog["platform"] == "vehicle" and root.suffix.lower() == ".iva" else "archive")
+        if extract_type in ("archive", "zip", "tar", "gz"):
+            materialize([str(root)])
+            if zipfile.is_zipfile(root):
+                extract_type = "zip"
+                core.FileSeekerZip = archive_seeker(original_zip, index, root, "zip")
+            elif tarfile.is_tarfile(root):
+                extract_type = "tar"
+                core.FileSeekerTar = archive_seeker(original_tar, index, root, "tar")
+            else:
+                raise RuntimeError(f"Unsupported or damaged archive: {root}. Expected ZIP or TAR (including compressed TAR).")
         if extract_type == "iva":
             if catalog["platform"] != "vehicle":
                 raise RuntimeError("IVA input requires the vehicle artifact plugin")
             materialize([str(root)])
         backup_password = None
-        if catalog["platform"] == "ios":
+        if catalog["platform"] == "ios" and extract_type == "fs":
             # iTunes physical filenames are hashes, so hydrate only the backup
             # manifests initially. The seeker requests matching hashed files later.
             markers = [entry["path"] for entry in index
@@ -457,6 +600,7 @@ def run(request, bundle):
                         raise RuntimeError("Backup password file is empty")
                 core.FileSeekerItunes = itunes_seeker(original_itunes, index)
                 extract_type = "itunes"
+        if catalog["platform"] == "ios":
             keychain = request.get("options", {}).get("keychainPath", "")
             Context.set_keychain_path(keychain or None)
         options = core.OutputParameters(str(output_root), f"source-{source_number + 1}")
@@ -480,8 +624,9 @@ def run(request, bundle):
         if not success:
             raise RuntimeError(f"{catalog['project']} could not process {root}")
         lavafuncs.lava_finalize_output(options.output_folder_base)
-        if extract_type == "fs":
-            stats = core.FileSeekerDir._cultivator_lookup.stats
+        if extract_type in ("fs", "zip", "tar"):
+            seeker_class = {"fs": core.FileSeekerDir, "zip": core.FileSeekerZip, "tar": core.FileSeekerTar}[extract_type]
+            stats = seeker_class._cultivator_lookup.stats
             (Path(options.output_folder_base) / "search-performance.json").write_text(
                 json.dumps(stats, indent=2), encoding="utf-8")
         rows, errors, modules = import_tables(Path(options.output_folder_base), root, index, catalog,

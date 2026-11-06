@@ -537,80 +537,75 @@ def crunch_artifacts(
             logfunc('[{}/{}] {} [{}] artifact started at {} UTC'.format(plugin_number, len(plugins),
                                                                   plugin.name, plugin.module_name,
                                                                   strftime('%H:%M:%S', gmtime())))
-            if isinstance(plugin.search, list) or isinstance(plugin.search, tuple):
-                search_regexes = plugin.search
-            else:
-                search_regexes = [plugin.search]
             files_found = []
-            log.write(f'<b>For {plugin.name} module</b>')
-            for artifact_search_regex in search_regexes:
-                artifact_search_pattern_id += 1
-                lava_insert_sqlite_artifact_search_pattern(
-                    artifact_search_pattern_id, plugin.module_name, plugin.name, artifact_search_regex)
-                pattern_already_searched = artifact_search_regex in seeker.searched
-                found = seeker.search(artifact_search_regex)
-                if not found:
-                    log.write(f'<ul><li>No file found for regex <i>{artifact_search_regex}</i></li></ul>')
+            outcome = 'interrupted'
+            try:
+                if isinstance(plugin.search, list) or isinstance(plugin.search, tuple):
+                    search_regexes = plugin.search
                 else:
-                    log.write(f'<ul><li>{len(found)} {"files" if len(found) > 1 else "file"} for regex <i>{artifact_search_regex}</i> located at:')
-                    for pathh in found:
-                        # Strip \\?\ only for log display; file_infos is keyed with the
-                        # original long-path form on Windows.
-                        display_path = pathh[4:] if pathh.startswith('\\\\?\\') else pathh
-                        log.write(f'<ul><li>{Context.get_relative_path(display_path)}</li></ul>')
-                        if seeker.file_infos.get(pathh):
-                            file_path_id = id(seeker.file_infos.get(pathh))
-                            if not pattern_already_searched and file_path_id not in file_path_ids:
-                                file_info = seeker.file_infos.get(pathh)
-                                digest, kind = staged_file_record(seeker, pathh, file_info,
-                                                                  hash_files)
-                                lava_insert_sqlite_file_path(file_path_id, file_info.source_path,
-                                                             digest, kind,
-                                                             staged_time_values(file_info) if hash_files else None)
-                                if hashes is not None:
-                                    hashes.write(staged_files_tsv_line(file_info, kind, digest))
-                                    hash_counts[digest is not None] = \
-                                        hash_counts.get(digest is not None, 0) + 1
-                                file_path_ids.add(file_path_id)
-                            lava_insert_sqlite_artifact_link_pattern_to_file(artifact_search_pattern_id, file_path_id)
-                    log.write('</li></ul>')
-                    files_found.extend(found)
-            if files_found:
-                category_folder = os.path.join(out_params.output_folder_base, '_HTML',
-                                               sanitize_report_name(plugin.category, 'category'))
-                if not os.path.exists(category_folder):
-                    try:
-                        os.makedirs(category_folder)
-                    except (FileExistsError, FileNotFoundError) as ex:
-                        logfunc('Error creating {} report directory at path {}'.format(plugin.name, category_folder))
-                        logfunc('Error was {}'.format(str(ex)))
-                        lava_add_module(plugin.module_name, "Error", len(files_found), plugin.name)
-                        continue  # cannot do work
-                try:
+                    search_regexes = [plugin.search]
+                log.write(f'<b>For {plugin.name} module</b>')
+                for artifact_search_regex in search_regexes:
+                    artifact_search_pattern_id += 1
+                    lava_insert_sqlite_artifact_search_pattern(
+                        artifact_search_pattern_id, plugin.module_name, plugin.name, artifact_search_regex)
+                    pattern_already_searched = artifact_search_regex in seeker.searched
+                    found = seeker.search(artifact_search_regex)
+                    if not found:
+                        log.write(f'<ul><li>No file found for regex <i>{artifact_search_regex}</i></li></ul>')
+                    else:
+                        log.write(f'<ul><li>{len(found)} {"files" if len(found) > 1 else "file"} for regex <i>{artifact_search_regex}</i> located at:')
+                        for pathh in found:
+                            # Strip \\?\ only for log display; file_infos is keyed with the
+                            # original long-path form on Windows.
+                            display_path = pathh[4:] if pathh.startswith('\\\\?\\') else pathh
+                            log.write(f'<ul><li>{Context.get_relative_path(display_path)}</li></ul>')
+                            if seeker.file_infos.get(pathh):
+                                file_path_id = id(seeker.file_infos.get(pathh))
+                                if not pattern_already_searched and file_path_id not in file_path_ids:
+                                    file_info = seeker.file_infos.get(pathh)
+                                    digest, kind = staged_file_record(seeker, pathh, file_info,
+                                                                      hash_files)
+                                    lava_insert_sqlite_file_path(file_path_id, file_info.source_path,
+                                                                 digest, kind,
+                                                                 staged_time_values(file_info) if hash_files else None)
+                                    if hashes is not None:
+                                        hashes.write(staged_files_tsv_line(file_info, kind, digest))
+                                        hash_counts[digest is not None] = \
+                                            hash_counts.get(digest is not None, 0) + 1
+                                    file_path_ids.add(file_path_id)
+                                lava_insert_sqlite_artifact_link_pattern_to_file(artifact_search_pattern_id, file_path_id)
+                        log.write('</li></ul>')
+                        files_found.extend(found)
+                if files_found:
+                    category_folder = os.path.join(out_params.output_folder_base, '_HTML',
+                                                   sanitize_report_name(plugin.category, 'category'))
+                    os.makedirs(category_folder, exist_ok=True)
                     plugin.method(files_found, category_folder, seeker, wrap_text)
                     lava_commit()
-                except Exception as ex:  # pylint: disable=broad-exception-caught
-                    logfunc('Reading {} artifact had errors!'.format(plugin.name))
-                    logfunc('Error was {}'.format(str(ex)))
-                    logfunc('Exception Traceback: {}'.format(traceback.format_exc()))
-                    plugin_elapsed = perf_counter() - plugin_start
-                    plugin_run_times.append((plugin.name, plugin_elapsed))
-                    logfunc('{} [{}] artifact failed after {:.1f}s'.format(
-                        plugin.name, plugin.module_name, plugin_elapsed))
-                    lava_add_module(plugin.module_name, "Error", len(files_found), plugin.name)
-                    lava_commit()
-                    continue  # nope
-                lava_add_module(plugin.module_name, "Complete", len(files_found), plugin.name)
+                    lava_add_module(plugin.module_name, "Complete", len(files_found), plugin.name)
+                else:
+                    lava_add_module(plugin.module_name, "No files found", 0, plugin.name)
+                    logfunc("No file found")
+            except (Exception, SystemExit) as ex:
+                # Search/staging failures and a parser's sys.exit() are local to
+                # this module. KeyboardInterrupt still propagates to the caller.
+                logfunc('Reading {} artifact had errors!'.format(plugin.name))
+                logfunc('Error was {}'.format(str(ex)))
+                logfunc('Exception Traceback: {}'.format(traceback.format_exc()))
+                lava_add_module(plugin.module_name, "Error", len(files_found), plugin.name)
+                lava_commit()
+                outcome = 'failed'
             else:
-                lava_add_module(plugin.module_name, "No files found", 0, plugin.name)
-                logfunc("No file found")
-            plugin_elapsed = perf_counter() - plugin_start
-            plugin_run_times.append((plugin.name, plugin_elapsed))
-            logfunc('{} [{}] artifact completed in {:.1f}s'.format(
-                plugin.name, plugin.module_name, plugin_elapsed))
-            parsed_modules += 1
-            GuiWindow.SetProgressBar(parsed_modules, len(plugins))
-            log.flush()
+                outcome = 'completed'
+            finally:
+                plugin_elapsed = perf_counter() - plugin_start
+                plugin_run_times.append((plugin.name, plugin_elapsed))
+                logfunc('{} [{}] artifact {} after {:.1f}s'.format(
+                    plugin.name, plugin.module_name, outcome, plugin_elapsed))
+                parsed_modules += 1
+                GuiWindow.SetProgressBar(parsed_modules, len(plugins))
+                log.flush()
         log.close()
         if hashes is not None:
             hashes.close()

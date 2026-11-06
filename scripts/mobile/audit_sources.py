@@ -39,6 +39,12 @@ def main():
                     if hashlib.sha256(content).hexdigest() != catalog["sourceOverrides"][relative]:
                         raise SystemExit(f"Upstream requirements changed: {path}")
                     content = filter_requirements(content.decode("utf-8"), platform).encode("utf-8")
+                elif path == source / relative and relative in catalog.get("sourceOverrides", {}):
+                    # Local runtime fixes retain the original source hash as well
+                    # as the patched bundle hash in files.
+                    if hashlib.sha256(content).hexdigest() != catalog["sourceOverrides"][relative]:
+                        raise SystemExit(f"Upstream source changed: {path}")
+                    continue
                 actual = hashlib.sha256(content).hexdigest()
                 if actual != expected:
                     raise SystemExit(f"Source hash mismatch: {path}")

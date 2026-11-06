@@ -1,4 +1,4 @@
-"""Run the production JSON-lines worker against a local, already extracted tree.
+"""Run the production JSON-lines worker against a directory or ZIP/TAR archive.
 
 Writes reports only to --output; source files are copied by LEAPP into that output.
 Artifacts stream to disk so large extractions do not accumulate in runner memory.
@@ -23,8 +23,8 @@ def main():
     parser.add_argument("--platform", choices=("ios", "android", "vehicle"), default="ios")
     args = parser.parse_args()
     source, output = args.root.resolve(strict=True), args.output.resolve()
-    if not source.is_dir() or output == source or source in output.parents:
-        parser.error("Output must be outside the extracted evidence tree")
+    if output == source or source.is_dir() and source in output.parents:
+        parser.error("Output must be outside the evidence directory or archive")
     if output.exists() and any(output.iterdir()):
         parser.error("Use a fresh output directory to keep previous run reports intact")
     output.mkdir(parents=True, exist_ok=True)
@@ -42,6 +42,11 @@ def main():
 
 
 def write_index(source, index_path):
+    if source.is_file():
+        record = {"path": str(source), "relative": source.name, "kind": "file",
+                  "provenance": {"source": str(source), "evidencePath": "/" + source.name}}
+        index_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        return 1
     indexed = 0
     with index_path.open("w", encoding="utf-8") as index:
         pending = [source]
@@ -90,7 +95,8 @@ def run_worker(args, source, output, index_path, indexed, started):
                 kind = event["type"]
                 if kind == "materialize":
                     # Only acknowledge readable files inside the selected source.
-                    valid = all(source in Path(path).resolve().parents and Path(path).is_file()
+                    valid = all((Path(path).resolve() == source if source.is_file() else source in Path(path).resolve().parents)
+                                and Path(path).is_file()
                                 for path in event["paths"])
                     process.stdin.write(json.dumps({"ok": valid, "error": "Source file unavailable"}) + "\n")
                     process.stdin.flush()
