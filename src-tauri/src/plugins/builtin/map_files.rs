@@ -3,6 +3,7 @@ use crate::plugins::PythonPluginManifest;
 use serde_json::json;
 use std::{collections::BTreeSet, fs, path::Path};
 
+mod description;
 mod geometry;
 #[cfg(test)]
 mod tests;

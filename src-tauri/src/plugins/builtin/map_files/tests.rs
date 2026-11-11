@@ -2,6 +2,48 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn kml_description_exposes_recorded_event_speed_and_retains_source() {
+    let description = r#"<![CDATA[<table><tr><th align="left">Identifier</th><td>Traction Event: Velocity Indicator speed = 10.7 MPH (17.2 KPH), Acceleration = 2.5 g (implied)</td></tr><tr><th>Bearing</th><td>90&#176;</td></tr></table>"#;
+    let input = format!(
+        r#"<kml><Placemark><description><![CDATA[{description}]]></description><Point><coordinates>1,2,NaN</coordinates></Point></Placemark></kml>"#
+    );
+    let layer = parse(input.as_bytes(), "kml", &|| false).unwrap();
+    let properties = &layer.features[0]["properties"];
+    assert_eq!(properties["speed"], "10.7 MPH (17.2 KPH)");
+    assert_eq!(properties["description"], description);
+    assert_eq!(properties["descriptionFields"]["Bearing"], "90°");
+    assert!(properties.get("speedLimit").is_none());
+}
+
+#[test]
+fn kml_speed_limits_and_undocumented_track_speeds_stay_distinct() {
+    let layer = parse(br#"<kml>
+      <Placemark><description><![CDATA[<table><tr><th>Identifier</th><td>Speed Limit : 25</td></tr></table>]]></description><Point><coordinates>1,2</coordinates></Point></Placemark>
+      <Placemark><description><![CDATA[<table><tr><th>Time</th><td>9/22/2020 4:42:00 AM</td></tr><tr><th>Bearing</th><td>0</td></tr><tr><th>Distance</th><td>12 m</td></tr></table>]]></description><Point><coordinates>1,2</coordinates></Point></Placemark>
+    </kml>"#, "kml", &|| false).unwrap();
+    assert_eq!(layer.features[0]["properties"]["speedLimit"], "25");
+    assert!(layer.features[0]["properties"].get("speed").is_none());
+    assert!(layer.features[1]["properties"].get("speed").is_none());
+    assert_eq!(
+        layer.features[1]["properties"]["descriptionFields"]["Distance"],
+        "12 m"
+    );
+}
+
+#[test]
+fn kml_description_table_fields_are_text_with_units_and_duplicate_rows_preserved() {
+    let input = br#"<kml><Placemark><description><![CDATA[<TABLE><TR><TD><b>Speed</b></TD><TD>0&nbsp;km/h</TD></TR><tr><th>Speed Limit</th><td>30 MPH</td></tr><tr><th>Note</th><td>A &amp; B &lt;img src=x onerror=alert(1)&gt;</td></tr><tr><th>Note</th><td>Second</td></tr></TABLE>]]></description><Point><coordinates>1,2</coordinates></Point></Placemark></kml>"#;
+    let layer = parse(input, "kml", &|| false).unwrap();
+    let properties = &layer.features[0]["properties"];
+    assert_eq!(properties["speed"], "0 km/h");
+    assert_eq!(properties["speedLimit"], "30 MPH");
+    assert_eq!(
+        properties["descriptionFields"]["Note"],
+        json!(["A & B <img src=x onerror=alert(1)>", "Second"])
+    );
+}
+
+#[test]
 fn track_log_retains_locations_with_unknown_elevation_and_their_folder_and_times() {
     let layer=parse(br#"<kml><Document><name>Recording</name><Folder><name>Track Log</name>
       <Placemark><name>Sample</name><TimeStamp><when>2020-09-22T04:41:58-04:00</when></TimeStamp><Point><coordinates>-73,40,NaN</coordinates></Point></Placemark>
@@ -206,7 +248,22 @@ fn verifies_track_log_datasource() {
         .iter()
         .filter(|feature| feature["geometry"]["type"] == "LineString")
         .count();
-    let counts = json!({"features":layer.features.len(),"sourcePoints":source_points,"sourceLines":source_lines,"renderedPoints":points,"renderedLines":lines,"positions":layer.positions});
+    let speeds = layer
+        .features
+        .iter()
+        .filter(|feature| feature["properties"].get("speed").is_some())
+        .count();
+    let speed_limits = layer
+        .features
+        .iter()
+        .filter(|feature| feature["properties"].get("speedLimit").is_some())
+        .count();
+    let description_tables = layer
+        .features
+        .iter()
+        .filter(|feature| feature["properties"].get("descriptionFields").is_some())
+        .count();
+    let counts = json!({"features":layer.features.len(),"sourcePoints":source_points,"sourceLines":source_lines,"renderedPoints":points,"renderedLines":lines,"positions":layer.positions,"speeds":speeds,"speedLimits":speed_limits,"descriptionTables":description_tables});
     println!("KML_TRACK_LOG {counts} warnings={:?}", layer.warnings);
     assert!(!layer.features.is_empty());
     if let Ok(expected) = std::env::var("CULTIVATOR_KML_TRACK_LOG_EXPECTED") {

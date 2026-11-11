@@ -472,6 +472,7 @@ fn kml(
     }
     if node.name == "Placemark" {
         let mut properties = properties(node, &["name", "description", "styleUrl", "address"]);
+        super::description::enrich(&mut properties);
         extended_data(node, &mut properties);
         if let Some(id) = node.attributes.get("id") {
             properties.insert("sourceId".into(), json!(id));
