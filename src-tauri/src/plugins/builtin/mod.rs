@@ -283,6 +283,11 @@ impl BuiltinPlugin for ArchiveExtractorPlugin {
                 "No ZIP, TAR, GZ, TAR.GZ, or TGZ archives were found in the selected datasource paths.",
             );
         }
+        if summary.extracted_files == 0 {
+            if let Some(error) = summary.errors.first() {
+                return Err(format!("Archive extraction failed: {error}"));
+            }
+        }
         for error in summary.errors {
             context.log("error", error);
         }

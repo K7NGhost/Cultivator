@@ -48,7 +48,9 @@ sha1 = "0.10.6"
 md-5 = "0.10.6"
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio"] }
 toml = "0.9.12"
-zip = { version = "8.6.0", features = ["deflate"] }
+# zip's default zlib-rs backend overflows its input counter on Windows for
+# members larger than 4 GiB. Keep the supported formats and use flate2's Rust backend.
+zip = { version = "8.6.0", default-features = false, features = ["aes-crypto", "bzip2", "deflate64", "deflate-flate2", "deflate-zopfli", "lzma", "ppmd", "time", "zstd", "xz"] }
 tar = "0.4.44"
 flate2 = "1.1.5"
 crc32fast = "1.5"

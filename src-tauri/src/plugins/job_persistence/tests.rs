@@ -1,5 +1,88 @@
 use super::*;
 
+async fn locked_case() -> (tempfile::TempDir, SqlitePool, SqlitePool) {
+    let directory = tempfile::tempdir().unwrap();
+    let options = SqliteConnectOptions::new()
+        .filename(directory.path().join("case.sqlite"))
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::ZERO);
+    let writer = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options.clone())
+        .await
+        .unwrap();
+    ensure_plugin_tables(&writer).await.unwrap();
+    let reader = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    (directory, writer, reader)
+}
+
+#[tokio::test]
+async fn initialized_schema_checks_do_not_compete_with_extraction_writes() {
+    let (_directory, writer, reader) = locked_case().await;
+    let transaction = writer.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let result = ensure_plugin_tables(&reader).await;
+    transaction.rollback().await.unwrap();
+    reader.close().await;
+    writer.close().await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn recovery_without_stale_jobs_does_not_compete_with_extraction_writes() {
+    let (_directory, writer, reader) = locked_case().await;
+    sqlx::query("INSERT INTO plugin_jobs(id, case_id, datasource_id, plugin_id, status, started_at, owner_session) VALUES ('current', 'case', 'source', 'archive-extractor', 'running', 'time', $1)")
+        .bind(session_id()).execute(&writer).await.unwrap();
+    let transaction = writer.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let result = reconcile_session(&reader).await;
+    transaction.rollback().await.unwrap();
+    reader.close().await;
+    writer.close().await;
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn run_snapshot_remains_available_during_an_extraction_write() {
+    let (directory, writer, reader) = locked_case().await;
+    let database = directory.path().join("case.sqlite");
+    let request = serde_json::json!({
+        "caseDatabasePath": database.to_string_lossy(),
+        "caseFolderPath": directory.path().to_string_lossy(),
+        "datasourceId": "source",
+    });
+    sqlx::query("INSERT INTO plugin_runs(id, request_json) VALUES ('run', $1)")
+        .bind(request.to_string())
+        .execute(&writer)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO plugin_jobs(id, case_id, datasource_id, plugin_id, status, started_at, run_id, owner_session) VALUES ('job', 'case', 'source', 'archive-extractor', 'running', 'time', 'run', $1)")
+        .bind(session_id()).execute(&writer).await.unwrap();
+    let mut transaction = writer.begin().await.unwrap();
+    sqlx::query("UPDATE plugin_jobs SET completed = 1 WHERE id = 'job'")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        get_plugin_run(database.to_string_lossy().into_owned(), "run".into()),
+    )
+    .await;
+    transaction.rollback().await.unwrap();
+    reader.close().await;
+    writer.close().await;
+    let snapshot = result
+        .expect("status polling must not wait for the writer")
+        .unwrap();
+    assert!(!snapshot.finished);
+    assert_eq!(snapshot.summary.jobs.len(), 1);
+    assert_eq!(snapshot.summary.jobs[0].status, "running");
+    assert_eq!(snapshot.summary.jobs[0].completed, 0);
+}
+
 #[tokio::test]
 async fn legacy_schema_upgrades_and_only_previous_sessions_are_interrupted() {
     let pool = SqlitePoolOptions::new()

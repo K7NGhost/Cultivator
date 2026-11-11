@@ -14,6 +14,9 @@ static BUILD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const VISIBLE: &str = "SELECT r.* FROM plugin_results r JOIN (SELECT id, ROW_NUMBER() OVER (PARTITION BY datasource_id,plugin_id ORDER BY started_at DESC,id DESC) AS rank FROM plugin_jobs WHERE status='complete') j ON j.id=r.job_id AND j.rank=1 WHERE r.result_kind NOT IN ('file_metadata','text_sample')";
 const MODEL_SCHEMAS: &str = include_str!("../scripting/worker/artifact_model_schemas.json");
 
+#[cfg(test)]
+mod schema_tests;
+
 #[derive(Clone)]
 struct DateField {
     key: String,
@@ -318,10 +321,14 @@ async fn ensure(pool: &SqlitePool) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
     if previous.as_deref() != Some(&signature) {
         sqlx::query("DELETE FROM artifact_timeline_events")
-            .execute(&mut *transaction).await.map_err(|error| error.to_string())?;
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| error.to_string())?;
         sqlx::query("DELETE FROM artifact_timeline_sources")
-            .execute(&mut *transaction).await.map_err(|error| error.to_string())?;
-        sqlx::query("INSERT OR REPLACE INTO artifact_timeline_state VALUES ('rules',?)")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| error.to_string())?;
+        sqlx::query("INSERT OR REPLACE INTO artifact_timeline_state(key,value) VALUES ('rules',?)")
             .bind(signature)
             .execute(&mut *transaction)
             .await
@@ -388,7 +395,7 @@ pub async fn sync_artifact_timeline(case_database_path: String) -> Result<Timeli
                     .await
                     .map_err(|error| error.to_string())?;
             }
-            sqlx::query("INSERT OR IGNORE INTO artifact_timeline_sources VALUES (?)")
+            sqlx::query("INSERT OR IGNORE INTO artifact_timeline_sources(artifact_id) VALUES (?)")
                 .bind(id)
                 .execute(&mut *tx)
                 .await

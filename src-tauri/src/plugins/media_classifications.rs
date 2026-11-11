@@ -11,6 +11,12 @@ pub(super) async fn ensure_table(pool: &SqlitePool) -> Result<(), String> {
     .execute(pool)
     .await
     .map_err(|error| error.to_string())?;
+    // Polling initialized cases must remain readable while extraction holds the writer.
+    let migrated: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM media_classification_migrations WHERE name = 'custom-categories-v1')")
+        .fetch_one(pool).await.map_err(|error| error.to_string())?;
+    if migrated {
+        return Ok(());
+    }
     // The marker write serializes concurrent case connections. Upgrade old case
     // constraints once, preserving all existing VIC assignments atomically.
     let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;

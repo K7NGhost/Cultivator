@@ -78,6 +78,13 @@ pub(super) async fn recover_case(pool: &SqlitePool) -> Result<(), String> {
 }
 
 async fn reconcile_session(pool: &SqlitePool) -> Result<(), String> {
+    // Job snapshots are polled during extraction. Avoid an UPDATE (and its writer
+    // lock) when every active job already belongs to this application session.
+    let stale: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM plugin_jobs WHERE status IN ('queued', 'paused', 'running', 'cancelling') AND owner_session != $1)")
+        .bind(session_id()).fetch_one(pool).await.map_err(|e| e.to_string())?;
+    if !stale {
+        return Ok(());
+    }
     sqlx::query("UPDATE plugin_jobs SET status = 'interrupted', finished_at = $1, error = 'Application stopped before this job finished.' WHERE status IN ('queued', 'paused', 'running', 'cancelling') AND owner_session != $2")
         .bind(now_iso_like()).bind(session_id()).execute(pool).await.map_err(|e| e.to_string())?;
     Ok(())

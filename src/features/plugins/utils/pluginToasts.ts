@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast, type Id } from "react-toastify";
 import { invoke } from "@tauri-apps/api/core";
 import { isActivePluginJob } from "../model/types";
+import { PluginRunFailureNotice } from "../components/PluginRunFailureNotice";
 
 import type {
   PluginRunSummary,
@@ -117,8 +118,23 @@ function finishRun(runId: string, summary: PluginRunSummary) {
     const oldest = finishedRuns.values().next().value;
     if (oldest) finishedRuns.delete(oldest);
   }
-  if (summary.jobs.some((job) => ["failed", "interrupted"].includes(job.status))) {
+  const failures = summary.jobs.filter((job) => ["failed", "interrupted"].includes(job.status));
+  if (failures.length > 0) {
     completionType = "warning";
+    const run = activeRuns.get(runId);
+    toast.error(createElement(PluginRunFailureNotice, {
+      datasourceName: run?.datasourceName ?? summary.datasourceId,
+      failures: failures.map((job) => ({
+        jobId: job.id,
+        pluginName: run?.jobs.find((item) => item.pluginId === job.pluginId)?.pluginName ?? job.pluginId,
+        error: job.error,
+      })),
+    }), {
+      toastId: `plugin-run-failure:${runId}`,
+      autoClose: false,
+      closeButton: true,
+      closeOnClick: false,
+    });
   } else if (completionType !== "warning" && summary.jobs.some((job) => job.status === "cancelled")) {
     completionType = "info";
   }

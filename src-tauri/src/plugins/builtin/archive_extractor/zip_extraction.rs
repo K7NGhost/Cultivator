@@ -8,6 +8,7 @@ use std::time::SystemTime;
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    panic::{catch_unwind, AssertUnwindSafe},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -20,6 +21,7 @@ use zip::ZipArchive;
 
 struct EntryTask {
     index: usize,
+    name: String,
     destination: PathBuf,
     directory: bool,
     modified: Option<SystemTime>,
@@ -69,6 +71,7 @@ pub(super) fn extract_zip_archive(
                 .ok_or_else(|| format!("ZIP entry '{}' has no usable output path", file.name()))?;
             Ok(Some(EntryTask {
                 index,
+                name: file.name().to_owned(),
                 destination,
                 directory: file.is_dir(),
                 modified: zip_modified_time(&file),
@@ -115,7 +118,7 @@ pub(super) fn extract_zip_archive(
         }
         Err(error) => {
             record.skipped_entries += 1;
-            errors.push(error);
+            errors.push(format!("Archive '{}': {error}", archive_path.display()));
         }
     };
     if collisions || tasks.len() < 2 {
@@ -210,7 +213,8 @@ fn extract_entry(
     task: &EntryTask,
     cancelled: Check<'_>,
 ) -> Result<(Option<u64>, Option<String>), String> {
-    let mut extract = || -> Result<(Option<u64>, Option<String>), String> {
+    let mut output_created = false;
+    let extract = || -> Result<(Option<u64>, Option<String>), String> {
         let mut file = archive.by_index(task.index).map_err(|e| e.to_string())?;
         if task.directory {
             fs::create_dir_all(&task.destination).map_err(|e| e.to_string())?;
@@ -222,6 +226,7 @@ fn extract_entry(
             .ok_or("Output path has no parent")?;
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         let mut output = fs::File::create(&task.destination).map_err(|e| e.to_string())?;
+        output_created = true;
         let bytes =
             cancellation::copy(&mut file, &mut output, cancelled).map_err(|e| e.to_string())?;
         let warning = task
@@ -235,10 +240,28 @@ fn extract_entry(
             });
         Ok((Some(bytes), warning))
     };
-    extract().map_err(|e| {
+    // Preserve a decoder panic's reason before thread::scope can replace it
+    // with the unhelpful "a scoped thread panicked" message.
+    let result = catch_unwind(AssertUnwindSafe(extract)).unwrap_or_else(|panic| {
+        let reason = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("unknown decoder panic");
+        Err(format!("ZIP decoder panicked: {reason}"))
+    });
+    result.map_err(|mut error| {
+        // Failed reads, CRC checks, cancellation and decoder panics must never
+        // leave a truncated member looking like a successfully extracted file.
+        if output_created {
+            if let Err(cleanup) = fs::remove_file(&task.destination) {
+                error.push_str(&format!("; failed to remove incomplete output: {cleanup}"));
+            }
+        }
         format!(
-            "Failed to extract ZIP entry {} to '{}': {e}",
+            "Failed to extract ZIP entry {} ('{}') to '{}': {error}",
             task.index,
+            task.name,
             task.destination.display()
         )
     })

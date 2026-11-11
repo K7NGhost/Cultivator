@@ -4,6 +4,16 @@ use super::*;
 const NSFW_STATUS_SQL: &str = "CASE WHEN json_type(g.payload, '$.nsfwScore') IN ('integer', 'real') AND json_extract(g.payload, '$.nsfwScore') BETWEEN 0 AND 1 THEN CASE WHEN json_extract(g.payload, '$.nsfwScore') >= 0.5 THEN 272 ELSE 273 END ELSE 274 END";
 
 pub(super) async fn ensure_nsfw_index(pool: &SqlitePool) -> Result<(), String> {
+    // The marker and index commit together; an existing marker needs no writer lock.
+    let migrated: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM media_classification_migrations WHERE name = 'nsfw-score-v1')",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    if migrated {
+        return Ok(());
+    }
     let mut transaction = pool.begin().await.map_err(|e| e.to_string())?;
     let added = sqlx::query("INSERT OR IGNORE INTO media_classification_migrations(name) VALUES ('nsfw-score-v1')")
         .execute(&mut *transaction).await.map_err(|e| e.to_string())?.rows_affected();

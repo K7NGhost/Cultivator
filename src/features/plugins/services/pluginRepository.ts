@@ -15,6 +15,7 @@ import type {
   PluginRunSnapshot,
 } from "../model/types";
 import { waitForPluginProgressListener } from "../utils/pluginToasts";
+import { waitForPluginRunCompletion } from "../utils/waitForPluginRunCompletion";
 
 export const archiveExtractorPluginId = "archive-extractor";
 
@@ -147,11 +148,9 @@ export async function submitDatasourcePlugins(input: SubmitPluginRunInput): Prom
 
 export async function waitForPluginRun(caseDatabasePath: string, runId: string): Promise<PluginRunSummary> {
   // SQLite is authoritative, including after a missed event or a webview reload.
-  while (true) {
-    const snapshot = await invoke<PluginRunSnapshot>("get_plugin_run", { caseDatabasePath, runId });
-    if (snapshot.finished) return snapshot.summary;
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
-  }
+  return waitForPluginRunCompletion(() =>
+    invoke<PluginRunSnapshot>("get_plugin_run", { caseDatabasePath, runId }),
+  );
 }
 
 export async function runDatasourcePlugins(input: SubmitPluginRunInput): Promise<PluginRunSummary> {
