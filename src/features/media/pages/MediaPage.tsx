@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { useTimeZone } from "@/features/settings/timeZoneSettings";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   FixedSizeGrid,
@@ -1143,6 +1144,7 @@ function MediaDetailsPanel({
   title: string;
 }) {
   const galleryActive = useGalleryActive();
+  const timeZone = useTimeZone();
   const selectedClassification = item?.mediaType === "image" ? vicClassification(item.vicCategory, classification?.custom.categories) : undefined;
   return (
     <aside className="flex min-h-0 flex-col">
@@ -1180,7 +1182,7 @@ function MediaDetailsPanel({
             />
             <DetailRow label="Duration" value={formatDuration(item.durationMs)} />
             <DetailRow label="Size" value={formatBytes(item.size)} />
-            <DetailRow label="Modified" value={formatModifiedTime(item.modifiedMs)} />
+            <DetailRow label="Modified" value={formatModifiedTime(item.modifiedMs, timeZone)} />
             <DetailRow label="Path" value={item.path} />
             {item.metadata.map((field, index) => (
               <DetailRow
@@ -1252,7 +1254,7 @@ function formatDuration(durationMs: number | null | undefined) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-function formatModifiedTime(modifiedMs: number | null | undefined) {
+function formatModifiedTime(modifiedMs: number | null | undefined, timeZone: string) {
   if (!modifiedMs) {
     return "-";
   }
@@ -1260,6 +1262,7 @@ function formatModifiedTime(modifiedMs: number | null | undefined) {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "short",
     timeStyle: "short",
+    timeZone,
   }).format(new Date(modifiedMs));
 }
 

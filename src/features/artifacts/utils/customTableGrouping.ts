@@ -332,6 +332,10 @@ function getArtifactIdentity(artifact: StoredArtifactRecord) {
 export function getArtifactEntryMetrics(
   artifacts: StoredArtifactRecord[],
 ): ArtifactEntryMetrics {
+  if (artifacts.every((artifact) => artifact.summaryOnly)) {
+    const count = artifacts.reduce((total, artifact) => total + (artifact.entryCount ?? 1), 0);
+    return { entryCount: count, occurrenceCount: count };
+  }
   const customTable = combineCustomTableArtifacts(artifacts);
 
   if (customTable) {

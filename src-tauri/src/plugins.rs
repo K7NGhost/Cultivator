@@ -390,7 +390,7 @@ struct PluginProgressEvent {
     eta_seconds: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginArtifactRecord {
     pub id: String,

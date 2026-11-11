@@ -1,3 +1,5 @@
+import { getTimeZone } from "../../settings/timeZoneSettings";
+
 export type SearchReportFile = {
   file: string;
   hits: number;
@@ -178,5 +180,6 @@ function formatDateTime(date: Date) {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "short",
     timeStyle: "medium",
+    timeZone: getTimeZone(),
   }).format(date);
 }

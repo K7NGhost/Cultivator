@@ -1,10 +1,11 @@
 import { ArtifactTreeViewer } from "../components/ArtifactTreeViewer";
+import { PagedArtifactPanel } from "../components/PagedArtifactPanel";
 import { useLocation } from "react-router-dom";
 import { ArtifactLocationPreview } from "../components/ArtifactLocationPreview";
 import { detectCoordinatePairs } from "../utils/artifactLocations";
 import type { ArtifactTreeNode } from "../model/artifactTree";
 import { formatEntryHitLabel } from "../utils/artifactEntryLabel";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   AutoSizer,
   List,
@@ -68,6 +69,8 @@ import {
 import { getCustomTableViewportLayout } from "../utils/customTableLayout";
 import { getArtifactTableView } from "../utils/artifactTableView";
 import { formatArtifactTableCell } from "../utils/artifactTableFormatting";
+import { useTimeZone } from "@/features/settings/timeZoneSettings";
+import { parseTimestamp } from "@/lib/timeZone";
 import type {
   ArtifactModelDefinition,
   StoredArtifactRecord,
@@ -140,7 +143,9 @@ function getErrorMessage(caughtError: unknown) {
   return caughtError instanceof Error ? caughtError.message : String(caughtError);
 }
 
-function formatDateTime(value: string) {
+function formatDateTime(value: string, timeZone: string) {
+  const recorded = parseTimestamp(value);
+  if (recorded && recorded.basis !== "zoned") return value;
   const numericValue = Number(value);
   const date = Number.isFinite(numericValue)
     ? new Date(numericValue)
@@ -153,6 +158,7 @@ function formatDateTime(value: string) {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "short",
     timeStyle: "short",
+    timeZone,
   }).format(date);
 }
 
@@ -679,8 +685,12 @@ function findArtifactNodeContainingArtifact(
 
 export function ArtifactsPage() {
   const { activeCase } = useCases();
-  const requestedArtifactId = new URLSearchParams(useLocation().search).get("artifactId");
+  const location = useLocation();
+  const active = location.pathname === "/artifacts";
+  const requestedArtifactId = new URLSearchParams(location.search).get("artifactId");
   const [artifacts, setArtifacts] = useState<StoredArtifactRecord[]>([]);
+  const revision = artifacts[0]?.catalogRevision ?? "legacy";
+  const loadVersion = useRef(0);
   const [plugins, setPlugins] = useState<PythonPlugin[]>([]);
   const [datasources, setDatasources] = useState<DataSourceRecord[]>([]);
   const [selectedDatasourceId, setSelectedDatasourceId] = useState("all");
@@ -731,7 +741,7 @@ export function ArtifactsPage() {
   const selectedArtifactNode =
     findArtifactNodeById(artifactTree, selectedArtifactNodeId) ??
     findArtifactNodeContainingArtifact(artifactTree, selectedArtifactId) ??
-    findFirstArtifactNode(artifactTree);
+    (selectedArtifactId ? findFirstArtifactNode(artifactTree) : null);
   const selectedArtifactOptions = selectedArtifactNode?.artifacts ?? [];
   const selectedArtifact =
     selectedArtifactOptions.find((artifact) => artifact.id === selectedArtifactId) ??
@@ -747,6 +757,7 @@ export function ArtifactsPage() {
   }, [requestedArtifactId, artifacts]);
 
   async function refreshArtifacts() {
+    const version = ++loadVersion.current;
     if (!activeCase) {
       setArtifacts([]);
       setPlugins([]);
@@ -759,6 +770,7 @@ export function ArtifactsPage() {
     }
 
     setLoadState({ error: null, isLoading: true });
+    setArtifacts([]);
 
     try {
       const [nextArtifacts, nextPlugins, nextDatasources] = await Promise.all([
@@ -766,6 +778,7 @@ export function ArtifactsPage() {
         listPythonPlugins(),
         listDataSources(activeCase.databasePath, activeCase.id),
       ]);
+      if (version !== loadVersion.current) return;
 
       setArtifacts(nextArtifacts);
       setPlugins(nextPlugins);
@@ -781,11 +794,12 @@ export function ArtifactsPage() {
           return currentId;
         }
 
-        return nextArtifacts[0]?.id ?? null;
+        return null;
       });
       setSelectedArtifactNodeId(null);
       setLoadState({ error: null, isLoading: false });
     } catch (caughtError) {
+      if (version !== loadVersion.current) return;
       setLoadState({
         error: getErrorMessage(caughtError),
         isLoading: false,
@@ -794,8 +808,10 @@ export function ArtifactsPage() {
   }
 
   useEffect(() => {
-    void refreshArtifacts();
-  }, [activeCase?.id]);
+    setArtifacts([]);
+    if (active) void refreshArtifacts();
+    return () => { loadVersion.current++; };
+  }, [activeCase?.databasePath, active]);
 
   async function removeArtifacts() {
     if (!activeCase || !removalTarget) {
@@ -831,7 +847,7 @@ export function ArtifactsPage() {
             return currentId;
           }
 
-          return nextArtifacts[0]?.id ?? null;
+          return null;
         });
         setSelectedArtifactNodeId(null);
 
@@ -867,6 +883,7 @@ export function ArtifactsPage() {
           <RefreshCw className="size-3.5" aria-hidden="true" />
           Refresh
         </Button>
+        {loadState.isLoading && <span role="status" className="text-[11px] text-muted-foreground">Loading artifact catalog…</span>}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -998,7 +1015,9 @@ export function ArtifactsPage() {
         <ResizableHandle withHandle />
 
         <ResizablePanel defaultSize="68%" minSize="34%">
-          <ArtifactPropertiesPanel
+          {active && <ArtifactPropertiesPanel
+            databasePath={activeCase?.databasePath ?? ""}
+            revision={revision}
             artifact={selectedArtifact}
             artifactOptions={selectedArtifactOptions}
             onSelectArtifact={(artifact) => setSelectedArtifactId(artifact.id)}
@@ -1012,7 +1031,7 @@ export function ArtifactsPage() {
                 ? pluginMap.get(selectedArtifact.pluginId)?.name
                 : undefined
             }
-          />
+          />}
         </ResizablePanel>
       </ResizablePanelGroup>
 
@@ -1105,7 +1124,17 @@ export function ArtifactsPage() {
   );
 }
 
-function ArtifactPropertiesPanel({
+function ArtifactPropertiesPanel({ databasePath, revision, ...props }: ComponentProps<typeof LoadedArtifactPropertiesPanel> & {
+  databasePath: string; revision: string;
+}) {
+  if (props.artifact?.summaryOnly) return <PagedArtifactPanel
+    key={`${props.artifactOptions[0]?.id}:${revision}`} databasePath={databasePath} revision={revision}
+    pluginName={props.pluginName} datasourceName={props.datasourceName}
+    artifact={props.artifact} artifacts={props.artifactOptions} onSelect={props.onSelectArtifact} />;
+  return <LoadedArtifactPropertiesPanel {...props} />;
+}
+
+function LoadedArtifactPropertiesPanel({
   artifact,
   artifactOptions,
   datasourceName,
@@ -1118,6 +1147,7 @@ function ArtifactPropertiesPanel({
   onSelectArtifact: (artifact: StoredArtifactRecord) => void;
   pluginName?: string;
 }) {
+  const timeZone = useTimeZone();
   const [entryViewMode, setEntryViewMode] =
     useState<ArtifactEntryViewMode>("all");
   const combinedTable = useMemo(() => getArtifactTableView(artifactOptions), [artifactOptions]);
@@ -1148,7 +1178,7 @@ function ArtifactPropertiesPanel({
     ["Plugin", pluginName ?? artifact.pluginId],
     ["Datasource", datasourceName ?? artifact.datasourceId],
     ["File", artifact.filePath || "-"],
-    ["Created", formatDateTime(artifact.createdAt)],
+    ["Created", formatDateTime(artifact.createdAt, timeZone)],
     ["Job", artifact.jobId],
   ];
 
@@ -1349,6 +1379,7 @@ function ArtifactPreviewPanel({
   table: CustomTableView | null;
   onSelectArtifactId: (id: string) => void;
 }) {
+  const timeZone = useTimeZone();
   if (table && detectCoordinatePairs(table.columns).length > 0) {
     return <ArtifactLocationPreview table={table} selectedArtifactId={artifact.id} onSelectArtifactId={onSelectArtifactId} />;
   }
@@ -1368,7 +1399,7 @@ function ArtifactPreviewPanel({
             {artifact.filePath || "-"}
           </div>
           <div className="text-muted-foreground">Created</div>
-          <div>{formatDateTime(artifact.createdAt)}</div>
+          <div>{formatDateTime(artifact.createdAt, timeZone)}</div>
         </div>
         <div className="rounded-sm border border-dashed px-2 py-2 text-[11px] text-muted-foreground">
           No specialized preview is available for this artifact kind.
@@ -1389,6 +1420,7 @@ function CustomTableArtifactPreview({
   selectedArtifactId?: string;
   onSelectArtifactId?: (id: string) => void;
 }) {
+  const timeZone = useTimeZone();
   const scrollbarSize = useNativeScrollbarSize();
   const [sort, setSort] = useState<CustomTableSortState>(() => ({
     key: table.columns[0]?.key ?? "",
@@ -1509,6 +1541,7 @@ function CustomTableArtifactPreview({
                         const value = formatArtifactTableCell(
                           groupedRow?.values[column.key],
                           column,
+                          timeZone,
                         );
                         const isLastDataColumn =
                           columnIndex === table.columns.length - 1;
@@ -1717,6 +1750,7 @@ function MessageArtifactPreview({
   artifact: StoredArtifactRecord;
   payload: Record<string, unknown>;
 }) {
+  const timeZone = useTimeZone();
   const sender = getPayloadString(payload, "sender") ?? "Unknown sender";
   const recipients = getPayloadStringList(payload, "recipients");
   const body =
@@ -1736,7 +1770,7 @@ function MessageArtifactPreview({
       <div className={cn("chat", isOutgoing ? "chat-end" : "chat-start")}>
         <div className="chat-header text-[11px] text-muted-foreground">
           <span className="font-medium text-foreground">{sender}</span>
-          <time className="ml-2 opacity-70">{formatDateTime(sentAt)}</time>
+          <time className="ml-2 opacity-70">{formatDateTime(sentAt, timeZone)}</time>
         </div>
         <div
           className={cn(

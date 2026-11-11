@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { useTimeZone } from "@/features/settings/timeZoneSettings";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
@@ -146,7 +147,7 @@ function getPluginTargetLabel(target: PythonPlugin["target"]) {
   }
 }
 
-function formatJobTime(value: string | null) {
+function formatJobTime(value: string | null, timeZone: string) {
   if (!value) {
     return "-";
   }
@@ -163,6 +164,7 @@ function formatJobTime(value: string | null) {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "short",
     timeStyle: "short",
+    timeZone,
   }).format(date);
 }
 
@@ -205,6 +207,7 @@ function mergePluginJobs(
 }
 
 export function PluginsPage() {
+  const timeZone = useTimeZone();
   const { activeCase } = useCases();
   const [datasources, setDatasources] = useState<DataSourceRecord[]>([]);
   const [plugins, setPlugins] = useState<PythonPlugin[]>([]);
@@ -1156,7 +1159,7 @@ export function PluginsPage() {
                             )}
                           </TableCell>
                           <TableCell className="h-8 px-2 py-0 text-muted-foreground">
-                            {formatJobTime(latestJob?.startedAt ?? null)}
+                            {formatJobTime(latestJob?.startedAt ?? null, timeZone)}
                           </TableCell>
                           <TableCell className="h-8 px-2 py-0">
                             {activeRun ? (
@@ -1276,7 +1279,7 @@ export function PluginsPage() {
                             </div>
                             <div className="flex items-center justify-between gap-2">
                               <span className="truncate text-[11px] text-muted-foreground">
-                                {job ? formatJobTime(job.startedAt) : "Waiting to start"}
+                                {job ? formatJobTime(job.startedAt, timeZone) : "Waiting to start"}
                               </span>
                               {run && job && ["queued", "paused"].includes(job.status) && (
                                 <Button
@@ -1367,7 +1370,7 @@ export function PluginsPage() {
                               {log.level}
                             </span>
                             <span className="truncate text-muted-foreground">
-                              {formatJobTime(log.createdAt)}
+                              {formatJobTime(log.createdAt, timeZone)}
                             </span>
                           </div>
                           <div className="whitespace-pre-wrap break-words">

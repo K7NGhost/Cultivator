@@ -8,6 +8,7 @@ import {
   FileSearch,
   FolderTree,
   Images,
+  Map,
   PanelLeftClose,
   PanelLeftOpen,
   Plug,
@@ -43,6 +44,7 @@ const navGroups = [
       { label: "Search", path: "/search", icon: Search },
       { label: "Media", path: "/media", icon: Images },
       { label: "Drone", path: "/drone", icon: Drone },
+      { label: "Map", path: "/map", icon: Map },
     ],
   },
   {

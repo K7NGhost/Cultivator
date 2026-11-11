@@ -656,6 +656,11 @@ export type ArtifactModelDefinition = {
 };
 
 export type StoredArtifactRecord = {
+  /** Catalog entries carry metadata only; rows are requested separately. */
+  summaryOnly?: boolean;
+  entryCount?: number;
+  payloadBytes?: number;
+  catalogRevision?: string;
   id: string;
   jobId: string;
   pluginId: string;

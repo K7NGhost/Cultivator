@@ -985,6 +985,7 @@ dependencies = [
  "libloading",
  "md-5",
  "memmap2",
+ "quick-xml",
  "rayon",
  "regex",
  "serde",

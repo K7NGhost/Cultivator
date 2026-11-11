@@ -10,6 +10,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { TelemetryPage, FlightRecord } from "../types";
+import { useTimeZone } from "@/features/settings/timeZoneSettings";
+import { formatTimestamp } from "@/lib/timeZone";
 
 export type TelemetryTableProps = {
   table: TelemetryPage | null;
@@ -32,6 +34,7 @@ export function DroneTelemetryTable({
   onPage,
   paging,
 }: TelemetryTableProps) {
+  const timeZone = useTimeZone();
   const size = table?.pageSize ?? 100;
   return (
     <section
@@ -84,7 +87,7 @@ export function DroneTelemetryTable({
             >
               {row.values.map((value, i) => (
                 <TableCell key={i} className="px-2 py-1">
-                  {value || <span className="text-muted-foreground">—</span>}
+                  {value ? formatTimestamp(value, timeZone) : <span className="text-muted-foreground">—</span>}
                 </TableCell>
               ))}
             </TableRow>

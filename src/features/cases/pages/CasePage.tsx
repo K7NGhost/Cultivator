@@ -22,6 +22,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useCases } from "../providers/case-provider";
+import { useTimeZone } from "@/features/settings/timeZoneSettings";
+import { parseTimestamp } from "@/lib/timeZone";
 import type { CreateCaseInput } from "../model/types";
 
 const emptyCaseForm: CreateCaseInput = {
@@ -32,14 +34,18 @@ const emptyCaseForm: CreateCaseInput = {
   parentDirectory: "",
 };
 
-function formatDateTime(value: string) {
+function formatDateTime(value: string, timeZone: string) {
+  const recorded = parseTimestamp(value);
+  if (recorded && recorded.basis !== "zoned") return value;
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "short",
     timeStyle: "short",
+    timeZone,
   }).format(new Date(value));
 }
 
 export function CasePage() {
+  const timeZone = useTimeZone();
   const {
     activeCase,
     cases,
@@ -296,7 +302,7 @@ export function CasePage() {
                       {caseRecord.examiner || "-"}
                     </TableCell>
                     <TableCell className="h-8 px-2 py-0 text-muted-foreground">
-                      {formatDateTime(caseRecord.updatedAt)}
+                      {formatDateTime(caseRecord.updatedAt, timeZone)}
                     </TableCell>
                     <TableCell className="h-8 truncate px-2 py-0 text-muted-foreground">
                       {caseRecord.folderPath}

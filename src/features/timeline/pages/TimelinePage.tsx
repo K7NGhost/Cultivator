@@ -7,6 +7,8 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { useCases, type CaseRecord } from "@/features/cases";
 import { listDataSources, type DataSourceRecord } from "@/features/datasources";
 import { cn } from "@/lib/utils";
+import { useTimeZone } from "@/features/settings/timeZoneSettings";
+import { formatTimestamp } from "@/lib/timeZone";
 import { syncTimeline, timelinePage, timelineDetail, type TimelineSummary, type TimelineFilter,
   type TimelinePageData, type TimelineDetail } from "../services/timelineRepository";
 
@@ -26,6 +28,9 @@ export function TimelinePage() {
 }
 
 export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
+  const timeZone = useTimeZone();
+  const displayTime = (event: TimelineDetail["event"]) => event.timeBasis === "utc"
+    ? formatTimestamp(event.displayTime.replace(/ UTC$/, "Z"), timeZone) : event.displayTime;
   const active = useLocation().pathname === "/timeline";
   const [summary, setSummary] = useState<TimelineSummary | null>(null);
   const [sources, setSources] = useState<DataSourceRecord[]>([]);
@@ -115,13 +120,13 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
         <option value="">All timestamp types</option><option value="utc">Known timezone (UTC)</option>
         <option value="unspecified">Timezone unspecified</option><option value="date">Date only</option>
       </select>
-      <label className="flex items-center gap-1 text-xs">From <input className={control} type="date" aria-label="Timeline start date" value={filter.from} onChange={(event) => updateFilter("from", event.target.value)} /></label>
-      <label className="flex items-center gap-1 text-xs">To <input className={control} type="date" aria-label="Timeline end date" value={filter.to} min={filter.from || undefined} onChange={(event) => updateFilter("to", event.target.value)} /></label>
+      <label className="flex items-center gap-1 text-xs">From (UTC) <input className={control} type="date" aria-label="Timeline start date" value={filter.from} onChange={(event) => updateFilter("from", event.target.value)} /></label>
+      <label className="flex items-center gap-1 text-xs">To (UTC) <input className={control} type="date" aria-label="Timeline end date" value={filter.to} min={filter.from || undefined} onChange={(event) => updateFilter("to", event.target.value)} /></label>
       <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => updateFilter("descending", !filter.descending)}><ArrowDownUp className="size-3.5" />{filter.descending ? "Newest first" : "Oldest first"}</Button>
       <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setSearch(""); setFilter(EMPTY_FILTER); setOffset(0); }}>Clear filters</Button>
     </div>
     <div className="flex shrink-0 flex-wrap gap-x-4 gap-y-1 border-b px-3 py-1 text-[11px] text-muted-foreground">
-      <span>Known timezones are displayed in UTC. Unspecified times sort by their recorded clock; date-only events have no time of day.</span>
+      <span>Display timezone: {timeZone}. Timeline date filters use UTC. Unspecified times sort by their recorded clock; date-only events have no time of day.</span>
       {summary && summary.undated > 0 && <span>{summary.undated.toLocaleString()} artifacts have no recognized timestamp.</span>}
     </div>
     {error && <div role="alert" className="shrink-0 border-b px-3 py-2 text-xs text-destructive">{error}</div>}
@@ -136,7 +141,7 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
               </tr></thead>
               <tbody>{page.items.map((event) => <tr key={event.id} onClick={() => setSelectedId(event.id)} className={cn("cursor-pointer border-b hover:bg-muted/40", selectedId === event.id && "bg-primary/10")}>
                 <td className="whitespace-nowrap px-2 py-2 align-top font-mono text-[11px]"><button type="button" className="text-left hover:underline" onClick={() => setSelectedId(event.id)} aria-pressed={selectedId === event.id}>
-                  {event.displayTime}<span className="block font-sans text-[10px] text-muted-foreground">{event.timeBasis === "unspecified" ? "Timezone unspecified" : event.timeBasis === "date" ? "Date only" : "UTC"}</span>
+                  {displayTime(event)}<span className="block font-sans text-[10px] text-muted-foreground">{event.timeBasis === "unspecified" ? "Timezone unspecified" : event.timeBasis === "date" ? "Date only" : timeZone}</span>
                 </button></td>
                 <td className="px-2 py-2 align-top">{event.eventType}</td>
                 <td className="max-w-52 px-2 py-2 align-top"><div className="truncate" title={event.label}>{event.label}</div></td>
@@ -162,7 +167,7 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
           {detailLoading ? <div role="status" className="p-3 text-xs text-muted-foreground">Loading event details…</div> : detailError ? <div role="alert" className="p-3 text-xs text-destructive">{detailError}</div> : detail ? <>
             <div className="space-y-2 border-b p-3">
               <div className="text-sm font-semibold">{detail.event.label}</div>
-              <div className="font-mono text-xs">{detail.event.displayTime}</div>
+              <div className="font-mono text-xs">{displayTime(detail.event)}</div>
               <div className="text-xs text-muted-foreground">{detail.event.eventType} · {detail.event.timeBasis === "utc" ? "Known timezone" : detail.event.timeBasis === "date" ? "Date only" : "Timezone unspecified"}</div>
               <Button asChild variant="outline" size="sm" className="h-7 text-xs"><Link to={`/artifacts?artifactId=${encodeURIComponent(detail.event.artifactId)}`}><ExternalLink className="size-3.5" />Open artifact</Link></Button>
             </div>

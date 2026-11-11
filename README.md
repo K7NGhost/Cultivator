@@ -44,6 +44,9 @@ The built-in **iOS Artifacts**, **Android Artifacts**, and **Vehicle Artifacts**
 iLEAPP, ALEAPP, and VLEAPP artifact catalogs. See [mobile and vehicle artifact plugins](docs/mobile-artifact-plugins.md)
 for supported inputs, runtime setup and validation.
 
+The built-in **Map Files** plugin parses KML, GPX and GeoJSON in Rust. Open **Map** to view
+layers, tracks and polygons with the same basemaps as the Drone workspace. See [map files](docs/map-files.md).
+
 The plugin system is designed to make creating new artifact parsers as straightforward as possible without requiring developers to understand the entire application architecture.
 
 ### 5. Dark Mode

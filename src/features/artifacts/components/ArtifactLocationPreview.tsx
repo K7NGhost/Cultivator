@@ -9,6 +9,7 @@ import { basemapStyle, localStyle, type Basemap } from "@/lib/maps/mapStyles";
 import { hasBasemapStyle, installBasemapImageResolver } from "@/lib/maps/mapImages";
 import { getArtifactLocations, locationBounds } from "../utils/artifactLocations";
 import { formatArtifactTableCell } from "../utils/artifactTableFormatting";
+import { useTimeZone } from "@/features/settings/timeZoneSettings";
 import { getCustomTableRowSources, type CustomTableView } from "../utils/customTableGrouping";
 
 const SOURCE = "artifact-locations";
@@ -35,6 +36,7 @@ export function ArtifactLocationPreview({ table, onSelectArtifactId, selectedArt
   onSelectArtifactId?: (id: string) => void;
   selectedArtifactId?: string;
 }) {
+  const timeZone = useTimeZone();
   const { points, pairs, invalidRows } = useMemo(() => getArtifactLocations(table), [table]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [detailsOpen, setDetailsOpen] = useState(true);
@@ -227,7 +229,7 @@ export function ArtifactLocationPreview({ table, onSelectArtifactId, selectedArt
         <dl className="divide-y">
           {table.columns.map((column) => <div key={column.key} className="grid grid-cols-[minmax(7rem,30%)_minmax(0,1fr)] gap-2 py-1.5">
             <dt className="break-words text-muted-foreground">{column.label}</dt>
-            <dd className="whitespace-pre-wrap break-words">{formatArtifactTableCell(row.values[column.key], column) || "-"}</dd>
+            <dd className="whitespace-pre-wrap break-words">{formatArtifactTableCell(row.values[column.key], column, timeZone) || "-"}</dd>
           </div>)}
         </dl>
         <div className="border-t py-2">

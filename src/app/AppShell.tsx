@@ -19,6 +19,7 @@ import { EvidenceProvider } from "@/features/evidence";
 import { FilesPage } from "@/features/files/pages/FilesPage";
 import { MediaPage } from "@/features/media/pages/MediaPage";
 import { DronePage } from "@/features/drone/pages/DronePage";
+import { MapPage } from "@/features/mapping/pages/MapPage";
 import { TimelinePage } from "@/features/timeline/pages/TimelinePage";
 import { PluginsPage } from "@/features/plugins/pages/PluginsPage";
 import { usePluginJobMonitor } from "@/features/plugins/hooks/usePluginJobMonitor";
@@ -29,6 +30,7 @@ import { initializePerformanceSettings } from "@/features/settings/performanceSe
 
 const workspaceRoutes = [
   { path: "/drone", element: <DronePage /> },
+  { path: "/map", element: <MapPage /> },
   { path: "/settings", element: <SettingsPage /> },
   {
     path: "/case",

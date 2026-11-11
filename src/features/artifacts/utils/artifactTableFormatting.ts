@@ -1,4 +1,5 @@
 import type { CustomTableColumn } from "../model/types";
+import { formatInstant, wallTime } from "../../../lib/timeZone";
 
 function rawCell(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -7,7 +8,7 @@ function rawCell(value: unknown): string {
 }
 
 /** Display typed dates only. Numeric IDs and ambiguous epochs stay untouched. */
-export function formatArtifactTableCell(value: unknown, column?: CustomTableColumn): string {
+export function formatArtifactTableCell(value: unknown, column?: CustomTableColumn, timeZone = "UTC"): string {
   const raw = rawCell(value);
   if (!column?.format || !raw.trim()) return raw;
   if (typeof value !== "string" && typeof value !== "number") return raw;
@@ -23,7 +24,6 @@ export function formatArtifactTableCell(value: unknown, column?: CustomTableColu
     date = new Date(raw);
   }
   if (!Number.isFinite(date.getTime())) return raw;
-  const iso = date.toISOString();
-  if (column.format === "date") return iso.slice(0, 10);
-  return `${iso.replace("T", " ").replace(/\.000Z$/, "Z").replace(/Z$/, "")} UTC`;
+  if (column.format === "date") return new Date(wallTime(date.getTime(), timeZone)).toISOString().slice(0, 10);
+  return formatInstant(date.getTime(), timeZone);
 }

@@ -2,12 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { StoredArtifactRecord } from "../model/types";
 
+const catalogRequests = new Map<string, Promise<StoredArtifactRecord[]>>();
+
 export async function listArtifacts(
   caseDatabasePath: string,
 ): Promise<StoredArtifactRecord[]> {
-  return invoke<StoredArtifactRecord[]>("list_plugin_artifacts", {
-    caseDatabasePath,
-  });
+  let request = catalogRequests.get(caseDatabasePath);
+  if (!request) {
+    request = invoke<StoredArtifactRecord[]>("list_artifact_summaries", { caseDatabasePath })
+      .finally(() => { catalogRequests.delete(caseDatabasePath); });
+    catalogRequests.set(caseDatabasePath, request);
+  }
+  return request;
 }
 
 export async function deleteArtifact(

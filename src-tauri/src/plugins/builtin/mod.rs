@@ -1,5 +1,6 @@
 mod archive_extractor;
 mod drone_telemetry;
+mod map_files;
 mod drone_carving;
 mod image_metadata;
 mod face_detection;

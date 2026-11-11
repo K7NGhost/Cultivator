@@ -28,6 +28,8 @@ mod jobs;
 mod evidence;
 mod file_view_scan;
 mod drone;
+mod mapping;
+mod artifact_view;
 mod plugins;
 pub mod preview;
 mod scripting;
@@ -2507,6 +2509,12 @@ pub fn run() {
             drone::open_drone_flight,
             drone::drone_telemetry_page,
             drone::export_drone_csv,
+            mapping::export_map_html,
+            artifact_view::list_artifact_summaries,
+            artifact_view::artifact_view_page,
+            artifact_view::artifact_payload_page,
+            artifact_view::artifact_row_sources,
+            artifact_view::cancel_artifact_view,
             delete_plugin_artifact,
             delete_plugin_artifacts,
             list_media_gallery,

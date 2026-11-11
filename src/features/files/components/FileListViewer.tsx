@@ -7,6 +7,7 @@ import {
   type MouseEvent,
 } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { useTimeZone } from "@/features/settings/timeZoneSettings";
 import {
   AutoSizer,
   List,
@@ -183,7 +184,7 @@ function formatFileSize(size?: number) {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
-function formatModifiedTime(modifiedMs?: number) {
+function formatModifiedTime(modifiedMs: number | undefined, timeZone: string) {
   if (modifiedMs === undefined) {
     return "-";
   }
@@ -191,6 +192,7 @@ function formatModifiedTime(modifiedMs?: number) {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "short",
     timeStyle: "short",
+    timeZone,
   }).format(new Date(modifiedMs));
 }
 
@@ -903,7 +905,8 @@ function FileListRow({
   tags: FileTagRecord[];
 }) {
   const sizeLabel = getEntrySizeLabel(row.entry);
-  const modifiedLabel = formatModifiedTime(row.entry.modifiedMs);
+  const timeZone = useTimeZone();
+  const modifiedLabel = formatModifiedTime(row.entry.modifiedMs, timeZone);
 
   function selectRowForTagAction() {
     onFocusList();
