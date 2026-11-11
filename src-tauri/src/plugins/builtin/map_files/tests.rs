@@ -2,6 +2,222 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn track_log_retains_locations_with_unknown_elevation_and_their_folder_and_times() {
+    let layer=parse(br#"<kml><Document><name>Recording</name><Folder><name>Track Log</name>
+      <Placemark><name>Sample</name><TimeStamp><when>2020-09-22T04:41:58-04:00</when></TimeStamp><Point><coordinates>-73,40,NaN</coordinates></Point></Placemark>
+      <Placemark><Point><coordinates>-74,41,</coordinates></Point></Placemark>
+      <Placemark><Point><coordinates>-75,42,Infinity</coordinates></Point></Placemark>
+      <Placemark><Point><coordinates>-76,43,0</coordinates></Point></Placemark>
+      <Placemark><Point><coordinates>-77,44</coordinates></Point></Placemark>
+    </Folder></Document></kml>"#,"kml",&||false).unwrap();
+    assert_eq!(layer.features.len(), 5);
+    assert_eq!(
+        layer.features[0]["geometry"]["coordinates"],
+        json!([-73.0, 40.0])
+    );
+    assert_eq!(layer.features[0]["properties"]["sourceAltitude"], "NaN");
+    assert_eq!(layer.features[0]["properties"]["omittedAltitudeCount"], 1);
+    assert_eq!(
+        layer.features[0]["properties"]["time"],
+        "2020-09-22T04:41:58-04:00"
+    );
+    assert_eq!(
+        layer.features[0]["properties"]["folderPath"],
+        json!(["Recording", "Track Log"])
+    );
+    assert_eq!(
+        layer.features[3]["geometry"]["coordinates"],
+        json!([-76.0, 43.0, 0.0])
+    );
+    assert!(layer.features[4]["properties"]
+        .get("omittedAltitudeCount")
+        .is_none());
+    assert_eq!(layer.warnings.len(), 1);
+    assert!(layer.warnings[0].contains("3 KML coordinates"));
+}
+
+#[test]
+fn unknown_altitude_does_not_allow_invalid_horizontal_positions() {
+    let layer = parse(
+        br#"<kml><Folder><name>Track Log</name>
+      <Placemark><Point><coordinates>NaN,40,NaN</coordinates></Point></Placemark>
+      <Placemark><Point><coordinates>-73,95,NaN</coordinates></Point></Placemark>
+      <Placemark><Point><coordinates>-73,40,NaN</coordinates></Point></Placemark>
+    </Folder></kml>"#,
+        "kml",
+        &|| false,
+    )
+    .unwrap();
+    assert_eq!(layer.features.len(), 1);
+    assert_eq!(layer.positions, 1);
+    assert_eq!(layer.bounds, Some([-73.0, 40.0, -73.0, 40.0]));
+    assert!(layer
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("Invalid WGS84")));
+}
+
+#[test]
+fn kml_multitrack_and_nested_geometry_preserve_separate_tracks_and_aligned_times() {
+    let layer=parse(br#"<kml xmlns:gx="http://www.google.com/kml/ext/2.2"><Folder><name>Track Log</name><Placemark><name>Trip</name>
+      <MultiGeometry><Point><coordinates>0,0</coordinates></Point><gx:MultiTrack>
+        <gx:Track><when>2026-11-11T10:00:00Z</when><when>2026-11-11T10:01:00Z</when><gx:coord>1 2 NaN</gx:coord><gx:coord>2 3 4</gx:coord></gx:Track>
+        <gx:Track><when>2026-11-12T12:00:00Z</when><when>2026-11-12T12:01:00Z</when><gx:coord>10 20 5</gx:coord><gx:coord>11 21 6</gx:coord></gx:Track>
+      </gx:MultiTrack></MultiGeometry></Placemark></Folder></kml>"#,"kml",&||false).unwrap();
+    assert_eq!(layer.features.len(), 1);
+    assert_eq!(
+        layer.features[0]["properties"]["coordinateTimes"],
+        json!([
+            null,
+            [
+                ["2026-11-11T10:00:00Z", "2026-11-11T10:01:00Z"],
+                ["2026-11-12T12:00:00Z", "2026-11-12T12:01:00Z"]
+            ]
+        ])
+    );
+    assert_eq!(
+        layer.features[0]["geometry"]["geometries"][1]["geometries"][0]["coordinates"],
+        json!([[1.0, 2.0], [2.0, 3.0, 4.0]])
+    );
+    assert_eq!(
+        layer.features[0]["geometry"]["geometries"][1]["geometries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn kml_tracks_do_not_connect_across_missing_or_invalid_locations() {
+    let layer=parse(br#"<kml xmlns:gx="http://www.google.com/kml/ext/2.2"><Placemark><gx:Track>
+      <when>2026-11-11T10:00:00Z</when><when>2026-11-11T10:01:00Z</when><when>2026-11-11T10:02:00Z</when><when>2026-11-11T10:03:00Z</when><when>2026-11-11T10:04:00Z</when>
+      <gx:coord>1 2 3</gx:coord><gx:coord>2 3 4</gx:coord><gx:coord/><gx:coord>10 20 5</gx:coord><gx:coord>11 21 6</gx:coord>
+    </gx:Track></Placemark></kml>"#,"kml",&||false).unwrap();
+    let feature = &layer.features[0];
+    assert_eq!(feature["geometry"]["type"], "MultiLineString");
+    assert_eq!(
+        feature["geometry"]["coordinates"],
+        json!([
+            [[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]],
+            [[10.0, 20.0, 5.0], [11.0, 21.0, 6.0]]
+        ])
+    );
+    assert_eq!(
+        feature["properties"]["coordinateTimes"],
+        json!([
+            ["2026-11-11T10:00:00Z", "2026-11-11T10:01:00Z"],
+            ["2026-11-11T10:03:00Z", "2026-11-11T10:04:00Z"]
+        ])
+    );
+    assert_eq!(
+        feature["properties"]["sourceTrackTimes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    assert!(layer
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("without connecting across gaps")));
+}
+
+#[test]
+fn kml_multitrack_keeps_valid_siblings_and_single_samples() {
+    let layer=parse(br#"<kml xmlns:gx="http://www.google.com/kml/ext/2.2"><Placemark><gx:MultiTrack>
+      <gx:Track><gx:coord>NaN 2 3</gx:coord></gx:Track>
+      <gx:Track><when>2026-11-11T10:00:00Z</when><gx:coord>1 2 3</gx:coord></gx:Track>
+    </gx:MultiTrack></Placemark><Placemark><TimeSpan><begin>2026-11-10T00:00:00Z</begin><end>2026-11-12T00:00:00Z</end></TimeSpan><LineString><coordinates>4,5,NaN</coordinates></LineString></Placemark></kml>"#,"kml",&||false).unwrap();
+    assert_eq!(layer.features.len(), 2);
+    assert_eq!(
+        layer.features[0]["geometry"]["geometries"][0]["type"],
+        "Point"
+    );
+    assert_eq!(
+        layer.features[0]["properties"]["coordinateTimes"],
+        json!([["2026-11-11T10:00:00Z"]])
+    );
+    assert_eq!(layer.features[1]["geometry"]["type"], "Point");
+    assert_eq!(
+        layer.features[1]["properties"]["kmlGeometryType"],
+        "LineString"
+    );
+    assert_eq!(
+        layer.features[1]["properties"]["begin"],
+        "2026-11-10T00:00:00Z"
+    );
+    assert_eq!(
+        layer.features[1]["properties"]["end"],
+        "2026-11-12T00:00:00Z"
+    );
+    assert!(layer
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("valid sibling tracks")));
+}
+
+#[test]
+fn kml_track_timestamp_mismatches_keep_nulls_and_original_times() {
+    let layer=parse(br#"<kml xmlns:gx="http://www.google.com/kml/ext/2.2"><Placemark><gx:Track>
+      <when>2026-11-11T10:00:00Z</when><gx:coord>1 2 3</gx:coord><gx:coord>2 3 4</gx:coord>
+    </gx:Track></Placemark><Placemark><gx:Track><when>2026-11-12T00:00:00Z</when><when>2026-11-13T00:00:00Z</when><gx:coord>3 4 5</gx:coord></gx:Track></Placemark></kml>"#,"kml",&||false).unwrap();
+    assert_eq!(
+        layer.features[0]["properties"]["coordinateTimes"],
+        json!(["2026-11-11T10:00:00Z", null])
+    );
+    assert_eq!(
+        layer.features[1]["properties"]["sourceTrackTimes"],
+        json!(["2026-11-12T00:00:00Z", "2026-11-13T00:00:00Z"])
+    );
+    assert_eq!(
+        layer.features[1]["properties"]["coordinateTimes"],
+        json!(["2026-11-12T00:00:00Z"])
+    );
+    assert!(layer
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("2 KML tracks")));
+}
+
+#[test]
+#[ignore = "set CULTIVATOR_KML_TRACK_LOG_SOURCE to verify a local datasource without modifying it"]
+fn verifies_track_log_datasource() {
+    let path = std::env::var("CULTIVATOR_KML_TRACK_LOG_SOURCE").expect("KML source path");
+    let input = fs::read(path).unwrap();
+    let layer = parse(&input, "kml", &|| false).unwrap();
+    let source_points = layer
+        .features
+        .iter()
+        .filter(|feature| feature["properties"]["kmlGeometryType"] == "Point")
+        .count();
+    let source_lines = layer
+        .features
+        .iter()
+        .filter(|feature| feature["properties"]["kmlGeometryType"] == "LineString")
+        .count();
+    let points = layer
+        .features
+        .iter()
+        .filter(|feature| feature["geometry"]["type"] == "Point")
+        .count();
+    let lines = layer
+        .features
+        .iter()
+        .filter(|feature| feature["geometry"]["type"] == "LineString")
+        .count();
+    let counts = json!({"features":layer.features.len(),"sourcePoints":source_points,"sourceLines":source_lines,"renderedPoints":points,"renderedLines":lines,"positions":layer.positions});
+    println!("KML_TRACK_LOG {counts} warnings={:?}", layer.warnings);
+    assert!(!layer.features.is_empty());
+    if let Ok(expected) = std::env::var("CULTIVATOR_KML_TRACK_LOG_EXPECTED") {
+        let expected: serde_json::Value = serde_json::from_str(&expected).unwrap();
+        for (key, value) in expected.as_object().expect("expected count object") {
+            assert_eq!(counts.get(key), Some(value), "{key}");
+        }
+    }
+}
+
+#[test]
 fn kml_preserves_namespaces_holes_altitude_and_properties() {
     let input = br#"<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
       <Placemark id="p1"><name>A &amp; B</name><description><![CDATA[<b>Original</b>]]></description>

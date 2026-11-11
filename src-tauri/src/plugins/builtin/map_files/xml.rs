@@ -1,7 +1,7 @@
 use super::{
     checkpoint,
     geometry::{position, Document},
-    MAX_FEATURES,
+    MAX_FEATURES, MAX_POSITIONS,
 };
 use quick_xml::{events::Event, Reader};
 use serde_json::{json, Map, Value};
@@ -143,7 +143,33 @@ pub(super) fn parse(
         return Err(format!("Expected a {format} root element"));
     }
     if format == "kml" {
-        kml(&root, document, cancelled)
+        let mut diagnostics = KmlDiagnostics::default();
+        kml(
+            &root,
+            document,
+            cancelled,
+            &mut Vec::new(),
+            &mut diagnostics,
+        )?;
+        if diagnostics.omitted_altitudes > 0 {
+            document.warning(format!("{} KML coordinates had an unknown elevation; their valid longitude/latitude were retained as 2D positions.", diagnostics.omitted_altitudes));
+        }
+        if diagnostics.track_gaps > 0 {
+            document.warning(format!("{} invalid or empty KML track positions were skipped; separate track segments were retained without connecting across gaps.", diagnostics.track_gaps));
+        }
+        if diagnostics.unmatched_times > 0 {
+            document.warning(format!("{} KML tracks had different position/timestamp counts. Known timestamps were paired by source index, missing times remain null, and original times were retained separately.", diagnostics.unmatched_times));
+        }
+        if diagnostics.single_positions > 0 {
+            document.warning(format!(
+                "{} single-position KML track segments were retained as points.",
+                diagnostics.single_positions
+            ));
+        }
+        if diagnostics.dropped_tracks > 0 {
+            document.warning(format!("{} invalid KML MultiTrack segments were skipped; valid sibling tracks were retained.", diagnostics.dropped_tracks));
+        }
+        Ok(())
     } else {
         gpx(&root, document, cancelled)
     }
@@ -163,40 +189,111 @@ fn feature(geometry: Value, properties: Map<String, Value>) -> Value {
     json!({"type":"Feature", "geometry":geometry, "properties":properties})
 }
 
-fn numbers(text: &str, separator: char) -> Result<Vec<f64>, String> {
+#[derive(Default)]
+struct KmlDiagnostics {
+    omitted_altitudes: usize,
+    track_gaps: usize,
+    unmatched_times: usize,
+    single_positions: usize,
+    dropped_tracks: usize,
+}
+
+impl KmlDiagnostics {
+    fn add(&mut self, other: &Self) {
+        self.omitted_altitudes += other.omitted_altitudes;
+        self.track_gaps += other.track_gaps;
+        self.unmatched_times += other.unmatched_times;
+        self.single_positions += other.single_positions;
+        self.dropped_tracks += other.dropped_tracks;
+    }
+}
+
+struct KmlGeometry {
+    geometry: Value,
+    times: Option<Value>,
+    source_times: Option<Value>,
+}
+
+impl KmlGeometry {
+    fn plain(geometry: Value) -> Self {
+        Self {
+            geometry,
+            times: None,
+            source_times: None,
+        }
+    }
+}
+
+fn kml_position(
+    text: &str,
+    separator: char,
+    diagnostics: &mut KmlDiagnostics,
+) -> Result<Value, String> {
     let parts: Vec<_> = if separator == ' ' {
         text.split_whitespace().collect()
     } else {
-        text.split(separator).collect()
+        text.split(separator).map(str::trim).collect()
     };
-    parts
-        .into_iter()
+    if !(2..=3).contains(&parts.len()) {
+        return Err("KML position requires longitude, latitude and optional elevation".into());
+    }
+    let mut values = parts[..2]
+        .iter()
         .map(|part| {
-            part.trim()
-                .parse::<f64>()
-                .map_err(|_| "Invalid coordinate number".into())
+            part.parse::<f64>()
+                .map_err(|_| "Invalid coordinate number".to_string())
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    // An unknown optional altitude must not discard a known location. Horizontal
+    // coordinates remain strict: NaN, infinity and out-of-range values fail.
+    let horizontal = position(&values)?;
+    if let Some(altitude) = parts.get(2) {
+        match altitude
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+        {
+            Some(altitude) => {
+                values.push(altitude);
+                return position(&values);
+            }
+            None => diagnostics.omitted_altitudes += 1,
+        }
+    }
+    Ok(horizontal)
 }
 
-fn kml_coordinates(node: &Node) -> Result<Vec<Value>, String> {
+fn kml_coordinates(node: &Node, diagnostics: &mut KmlDiagnostics) -> Result<Vec<Value>, String> {
     node.value("coordinates")
         .ok_or("KML geometry has no coordinates")?
         .split_whitespace()
-        .map(|tuple| position(&numbers(tuple, ',')?))
+        .map(|tuple| kml_position(tuple, ',', diagnostics))
         .collect()
 }
 
-fn kml_geometry(node: &Node) -> Result<Value, String> {
+fn kml_geometry(
+    node: &Node,
+    diagnostics: &mut KmlDiagnostics,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<KmlGeometry, String> {
+    checkpoint(cancelled)?;
     match node.name.as_str() {
         "Point" => {
-            let coordinates = kml_coordinates(node)?;
+            let coordinates = kml_coordinates(node, diagnostics)?;
             if coordinates.len() != 1 {
                 return Err("KML Point requires one coordinate".into());
             }
-            Ok(json!({"type":"Point", "coordinates":coordinates[0]}))
+            Ok(KmlGeometry::plain(
+                json!({"type":"Point", "coordinates":coordinates[0]}),
+            ))
         }
-        "LineString" => Ok(json!({"type":"LineString", "coordinates":kml_coordinates(node)?})),
+        "LineString" => {
+            let coordinates = kml_coordinates(node, diagnostics)?;
+            if coordinates.len() == 1 {
+                diagnostics.single_positions += 1;
+            }
+            Ok(KmlGeometry::plain(gpx_line(coordinates)))
+        }
         "Polygon" => {
             let mut rings = Vec::new();
             for boundary in node
@@ -207,6 +304,7 @@ fn kml_geometry(node: &Node) -> Result<Value, String> {
                     boundary
                         .child("LinearRing")
                         .ok_or("KML polygon boundary has no ring")?,
+                    diagnostics,
                 )?;
                 if ring.first() != ring.last() {
                     if let Some(first) = ring.first().cloned() {
@@ -215,26 +313,121 @@ fn kml_geometry(node: &Node) -> Result<Value, String> {
                 }
                 rings.push(ring);
             }
-            Ok(json!({"type":"Polygon", "coordinates":rings}))
+            Ok(KmlGeometry::plain(
+                json!({"type":"Polygon", "coordinates":rings}),
+            ))
         }
-        "Track" => {
-            let coordinates = node
-                .named("coord")
-                .map(|coord| position(&numbers(coord.text.trim(), ' ')?))
-                .collect::<Result<Vec<_>, String>>()?;
-            Ok(json!({"type":"LineString", "coordinates":coordinates}))
-        }
+        "Track" => kml_track(node, diagnostics, cancelled),
         "MultiGeometry" | "MultiTrack" => {
-            let geometries = node
+            let mut geometries = Vec::new();
+            let mut times = Vec::new();
+            let mut source_times = Vec::new();
+            for child in node
                 .children
                 .iter()
                 .filter(|child| is_geometry(&child.name))
-                .map(kml_geometry)
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(json!({"type":"GeometryCollection", "geometries":geometries}))
+            {
+                let mut child_diagnostics = KmlDiagnostics::default();
+                let geometry = match kml_geometry(child, &mut child_diagnostics, cancelled) {
+                    Ok(geometry) => geometry,
+                    Err(_) if node.name == "MultiTrack" => {
+                        checkpoint(cancelled)?;
+                        diagnostics.dropped_tracks += 1;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                diagnostics.add(&child_diagnostics);
+                geometries.push(geometry.geometry);
+                times.push(geometry.times.unwrap_or(Value::Null));
+                source_times.push(geometry.source_times.unwrap_or(Value::Null));
+            }
+            if geometries.is_empty() {
+                return Err("KML geometry has no valid segments".into());
+            }
+            Ok(KmlGeometry {
+                geometry: json!({"type":"GeometryCollection", "geometries":geometries}),
+                times: times
+                    .iter()
+                    .any(|time| !time.is_null())
+                    .then(|| json!(times)),
+                source_times: source_times
+                    .iter()
+                    .any(|time| !time.is_null())
+                    .then(|| json!(source_times)),
+            })
         }
         _ => Err("Unsupported KML geometry".into()),
     }
+}
+
+fn kml_track(
+    node: &Node,
+    diagnostics: &mut KmlDiagnostics,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<KmlGeometry, String> {
+    let times: Vec<Value> = node
+        .named("when")
+        .map(|node| {
+            let text = node.text.trim();
+            if text.is_empty() {
+                Value::Null
+            } else {
+                json!(text)
+            }
+        })
+        .collect();
+    let positions: Vec<&Node> = node.named("coord").collect();
+    if positions.len() > MAX_POSITIONS {
+        return Err("KML track exceeds the position limit".into());
+    }
+    let mismatch = times.len() != positions.len();
+    if mismatch {
+        diagnostics.unmatched_times += 1;
+    }
+    let mut segments = Vec::new();
+    let mut segment_times = Vec::new();
+    let mut coordinates = Vec::new();
+    let mut coordinate_times = Vec::new();
+    let mut gaps = 0;
+    for (index, coord) in positions.into_iter().enumerate() {
+        checkpoint(cancelled)?;
+        match kml_position(coord.text.trim(), ' ', diagnostics) {
+            Ok(position) => {
+                coordinates.push(position);
+                coordinate_times.push(times.get(index).cloned().unwrap_or(Value::Null));
+            }
+            Err(_) => {
+                gaps += 1;
+                if !coordinates.is_empty() {
+                    segments.push(std::mem::take(&mut coordinates));
+                    segment_times.push(std::mem::take(&mut coordinate_times));
+                }
+            }
+        }
+    }
+    if !coordinates.is_empty() {
+        segments.push(coordinates);
+        segment_times.push(coordinate_times);
+    }
+    if segments.is_empty() {
+        return Err("KML track has no valid positions".into());
+    }
+    diagnostics.track_gaps += gaps;
+    diagnostics.single_positions += segments.iter().filter(|segment| segment.len() == 1).count();
+    let (geometry, coordinate_times) = if segments.len() == 1 {
+        (
+            gpx_line(segments.pop().unwrap()),
+            json!(segment_times.pop().unwrap()),
+        )
+    } else {
+        (gpx_track(segments), json!(segment_times))
+    };
+    Ok(KmlGeometry {
+        geometry,
+        times: Some(coordinate_times),
+        source_times: (mismatch || gaps > 0).then(|| json!(times)),
+    })
 }
 
 fn is_geometry(name: &str) -> bool {
@@ -266,7 +459,13 @@ fn extended_data(node: &Node, output: &mut Map<String, Value>) {
     }
 }
 
-fn kml(node: &Node, document: &mut Document, cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+fn kml(
+    node: &Node,
+    document: &mut Document,
+    cancelled: &dyn Fn() -> bool,
+    folders: &mut Vec<String>,
+    diagnostics: &mut KmlDiagnostics,
+) -> Result<(), String> {
     checkpoint(cancelled)?;
     if document.features.len() >= MAX_FEATURES {
         return Err("Map exceeds the feature limit".into());
@@ -280,21 +479,21 @@ fn kml(node: &Node, document: &mut Document, cancelled: &dyn Fn() -> bool) -> Re
         if let Some(timestamp) = node.child("TimeStamp").and_then(|time| time.value("when")) {
             properties.insert("time".into(), json!(timestamp));
         }
+        if let Some(span) = node.child("TimeSpan") {
+            for field in ["begin", "end"] {
+                if let Some(value) = span.value(field) {
+                    properties.insert(field.into(), json!(value));
+                }
+            }
+        }
         let geometry = node.children.iter().find(|child| is_geometry(&child.name));
         if let Some(geometry) = geometry {
-            if geometry.name == "Track" {
-                properties.insert(
-                    "coordinateTimes".into(),
-                    json!(geometry
-                        .named("when")
-                        .map(|n| n.text.trim())
-                        .collect::<Vec<_>>()),
-                );
-            }
-            match kml_geometry(geometry)
-                .and_then(|value| document.add(feature(value, properties), cancelled))
-            {
-                Ok(()) => (),
+            let mut local = KmlDiagnostics::default();
+            match kml_geometry(geometry, &mut local, cancelled).and_then(|value| {
+                kml_properties(&mut properties, geometry, &value, folders, &local);
+                document.add(feature(value.geometry, properties), cancelled)
+            }) {
+                Ok(()) => diagnostics.add(&local),
                 Err(error) => {
                     checkpoint(cancelled)?;
                     document.warning(error);
@@ -302,21 +501,66 @@ fn kml(node: &Node, document: &mut Document, cancelled: &dyn Fn() -> bool) -> Re
             }
         }
     } else if is_geometry(&node.name) {
-        match kml_geometry(node)
-            .and_then(|value| document.add(feature(value, Map::new()), cancelled))
-        {
-            Ok(()) => (),
+        let mut local = KmlDiagnostics::default();
+        match kml_geometry(node, &mut local, cancelled).and_then(|value| {
+            let mut properties = Map::new();
+            kml_properties(&mut properties, node, &value, folders, &local);
+            document.add(feature(value.geometry, properties), cancelled)
+        }) {
+            Ok(()) => diagnostics.add(&local),
             Err(error) => {
                 checkpoint(cancelled)?;
                 document.warning(error);
             }
         }
     } else {
+        let folder = matches!(node.name.as_str(), "Document" | "Folder")
+            .then(|| node.value("name"))
+            .flatten();
+        if let Some(folder) = folder {
+            folders.push(folder.to_string());
+        }
         for child in &node.children {
-            kml(child, document, cancelled)?;
+            kml(child, document, cancelled, folders, diagnostics)?;
+        }
+        if folder.is_some() {
+            folders.pop();
         }
     }
     Ok(())
+}
+
+fn kml_properties(
+    properties: &mut Map<String, Value>,
+    node: &Node,
+    geometry: &KmlGeometry,
+    folders: &[String],
+    diagnostics: &KmlDiagnostics,
+) {
+    properties.insert("kmlGeometryType".into(), json!(node.name));
+    if !folders.is_empty() {
+        properties.insert("folderPath".into(), json!(folders));
+    }
+    if let Some(times) = &geometry.times {
+        properties.insert("coordinateTimes".into(), times.clone());
+    }
+    if let Some(times) = &geometry.source_times {
+        properties.insert("sourceTrackTimes".into(), times.clone());
+    }
+    if diagnostics.omitted_altitudes > 0 {
+        properties.insert(
+            "omittedAltitudeCount".into(),
+            json!(diagnostics.omitted_altitudes),
+        );
+        if node.name == "Point" {
+            if let Some(altitude) = node
+                .value("coordinates")
+                .and_then(|value| value.split(',').nth(2))
+            {
+                properties.insert("sourceAltitude".into(), json!(altitude.trim()));
+            }
+        }
+    }
 }
 
 fn gpx_position(node: &Node) -> Result<Value, String> {

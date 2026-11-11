@@ -2,7 +2,11 @@
 
 Add KML, GPX, or GeoJSON files (or a directory containing them) as a datasource, then run the built-in **Map Files** plugin. Open **Map** in the workspace sidebar to view the saved layers.
 
-The Rust parser supports KML points, lines, polygons with holes, MultiGeometry and gx:Track; GPX waypoints, routes and segmented tracks; and all GeoJSON geometry types, Features and FeatureCollections. Separate GPX track segments remain separate. Single-position GPX segments are retained as points. Coordinates use WGS84 longitude, latitude and optional elevation in meters.
+The Rust parser supports KML points, lines, polygons with holes, MultiGeometry, gx:Track and gx:MultiTrack; GPX waypoints, routes and segmented tracks; and all GeoJSON geometry types, Features and FeatureCollections. Coordinates use WGS84 longitude, latitude and optional elevation in meters.
+
+KML **Track Log** folders containing timestamped point placemarks and connecting LineStrings are parsed along with other map features. Folder paths, original geometry types, TimeStamp/TimeSpan values, and nested track timestamps are preserved. Unknown optional elevations (including `NaN`) keep the valid 2D location; point properties retain the original altitude text and parsing warnings report omitted elevations. Invalid horizontal coordinates are rejected. Single-position KML/GPX track segments remain points. Missing or invalid gx:Track positions split segments without drawing a line across the gap. Timestamps stay aligned with retained coordinates, and mismatched or unlocated source times are retained separately. MultiTrack segments remain separate, including when a sibling segment is invalid.
+
+After updating the parser, rerun **Map Files** on an existing datasource to regenerate saved layers; refreshing the map alone does not reparse source files.
 
 The Map workspace uses the same MapLibre engine, streets/satellite basemaps and basemap image resolver as the Drone page. Toggle layers, fit all visible data or a single layer, search features, and select geometry on the map to inspect properties and source paths. Evidence descriptions are displayed as text. If the basemap is unavailable, geometry remains visible on a local background.
 
