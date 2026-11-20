@@ -67,6 +67,8 @@ the filesystem; case-owned working files are created only when plugins or viewer
 need local paths. Rust metadata and hashing consumers can read directly through
 Inodex, with original source metadata recorded separately.
 
+The **Image Metadata** plugin can also inspect ZIP datasources directly and extract only matching images and videos into the case. See [media from ZIP datasources](docs/media-zip-inputs.md).
+
 See [Inodex integration](docs/inodex-integration.md) for setup, importing,
 extraction/storage behavior and current limits, and the
 [media gallery benchmark](docs/media-gallery-benchmark.md) for the measured baseline.

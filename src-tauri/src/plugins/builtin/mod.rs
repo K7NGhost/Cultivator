@@ -3,6 +3,7 @@ mod drone_telemetry;
 mod map_files;
 mod drone_carving;
 mod image_metadata;
+mod media_archives;
 mod face_detection;
 mod clip_classification;
 mod python_worker;
@@ -308,14 +309,19 @@ impl BuiltinPlugin for ImageMetadataPlugin {
         image_metadata_manifest()
     }
 
+    fn output_directory_name(&self) -> Option<&'static str> {
+        Some("media")
+    }
+
     fn run(&self, context: &mut BuiltinPluginContext<'_>) -> Result<(), String> {
+        let prepared = media_archives::prepare(context)?;
         let cancelled = context.cancelled;
         let hash_media = context
             .options
             .get("hashMedia")
             .is_some_and(|value| value.as_bool() == Some(true) || value.as_str() == Some("true"));
         let mut gallery = image_metadata::execute_with_cancellation(
-            context.paths.clone(),
+            prepared.paths.clone(),
             hash_media,
             cancelled,
             |event| {
@@ -336,6 +342,7 @@ impl BuiltinPlugin for ImageMetadataPlugin {
                 );
             },
         )?;
+        prepared.attach_provenance(&mut gallery);
         let matched_files = gallery.photos.len() + gallery.videos.len();
         context.log(
             "info",

@@ -625,7 +625,7 @@ fn sanitize_output_name(value: &str) -> String {
     }
 }
 
-fn sanitized_destination_path(base: &Path, enclosed_name: &Path) -> Option<PathBuf> {
+pub(super) fn sanitized_destination_path(base: &Path, enclosed_name: &Path) -> Option<PathBuf> {
     let mut destination = base.to_path_buf();
     let mut has_component = false;
 
@@ -644,6 +644,27 @@ fn sanitized_destination_path(base: &Path, enclosed_name: &Path) -> Option<PathB
     }
 
     has_component.then_some(destination)
+}
+
+/// Share safe, cancellable ZIP member extraction with analyzers that select entries by file headers.
+pub(super) fn extract_selected_zip(
+    archive_path: &Path,
+    output: &Path,
+    selected: &HashSet<usize>,
+    cancelled: Check<'_>,
+    progress: impl FnMut(u64),
+) -> Result<(ArchiveExtractionRecord, Vec<String>), String> {
+    let _guard = acquire_output_root(output)?;
+    let mut errors = Vec::new();
+    let record = zip_extraction::extract_selected_zip_archive(
+        archive_path,
+        output,
+        &mut errors,
+        selected,
+        cancelled,
+        progress,
+    )?;
+    Ok((record, errors))
 }
 
 fn sanitize_archive_path_component(value: &str) -> String {

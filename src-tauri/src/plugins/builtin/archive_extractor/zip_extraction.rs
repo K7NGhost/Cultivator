@@ -33,6 +33,45 @@ pub(super) fn extract_zip_archive(
     errors: &mut Vec<String>,
     matchers: Option<&ArchiveEntryMatchers>,
     cancelled: Check<'_>,
+    progress: impl FnMut(u64),
+) -> Result<ArchiveExtractionRecord, String> {
+    extract_zip_archive_with_selection(
+        archive_path,
+        archive_output,
+        errors,
+        matchers,
+        None,
+        cancelled,
+        progress,
+    )
+}
+
+pub(super) fn extract_selected_zip_archive(
+    archive_path: &Path,
+    archive_output: &Path,
+    errors: &mut Vec<String>,
+    selected: &HashSet<usize>,
+    cancelled: Check<'_>,
+    progress: impl FnMut(u64),
+) -> Result<ArchiveExtractionRecord, String> {
+    extract_zip_archive_with_selection(
+        archive_path,
+        archive_output,
+        errors,
+        None,
+        Some(selected),
+        cancelled,
+        progress,
+    )
+}
+
+fn extract_zip_archive_with_selection(
+    archive_path: &Path,
+    archive_output: &Path,
+    errors: &mut Vec<String>,
+    matchers: Option<&ArchiveEntryMatchers>,
+    selected: Option<&HashSet<usize>>,
+    cancelled: Check<'_>,
     mut progress: impl FnMut(u64),
 ) -> Result<ArchiveExtractionRecord, String> {
     cancellation::checkpoint(cancelled)?;
@@ -59,6 +98,9 @@ pub(super) fn extract_zip_archive(
     let mut throttle = ProgressThrottle::new();
     for index in 0..archive.len() {
         cancellation::checkpoint(cancelled)?;
+        if selected.is_some_and(|entries| !entries.contains(&index)) {
+            continue;
+        }
         let result: Result<Option<EntryTask>, String> = (|| {
             let file = archive.by_index_raw(index).map_err(|e| e.to_string())?;
             if matchers.is_some_and(|m| !archive_entry_matches(m, file.name())) {

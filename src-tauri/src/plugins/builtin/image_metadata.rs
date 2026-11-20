@@ -554,6 +554,10 @@ fn detect_media_format(path: &Path, bytes: &[u8]) -> Option<MediaFormat> {
     extension_based_video_format(path).map(video_format)
 }
 
+pub(super) fn is_media_header(path: &Path, bytes: &[u8]) -> bool {
+    detect_media_format(path, bytes).is_some()
+}
+
 fn image_format(format: &'static str) -> MediaFormat {
     MediaFormat {
         media_type: MediaType::Image,
