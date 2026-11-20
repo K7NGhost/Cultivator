@@ -60,6 +60,8 @@ type FileTreeViewerProps = {
   onSelectFileViewDataSource?: (datasourceId: string) => void;
   onRemoveDataSource?: (node: EvidenceTreeNode) => void;
   onRunDataSourcePlugins?: (node: EvidenceTreeNode) => void;
+  /** Ids of datasource nodes currently being removed; their rows show a spinner and are locked. */
+  removingDataSourceNodeIds?: ReadonlySet<string>;
 };
 
 export type FileViewSelection = {
@@ -687,14 +689,40 @@ function EvidenceTreeNodeRow({
   onSelectNode,
   onRemoveDataSource,
   onRunDataSourcePlugins,
+  removingDataSourceNodeIds,
 }: NodeRendererProps<AutopsyTreeNode> & {
   showChildCounts: boolean;
   onSelectNode: (node: AutopsyTreeNode) => void;
   onRemoveDataSource?: (node: EvidenceTreeNode) => void;
   onRunDataSourcePlugins?: (node: EvidenceTreeNode) => void;
+  removingDataSourceNodeIds?: ReadonlySet<string>;
 }) {
   const Icon = getNodeIcon(node.data);
   const visibleCount = getNodeVisibleCount(node.data);
+  const isRemoving =
+    node.data.kind === "datasource" &&
+    !!node.data.sourceNode &&
+    !!removingDataSourceNodeIds?.has(node.data.sourceNode.id);
+
+  if (isRemoving) {
+    return (
+      <div style={style} className="px-1">
+        <div
+          role="status"
+          aria-busy="true"
+          className="flex h-6 items-center gap-1.5 rounded-sm border border-transparent text-xs text-muted-foreground"
+          style={{ paddingLeft: `${node.level * 16 + 2 + 24}px` }}
+        >
+          <span
+            className="inline-block size-3.5 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground"
+            aria-hidden="true"
+          />
+          <span className="min-w-0 truncate">{node.data.name}</span>
+          <span className="shrink-0 text-[11px]">Removing…</span>
+        </div>
+      </div>
+    );
+  }
 
   const row = (
     <div style={style} className="px-1">
@@ -874,6 +902,7 @@ export function FileTreeViewer({
   onSelectFileViewDataSource,
   onRemoveDataSource,
   onRunDataSourcePlugins,
+  removingDataSourceNodeIds,
 }: FileTreeViewerProps) {
   const treePanel = useElementSize<HTMLDivElement>();
   const treeRef = useRef<TreeApi<AutopsyTreeNode> | undefined>(undefined);
@@ -1184,6 +1213,7 @@ export function FileTreeViewer({
                 onSelectNode={selectNode}
                 onRemoveDataSource={onRemoveDataSource}
                 onRunDataSourcePlugins={onRunDataSourcePlugins}
+                removingDataSourceNodeIds={removingDataSourceNodeIds}
               />
             )}
           </Tree>

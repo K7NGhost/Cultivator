@@ -171,6 +171,9 @@ export function FilesPage() {
   const [filePreview, setFilePreview] = useState<FileFormatPreview | null>(null);
   const [entriesError, setEntriesError] = useState<string | null>(null);
   const [dataSourceError, setDataSourceError] = useState<string | null>(null);
+  const [removingDataSourceNodeIds, setRemovingDataSourceNodeIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [dataSourceTreeNodes, setDataSourceTreeNodes] = useState<
     EvidenceTreeNode[]
@@ -1033,13 +1036,18 @@ export function FilesPage() {
   }
 
   async function handleRemoveDataSource(node: EvidenceTreeNode) {
-    if (!activeCase || node.kind !== "datasource") {
+    if (
+      !activeCase ||
+      node.kind !== "datasource" ||
+      removingDataSourceNodeIds.has(node.id)
+    ) {
       return;
     }
 
     const dataSourceId = node.id.replace(/^datasource:/, "");
 
     setDataSourceError(null);
+    setRemovingDataSourceNodeIds((current) => new Set(current).add(node.id));
 
     try {
       await removeDataSource({
@@ -1062,6 +1070,12 @@ export function FilesPage() {
           ? caughtError.message
           : String(caughtError),
       );
+    } finally {
+      setRemovingDataSourceNodeIds((current) => {
+        const next = new Set(current);
+        next.delete(node.id);
+        return next;
+      });
     }
   }
 
@@ -1314,6 +1328,7 @@ export function FilesPage() {
               void handleRemoveDataSource(node);
             }}
             onRunDataSourcePlugins={openRunPluginsDialog}
+            removingDataSourceNodeIds={removingDataSourceNodeIds}
           />
         </ResizablePanel>
 
