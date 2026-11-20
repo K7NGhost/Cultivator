@@ -15,17 +15,17 @@ import { filterMapDates, type MapDateFilter } from "../lib/dateFilter";
 import type { FeatureSelection, VisibleMapLayer } from "../types";
 import { useTimeZone } from "@/features/settings/timeZoneSettings";
 
-export function MapPage() {
+export function MapPage({ active = true }: { active?: boolean }) {
   const { activeCase } = useCases();
   if (!activeCase) return <div className="flex items-center gap-2 border-b p-2 text-xs text-muted-foreground">
     Open a case to inspect map files.<Button asChild variant="outline" size="sm" className="h-7 text-xs"><Link to="/case">Open case</Link></Button>
   </div>;
-  return <MapWorkspace key={activeCase.databasePath} caseRecord={activeCase} />;
+  return <MapWorkspace key={activeCase.databasePath} caseRecord={activeCase} active={active} />;
 }
 
-export function MapWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
+export function MapWorkspace({ caseRecord, active: tabActive = true }: { caseRecord: CaseRecord; active?: boolean }) {
   const timeZone = useTimeZone();
-  const active = useLocation().pathname === "/map";
+  const active = useLocation().pathname === "/map" && tabActive;
   const { layers, visible, setVisible, data, refreshing, loading, error, refresh } = useMapLayers(caseRecord.databasePath, active);
   const [selected, setSelected] = useState<FeatureSelection | null>(null);
   const [inspectId, setInspectId] = useState("");

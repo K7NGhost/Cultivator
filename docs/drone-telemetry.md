@@ -2,7 +2,7 @@
 
 The built-in **Drone Telemetry** plugin reads supported DJI DAT V1/V3 logs and
 saves case-owned conversions. Add a datasource containing `.dat` files, select
-Drone Telemetry in Plugins, and run it. Open **Drone** in the sidebar to inspect
+Drone Telemetry in Plugins, and run it. Open **Map** in the sidebar and select the **Drone map** tab to inspect
 the results. The parser runs locally in Rust and does not require Python.
 
 The workspace includes a flight library, street/satellite map, elapsed-time

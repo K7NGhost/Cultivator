@@ -18,8 +18,7 @@ import { CaseProvider, useCases } from "@/features/cases";
 import { EvidenceProvider } from "@/features/evidence";
 import { FilesPage } from "@/features/files/pages/FilesPage";
 import { MediaPage } from "@/features/media/pages/MediaPage";
-import { DronePage } from "@/features/drone/pages/DronePage";
-import { MapPage } from "@/features/mapping/pages/MapPage";
+import { MapTabsPage } from "@/features/mapping/pages/MapTabsPage";
 import { TimelinePage } from "@/features/timeline/pages/TimelinePage";
 import { PluginsPage } from "@/features/plugins/pages/PluginsPage";
 import { usePluginJobMonitor } from "@/features/plugins/hooks/usePluginJobMonitor";
@@ -29,8 +28,7 @@ import { SettingsPage } from "@/features/settings/SettingsPage";
 import { initializePerformanceSettings } from "@/features/settings/performanceSettings";
 
 const workspaceRoutes = [
-  { path: "/drone", element: <DronePage /> },
-  { path: "/map", element: <MapPage /> },
+  { path: "/map", element: <MapTabsPage /> },
   { path: "/settings", element: <SettingsPage /> },
   {
     path: "/case",
@@ -131,10 +129,16 @@ function PersistentWorkspace() {
   const [visitedPaths, setVisitedPaths] = useState(() => new Set([activePath]));
 
   useEffect(() => {
+    if (location.pathname === "/drone") {
+      const params = new URLSearchParams(location.search);
+      params.set("view", "drone");
+      navigate(`/map?${params}`, { replace: true });
+      return;
+    }
     if (location.pathname === "/" || activePath !== location.pathname) {
       navigate(activePath, { replace: true });
     }
-  }, [activePath, location.pathname, navigate]);
+  }, [activePath, location.pathname, location.search, navigate]);
 
   useEffect(() => {
     setVisitedPaths((currentPaths) => {
@@ -163,6 +167,7 @@ function PersistentWorkspace() {
 }
 
 function normalizeWorkspacePath(pathname: string) {
+  if (pathname === "/drone") return "/map";
   return workspaceRoutes.some((route) => route.path === pathname)
     ? pathname
     : "/files";

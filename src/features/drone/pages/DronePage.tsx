@@ -19,7 +19,7 @@ import "../drone.css";
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-export function DronePage() {
+export function DronePage({ active = true }: { active?: boolean }) {
   const { activeCase } = useCases();
   if (!activeCase)
     return (
@@ -31,12 +31,13 @@ export function DronePage() {
       </div>
     );
   return (
-    <DroneWorkspace key={activeCase.databasePath} caseRecord={activeCase} />
+    <DroneWorkspace key={activeCase.databasePath} caseRecord={activeCase} active={active} />
   );
 }
 
-function DroneWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
-  const active = useLocation().pathname === "/drone";
+function DroneWorkspace({ caseRecord, active: tabActive }: { caseRecord: CaseRecord; active: boolean }) {
+  const pathname = useLocation().pathname;
+  const active = tabActive && (pathname === "/map" || pathname === "/drone");
   const [flights, setFlights] = useState<DroneFlight[]>([]);
   const [flightId, setFlightId] = useState("");
   const [detail, setDetail] = useState<ImportResult | null>(null);

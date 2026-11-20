@@ -1,6 +1,6 @@
 # Map files
 
-Add KML, GPX, or GeoJSON files (or a directory containing them) as a datasource, then run the built-in **Map Files** plugin. Open **Map** in the workspace sidebar to view the saved layers.
+Add KML, GPX, or GeoJSON files (or a directory containing them) as a datasource, then run the built-in **Map Files** plugin. Open **Map** in the workspace sidebar and select **General map** to view the saved layers. Use the **Drone map** tab in the same page to inspect drone flights; each tab keeps its own workspace layout and selections.
 
 The Rust parser supports KML points, lines, polygons with holes, MultiGeometry, gx:Track and gx:MultiTrack; GPX waypoints, routes and segmented tracks; and all GeoJSON geometry types, Features and FeatureCollections. Coordinates use WGS84 longitude, latitude and optional elevation in meters.
 
@@ -10,7 +10,7 @@ After updating the parser, rerun **Map Files** on an existing datasource to rege
 
 KML description tables are also available as readable `descriptionFields`, with the original description retained. Recorded speeds appear as `speed` with their source units, including event speeds embedded in Identifier text. Speed limits appear separately as `speedLimit`; no unit is assumed if the source omits it. Regular track samples without a recorded speed remain without one.
 
-The Map workspace uses the same MapLibre engine, streets/satellite basemaps and basemap image resolver as the Drone page. Toggle layers, fit all visible data or a single layer, search features, and select geometry on the map to inspect properties and source paths. Evidence descriptions are displayed as text. If the basemap is unavailable, geometry remains visible on a local background.
+The General map workspace uses the same MapLibre engine, streets/satellite basemaps and basemap image resolver as the Drone map tab. Toggle layers, fit all visible data or a single layer, search features, and select geometry on the map to inspect properties and source paths. Evidence descriptions are displayed as text. If the basemap is unavailable, geometry remains visible on a local background.
 
 Layers are on the left and feature browsing and details are on the right. Both sidebars can be resized or closed with their close buttons. Use **Layers** and **Features** in the toolbar to reopen them. Selecting a feature on the map opens the feature sidebar automatically.
 
