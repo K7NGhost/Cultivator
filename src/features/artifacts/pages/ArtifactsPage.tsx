@@ -1,8 +1,7 @@
 import { ArtifactTreeViewer } from "../components/ArtifactTreeViewer";
 import { PagedArtifactPanel } from "../components/PagedArtifactPanel";
 import { useLocation } from "react-router-dom";
-import { ArtifactLocationPreview } from "../components/ArtifactLocationPreview";
-import { detectCoordinatePairs } from "../utils/artifactLocations";
+import { ArtifactDataPreview } from "../components/ArtifactDataPreview";
 import type { ArtifactTreeNode } from "../model/artifactTree";
 import { formatEntryHitLabel } from "../utils/artifactEntryLabel";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
@@ -1337,6 +1336,7 @@ function LoadedArtifactPropertiesPanel({
           <ArtifactPreviewPanel
             artifact={artifact}
             table={tableView}
+            sourceArtifacts={artifactOptions}
             onSelectArtifactId={(id) => {
               const selected = artifactOptions.find((option) => option.id === id);
               if (selected) onSelectArtifact(selected);
@@ -1388,15 +1388,18 @@ function LoadedArtifactPropertiesPanel({
 function ArtifactPreviewPanel({
   artifact,
   table,
+  sourceArtifacts,
   onSelectArtifactId,
 }: {
   artifact: StoredArtifactRecord;
   table: CustomTableView | null;
+  sourceArtifacts: StoredArtifactRecord[];
   onSelectArtifactId: (id: string) => void;
 }) {
   const timeZone = useTimeZone();
-  if (table && detectCoordinatePairs(table.columns).length > 0) {
-    return <ArtifactLocationPreview table={table} selectedArtifactId={artifact.id} onSelectArtifactId={onSelectArtifactId} />;
+  if (table) {
+    return <ArtifactDataPreview table={table} sourceArtifacts={sourceArtifacts} selectedArtifactId={artifact.id} onSelectArtifactId={onSelectArtifactId}
+      fallback={<div className="p-3 text-xs text-muted-foreground">No specialized preview is available for these columns. Use Table to inspect the recorded values.</div>} />;
   }
   if (artifact.resultKind === "message" && isPayloadObject(artifact.payload)) {
     return <MessageArtifactPreview artifact={artifact} payload={artifact.payload} />;

@@ -8,8 +8,7 @@ import { useTimeZone } from "@/features/settings/timeZoneSettings";
 import { artifactModelsByKind } from "../model/artifactModels";
 import type { ArtifactModelDefinition, CustomTableColumn, StoredArtifactRecord } from "../model/types";
 import { formatArtifactTableCell } from "../utils/artifactTableFormatting";
-import { detectCoordinatePairs } from "../utils/artifactLocations";
-import { ArtifactLocationPreview } from "./ArtifactLocationPreview";
+import { ArtifactDataPreview } from "./ArtifactDataPreview";
 import { ArtifactRowContextMenu, ArtifactRowTagButton } from "./ArtifactRowTagMenu";
 import { ArtifactRowTagDialog } from "./ArtifactRowTagDialog";
 import { useArtifactRowTags } from "../hooks/useArtifactRowTags";
@@ -139,7 +138,7 @@ export function PagedArtifactPanel({ databasePath, revision, artifact, artifacts
     return () => { disposed = true; clearTimeout(timer); unlisten?.(); void invoke("cancel_artifact_view").catch(() => undefined); };
   }, [databasePath, idsKey, revision, offset, sort.key, sort.descending, modelColumns, isMap, tab, retry, taggedOnly]);
   const matchingSources = useMemo(() => artifacts.filter((item) => !sourceQuery || `${item.filePath} ${item.label}`.toLocaleLowerCase().includes(sourceQuery.toLocaleLowerCase())), [artifacts, sourceQuery]);
-  const mapTable = useMemo(() => page ? { name: page.name, columns: page.columns, totalOccurrences: page.rows.reduce((sum, row) => sum + row.occurrenceCount, 0),
+  const previewTable = useMemo(() => page ? { name: page.name, columns: page.columns, totalOccurrences: page.rows.reduce((sum, row) => sum + row.occurrenceCount, 0),
     deduplication: { mode: "group" as const }, sources: selected.map((item) => ({ artifactId: item.id, filePath: item.filePath })),
     rows: page.rows.map((row) => ({ values: row.values, occurrenceCount: row.occurrenceCount, primarySourceIndex: row.primarySourceIndex })) } : null, [page, selected]);
   return <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden" aria-label="Paged artifact viewer">
@@ -167,11 +166,10 @@ export function PagedArtifactPanel({ databasePath, revision, artifact, artifacts
           {page.shortened && <span> · Long values are shortened; open Properties to inspect the original JSON.</span>}
         </div>
         {rowTags.error && <div role="alert" className="shrink-0 border-b p-2 text-xs text-destructive">{rowTags.error}<Button className="ml-2 h-6 text-xs" variant="outline" size="sm" disabled={rowTags.busy} onClick={rowTags.refresh}>Reload tags</Button></div>}
-        {tab === "preview" ? mapTable && detectCoordinatePairs(page.columns).length ? <div className="min-h-0 flex-1"><div className="px-2 py-1 text-[11px]">Locations on this page</div><ArtifactLocationPreview table={mapTable} /></div>
-    : <div className="min-h-0 flex-1 overflow-auto p-3 text-xs"><p className="mb-3 text-muted-foreground">Selected entry on this page</p>
+        {tab === "preview" ? previewTable && <ArtifactDataPreview table={previewTable} sourceArtifacts={selected} pageOnly selectedRowIndex={page.rows.findIndex((row) => row.key === selectedRowKey)} onSelectRow={(index) => setSelectedRowKey(page.rows[index]?.key ?? "")} fallback={<div className="min-h-0 flex-1 overflow-auto p-3 text-xs"><p className="mb-3 text-muted-foreground">Selected entry on this page</p>
       <dl className="space-y-2">{page.columns.map((column) => { const row=page.rows.find((row) => row.key === selectedRowKey) ?? page.rows[0];
         return row && <div key={column.key}><dt className="font-medium text-muted-foreground">{column.label}</dt><dd className="whitespace-pre-wrap break-words select-text">{formatArtifactTableCell(row.values[column.key],column,timeZone) || "–"}</dd></div>;
-      })}</dl></div>
+      })}</dl></div>} />
         : <div className="min-h-0 flex-1 overflow-auto"><table className="min-w-full border-collapse text-left text-xs" aria-label="Artifact entries">
           <thead className="sticky top-0 bg-background"><tr>{page.columns.map((column) => <th key={column.key} className="max-w-72 border-b p-2" aria-sort={!loading && sort.key === column.key ? sort.descending ? "descending" : "ascending" : "none"}>
             <button type="button" disabled={loading} onClick={() => { setSort({ key: column.key, descending: sort.key === column.key && !sort.descending }); setOffset(0); setPreviousOffsets([]); }}>{column.label}{!loading && sort.key === column.key ? sort.descending ? " ↓" : " ↑" : ""}</button>
