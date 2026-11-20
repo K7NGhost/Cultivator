@@ -12,6 +12,8 @@ import {
   Clapperboard,
   FileImage,
   Expand,
+  Eye,
+  EyeOff,
   Film,
   FolderSearch,
   Images,
@@ -46,6 +48,7 @@ import {
 } from "@/features/datasources";
 import type { DataSourceRecord } from "@/features/datasources";
 import { MediaImagePreview } from "../components/MediaImagePreview";
+import { CsamImageBlurToggle, CsamImageRevealProvider, useCsamImageReveal } from "../components/CsamImageBlur";
 import { DirectorySearch } from "../components/DirectorySearch";
 import { HashsetPanel } from "../components/HashsetPanel";
 import { listHashsetHitMediaPage, type HashsetFilter } from "../services/hashsetRepository";
@@ -424,6 +427,7 @@ export function MediaPage() {
       await setMediaClassification(activeCase.databasePath, item.path, category);
       if (classificationContextRef.current !== context) return;
       setSelectedItem((current) => current?.path === item.path ? { ...current, vicCategory: category } : current);
+      setViewer((current) => current?.item.path === item.path ? { ...current, item: { ...current.item, vicCategory: category } } : current);
       setGallery((current) => ({ ...current, photos: current.photos.map((photo) => photo.path === item.path ? { ...photo, vicCategory: category } : photo) }));
       try {
         if (advanceFromIndex !== undefined && galleryScopeRef.current === reviewScope && selectedItemRef.current?.path === item.path) {
@@ -460,6 +464,7 @@ export function MediaPage() {
   </>;
 
   return (
+    <CsamImageRevealProvider key={activeCase?.databasePath ?? "no-case"}>
     <div className="flex h-full min-h-0 flex-col bg-background">
       <section className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
         <div className="flex min-w-0 items-center gap-2">
@@ -653,6 +658,7 @@ export function MediaPage() {
       </Suspense>}
       <VideoPlayerSheet item={galleryActive ? playerItem : null} onOpenChange={setPlayerItem} />
     </div>
+    </CsamImageRevealProvider>
   );
 }
 
@@ -945,6 +951,7 @@ function MediaTilePreview({
   tile: MediaItem;
 }) {
   const classification = mediaType === "image" ? vicClassification(tile.vicCategory, customCategories) : undefined;
+  const csam = useCsamImageReveal(tile);
   const tileButton = (
     <button
       type="button"
@@ -982,6 +989,7 @@ function MediaTilePreview({
           showFaceBoxes={showFaceBoxes}
           caseDatabasePath={caseDatabasePath}
           item={tile}
+          revealCsam={csam.revealed}
           retain
           edge={thumbnailEdge}
           fit="contain"
@@ -1007,6 +1015,9 @@ function MediaTilePreview({
     <ContextMenu>
       <ContextMenuTrigger asChild>{tileButton}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-44">
+        {csam.classified && <ContextMenuItem className="text-xs" onSelect={csam.toggle}>
+          {csam.revealed ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}{csam.revealed ? "Blur image" : "Unblur image"}
+        </ContextMenuItem>}
         {onOpenImage && <ContextMenuItem className="text-xs" onSelect={() => onOpenImage(tile)}>
           <Expand className="size-3.5" aria-hidden="true" />Open image
         </ContextMenuItem>}
@@ -1146,6 +1157,7 @@ function MediaDetailsPanel({
   const galleryActive = useGalleryActive();
   const timeZone = useTimeZone();
   const selectedClassification = item?.mediaType === "image" ? vicClassification(item.vicCategory, classification?.custom.categories) : undefined;
+  const csam = useCsamImageReveal(item);
   return (
     <aside className="flex min-h-0 flex-col">
       <div className="flex h-8 shrink-0 items-center gap-2 border-b px-2">
@@ -1159,11 +1171,13 @@ function MediaDetailsPanel({
         {item && galleryActive && <section className="mb-2 overflow-hidden rounded-lg border-2" aria-label="Selected media preview"
           style={selectedClassification ? { borderColor: selectedClassification.color } : undefined}>
           {item.mediaType === "image" ? <MediaImagePreview caseDatabasePath={caseDatabasePath} item={item} fit="contain" retain showFaceBoxes={classification?.showFaceBoxes ?? true}
+            revealCsam={csam.revealed}
             className="aspect-[4/3] w-full bg-black" /> : <MediaVideoPreview item={item} className="aspect-[4/3] w-full bg-black" />}
           <div className="truncate bg-black px-1 py-0.5 text-[11px] text-white" title={item.name}>{item.name}</div>
           {selectedClassification && <div className="break-words px-1 py-0.5 text-center text-[11px] font-semibold"
             style={{ backgroundColor: selectedClassification.color, color: classificationTextColor(selectedClassification.color) }}>{selectedClassification.label}</div>}
         </section>}
+        {item && galleryActive && csam.classified && <div className="mb-2"><CsamImageBlurToggle revealed={csam.revealed} onToggle={csam.toggle} /></div>}
         {item?.visualStackId && (item.stackSize ?? 0) > 1 && classification?.visual && classification.visual.stackId !== item.visualStackId && (
           <Button size="sm" variant="outline" onClick={() => classification.visual?.onOpenStack(item.visualStackId!)}>Open similar stack ({item.stackSize})</Button>
         )}

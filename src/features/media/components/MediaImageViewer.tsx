@@ -6,10 +6,13 @@ import { TransformComponent, TransformWrapper, type ReactZoomPanPinchRef } from 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { MediaItem } from "../model/types";
+import { CSAM_IMAGE_BLUR_FILTER, CsamImageBlurIndicator, CsamImageBlurToggle, useCsamImageReveal } from "./CsamImageBlur";
 
 type Props = { item: MediaItem; onClose: () => void };
 
 export default function MediaImageViewer({ item, onClose }: Props) {
+  const csam = useCsamImageReveal(item);
+  const blurred = csam.blurred;
   const [source, setSource] = useState<string>();
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -79,6 +82,7 @@ export default function MediaImageViewer({ item, onClose }: Props) {
           <DialogDescription className="mt-1 text-xs">Scroll or pinch to zoom. Drag to pan. Display adjustments apply only to this preview.</DialogDescription>
         </header>
         <div role="toolbar" aria-label="Image view controls" className="flex shrink-0 flex-wrap items-center gap-1 border-b p-2">
+          {csam.classified && <CsamImageBlurToggle revealed={csam.revealed} onToggle={csam.toggle} />}
           <Button size="icon-sm" variant="outline" aria-label="Zoom out" title="Zoom out" disabled={!loaded || failed} onClick={() => { void transform.current?.zoomOut(); }}><ZoomOut /></Button>
           <output className="w-14 text-center text-xs tabular-nums" aria-label="Image zoom">{loaded ? `${Math.round(zoom * fitScale * 100)}%` : "—"}</output>
           <Button size="icon-sm" variant="outline" aria-label="Zoom in" title="Zoom in" disabled={!loaded || failed} onClick={() => { void transform.current?.zoomIn(); }}><ZoomIn /></Button>
@@ -90,7 +94,7 @@ export default function MediaImageViewer({ item, onClose }: Props) {
           <Button size="icon-sm" variant="outline" aria-label="Flip horizontally" title="Flip horizontally" aria-pressed={flipped} disabled={!loaded || failed} onClick={() => setFlipped(value => !value)}><FlipHorizontal2 /></Button>
           <Button size="sm" variant="outline" className="ml-auto" onClick={reset}>Reset view</Button>
         </div>
-        <div ref={setCanvas} className="relative min-h-0 flex-1 overflow-hidden bg-black">
+        <div ref={setCanvas} data-csam-blurred={blurred || undefined} className="relative min-h-0 flex-1 overflow-hidden bg-black">
           {!failed && source && <TransformWrapper ref={transform} minScale={1} maxScale={Math.max(8, 1 / fitScale)} centerOnInit
             doubleClick={{ mode: "toggle" }} onTransform={(_, state) => setZoom(state.scale)}>
             <TransformComponent wrapperStyle={{ width: "100%", height: "100%" }} contentStyle={{ width: contentWidth, height: contentHeight }}>
@@ -98,7 +102,7 @@ export default function MediaImageViewer({ item, onClose }: Props) {
                 <img src={source} alt={item.name} draggable={false} decoding="async"
                   style={{ position: "absolute", left: "50%", top: "50%", width, height, maxWidth: "none",
                     transform: `translate(-50%, -50%) rotate(${rotation}deg) scaleX(${flipped ? -1 : 1})`,
-                    filter: `brightness(${brightness}%) contrast(${contrast}%) grayscale(${grayscale ? 100 : 0}%)` }}
+                    filter: `${blurred ? `${CSAM_IMAGE_BLUR_FILTER} ` : ""}brightness(${brightness}%) contrast(${contrast}%) grayscale(${grayscale ? 100 : 0}%)` }}
                   onLoad={event => {
                     setNaturalSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight });
                     setLoaded(true);
@@ -106,6 +110,7 @@ export default function MediaImageViewer({ item, onClose }: Props) {
               </div>
             </TransformComponent>
           </TransformWrapper>}
+          {blurred && source && !failed && <CsamImageBlurIndicator />}
           {!loaded && !failed && <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-white"><LoaderCircle className="size-5 animate-spin" />Loading image…</div>}
           {failed && <div role="alert" className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-4 text-center text-sm text-white">
             <p>This image could not be displayed. The file may be unavailable or its format unsupported.</p>

@@ -14,6 +14,9 @@ export const VIC_CATEGORIES: ReadonlyArray<ClassificationDefinition> = [
 export function vicClassification(category?: VicCategory | null, custom: ReadonlyArray<ClassificationDefinition> = []) {
   return VIC_CATEGORIES.find((entry) => entry.value === category) ?? custom.find((entry) => entry.value === category);
 }
+export function isCsamImage(item: { mediaType: "image" | "video"; vicCategory?: VicCategory | null }) {
+  return item.mediaType === "image" && item.vicCategory === 1;
+}
 export function classificationTextColor(color: string) {
   const [red, green, blue] = [1, 3, 5].map((offset) => {
     const channel = parseInt(color.slice(offset, offset + 2), 16) / 255;
