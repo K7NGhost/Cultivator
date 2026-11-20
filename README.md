@@ -73,6 +73,10 @@ See [Inodex integration](docs/inodex-integration.md) for setup, importing,
 extraction/storage behavior and current limits, and the
 [media gallery benchmark](docs/media-gallery-benchmark.md) for the measured baseline.
 
+## HTML reports
+
+The **Reports** page generates self-contained HTML case reports. Choose sections and datasources in the generation modal, add examiner notes, then open or print the saved report. See [HTML case reports](docs/reports.md) for included data and storage details.
+
 ## Planned Features
 
 Cultivator is still under active development. Planned features include:

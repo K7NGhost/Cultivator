@@ -23,7 +23,7 @@ import { TimelinePage } from "@/features/timeline/pages/TimelinePage";
 import { PluginsPage } from "@/features/plugins/pages/PluginsPage";
 import { usePluginJobMonitor } from "@/features/plugins/hooks/usePluginJobMonitor";
 import { SearchPage } from "@/features/search/pages/SearchPage";
-import { PlaceholderPage } from "@/features/workspace";
+import { ReportsPage } from "@/features/reports/pages/ReportsPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { initializePerformanceSettings } from "@/features/settings/performanceSettings";
 
@@ -60,12 +60,7 @@ const workspaceRoutes = [
   },
   {
     path: "/reports",
-    element: (
-      <PlaceholderPage
-        title="Reports"
-        description="Findings, exports, evidence summaries, and review packages."
-      />
-    ),
+    element: <ReportsPage />,
   },
 ] as const;
 

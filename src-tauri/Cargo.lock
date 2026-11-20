@@ -974,6 +974,7 @@ dependencies = [
  "ctor",
  "cultivator-drone-dat",
  "flate2",
+ "futures-util",
  "globset",
  "grep",
  "ignore",

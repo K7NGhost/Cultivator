@@ -29,6 +29,7 @@ mod evidence;
 mod file_view_scan;
 mod drone;
 mod mapping;
+mod reports;
 mod artifact_view;
 mod plugins;
 pub mod preview;
@@ -2511,6 +2512,10 @@ pub fn run() {
             drone::drone_telemetry_page,
             drone::export_drone_csv,
             mapping::export_map_html,
+            reports::case_report_catalog,
+            reports::list_case_reports,
+            reports::generate_case_report,
+            reports::open_case_report,
             artifact_view::list_artifact_summaries,
             artifact_view::artifact_view_page,
             artifact_view::artifact_payload_page,
