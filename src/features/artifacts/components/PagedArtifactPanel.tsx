@@ -12,6 +12,7 @@ import { ArtifactDataPreview } from "./ArtifactDataPreview";
 import { ArtifactRowContextMenu, ArtifactRowTagButton } from "./ArtifactRowTagMenu";
 import { ArtifactRowTagDialog } from "./ArtifactRowTagDialog";
 import { useArtifactRowTags } from "../hooks/useArtifactRowTags";
+import { useArtifactDetailTab } from "../hooks/useArtifactDetailTab";
 import { subscribeArtifactTagChanges } from "../services/artifactTagRepository";
 
 type ViewRow = { key: string; values: Record<string, unknown>; occurrenceCount: number; primarySourceIndex: number };
@@ -86,7 +87,7 @@ export function PagedArtifactPanel({ databasePath, revision, artifact, artifacts
 }) {
   const timeZone = useTimeZone();
   const [mode, setMode] = useState<"all" | "selected">("all");
-  const [tab, setTab] = useState("table");
+  const [tab, setTab] = useArtifactDetailTab();
   const [sourceQuery, setSourceQuery] = useState("");
   const [sourceOffset, setSourceOffset] = useState(0);
   const [offset, setOffset] = useState(0);

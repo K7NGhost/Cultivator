@@ -1,5 +1,6 @@
 import { ArtifactTreeViewer } from "../components/ArtifactTreeViewer";
 import { PagedArtifactPanel } from "../components/PagedArtifactPanel";
+import { useArtifactDetailTab } from "../hooks/useArtifactDetailTab";
 import { useLocation } from "react-router-dom";
 import { ArtifactDataPreview } from "../components/ArtifactDataPreview";
 import type { ArtifactTreeNode } from "../model/artifactTree";
@@ -1162,6 +1163,7 @@ function LoadedArtifactPropertiesPanel({
   pluginName?: string;
 }) {
   const timeZone = useTimeZone();
+  const [detailTab, setDetailTab] = useArtifactDetailTab();
   const [entryViewMode, setEntryViewMode] =
     useState<ArtifactEntryViewMode>("all");
   const combinedTable = useMemo(() => getArtifactTableView(artifactOptions), [artifactOptions]);
@@ -1199,7 +1201,8 @@ function LoadedArtifactPropertiesPanel({
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <Tabs
-        defaultValue="table"
+        value={detailTab}
+        onValueChange={setDetailTab}
         className="flex h-full min-h-0 min-w-0 flex-col gap-0"
       >
         <div className="flex h-8 shrink-0 items-center justify-between border-b px-2">

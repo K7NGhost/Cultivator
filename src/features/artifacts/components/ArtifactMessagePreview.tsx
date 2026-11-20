@@ -78,20 +78,27 @@ export function ArtifactMessagePreview({ table, columns, sourceArtifacts, select
           <Button type="button" variant="outline" size="xs" aria-pressed={details} onClick={() => setDetails(!details)}>{details ? "Hide record" : "Show record"}</Button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto bg-muted/15 p-3" aria-label="Conversation messages">
-          <ol className="space-y-3">{visibleMessages.map((message) => {
+          <ol className="space-y-1">{visibleMessages.map((message) => {
             const outgoing = viewAs ? message.sender === viewAs : message.direction === "outgoing";
             const timestamp = formatMessageTime(message, columns.timestamp, timeZone);
-            return <li key={message.rowIndex} className={`flex ${outgoing ? "justify-end" : "justify-start"}`}>
-              <button type="button" aria-pressed={selectedMessage?.rowIndex === message.rowIndex} onClick={() => { setLocalRow(message.rowIndex); onSelectRow?.(message.rowIndex); }}
-                className={`max-w-[85%] space-y-1 rounded-lg border px-3 py-2 text-left text-xs text-foreground select-text ${outgoing ? "border-primary/20 bg-primary/10" : "bg-background"} ${selectedMessage?.rowIndex === message.rowIndex ? "ring-1 ring-primary/40" : ""}`}>
-                <span className="block break-all font-semibold">{message.senderLabel}</span>
-                {message.subject && <span className="block font-medium">{message.subject}</span>}
+            const isSelected = selectedMessage?.rowIndex === message.rowIndex;
+            const footer = [message.direction !== "unknown" ? message.direction : "", message.messageType, message.service, message.status].filter(Boolean);
+            return <li key={message.rowIndex} className={`chat ${outgoing ? "chat-end" : "chat-start"}`}>
+              <div className="chat-header max-w-[85%] text-[11px] text-muted-foreground">
+                <span className="break-all font-medium text-foreground">{message.senderLabel}</span>
+                {timestamp && <time className="ml-2 opacity-70">{timestamp}</time>}
+              </div>
+              <button type="button" aria-pressed={isSelected} onClick={() => { setLocalRow(message.rowIndex); onSelectRow?.(message.rowIndex); }}
+                className={`chat-bubble max-w-[85%] space-y-1 text-left text-xs select-text ${outgoing ? "chat-bubble-primary" : "chat-bubble-neutral"} ${isSelected ? "chat-bubble-selected" : ""}`}>
+                {message.subject && <span className="block font-semibold">{message.subject}</span>}
                 <span className="block whitespace-pre-wrap break-words leading-5">{message.body || (message.attachment ? "Attachment message" : "(empty message)")}</span>
-                {message.attachment && <span className="flex items-start gap-1 whitespace-pre-wrap break-all text-[11px]"><Paperclip className="mt-0.5 size-3 shrink-0" />{message.attachment}</span>}
-                {message.attachmentBytes && <span className="block text-[10px] text-muted-foreground">Attachment bytes: {message.attachmentBytes}</span>}
-                {message.recipients.length > 0 && <span className="block break-words text-[10px] text-muted-foreground">To: {message.recipients.join(", ")}</span>}
-                <span className="flex flex-wrap gap-x-2 text-[10px] text-muted-foreground">{timestamp && <time>{timestamp}</time>}{message.direction !== "unknown" && <span>{message.direction}</span>}{message.messageType && <span>{message.messageType}</span>}{message.service && <span>{message.service}</span>}{message.status && <span>{message.status}</span>}</span>
+                {message.attachment && <span className="flex items-start gap-1 whitespace-pre-wrap break-all text-[11px] opacity-90"><Paperclip className="mt-0.5 size-3 shrink-0" />{message.attachment}</span>}
+                {message.attachmentBytes && <span className="block text-[10px] opacity-75">Attachment bytes: {message.attachmentBytes}</span>}
               </button>
+              {(message.recipients.length > 0 || footer.length > 0) && <div className="chat-footer max-w-[85%] flex-wrap gap-x-2 text-[10px] text-muted-foreground opacity-80">
+                {message.recipients.length > 0 && <span className="break-words">To: {message.recipients.join(", ")}</span>}
+                {footer.map((item, index) => <span key={index}>{item}</span>)}
+              </div>}
             </li>;
           })}</ol>
         </div>

@@ -73,6 +73,8 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  --chat-incoming: oklch(0.92 0 0);
+  --chat-incoming-foreground: oklch(0.145 0 0);
 }
 
 .dark {
@@ -103,6 +105,32 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --chat-incoming: oklch(0.32 0 0);
+  --chat-incoming-foreground: oklch(0.985 0 0);
+}
+
+/* daisyUI picks its theme from the OS colour scheme, but the app toggles light/dark with the
+   .dark class. Point the chat bubble colours at the app's tokens so they follow that toggle. */
+.chat {
+  --color-primary: var(--primary);
+  --color-primary-content: var(--primary-foreground);
+  --color-neutral: var(--chat-incoming);
+  --color-neutral-content: var(--chat-incoming-foreground);
+  --color-base-300: var(--chat-incoming);
+  --color-base-content: var(--chat-incoming-foreground);
+}
+
+/* Rings and outlines are rectangular and ignore the bubble's tail; stacked drop-shadows trace the
+   full masked shape instead. */
+.chat-bubble:focus {
+  outline: none;
+}
+
+.chat-bubble-selected,
+.chat-bubble:focus-visible {
+  --chat-outline: var(--ring);
+  filter: drop-shadow(1.5px 0 0 var(--chat-outline)) drop-shadow(-1.5px 0 0 var(--chat-outline))
+    drop-shadow(0 1.5px 0 var(--chat-outline)) drop-shadow(0 -1.5px 0 var(--chat-outline));
 }
 
 @layer base {
