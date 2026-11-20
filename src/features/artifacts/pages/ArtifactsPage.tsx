@@ -78,6 +78,8 @@ import type {
 import { listPythonPlugins } from "@/features/plugins";
 import type { PythonPlugin } from "@/features/plugins";
 import { cn } from "@/lib/utils";
+import { useTaggedArtifactCatalog } from "../hooks/useTaggedArtifactCatalog";
+import { filterTaggedArtifacts } from "../utils/taggedArtifactFilter";
 
 type LoadState = {
   error: string | null;
@@ -701,6 +703,9 @@ export function ArtifactsPage() {
     string | null
   >(null);
   const [showEmptyArtifacts, setShowEmptyArtifacts] = useState(false);
+  const [taggedOnly, setTaggedOnly] = useState(false);
+  const taggedCatalog = useTaggedArtifactCatalog(activeCase?.databasePath ?? "", revision, active);
+  useEffect(() => { setTaggedOnly(false); }, [activeCase?.databasePath]);
   const [removalTarget, setRemovalTarget] =
     useState<ArtifactRemovalTarget | null>(null);
   const [loadState, setLoadState] = useState<LoadState>({
@@ -719,16 +724,16 @@ export function ArtifactsPage() {
   }, [datasources]);
   const visibleArtifacts = useMemo(
     () =>
-      selectedDatasourceId === "all"
+      filterTaggedArtifacts(selectedDatasourceId === "all"
         ? artifacts
         : artifacts.filter(
             (artifact) => artifact.datasourceId === selectedDatasourceId,
-          ),
-    [artifacts, selectedDatasourceId],
+          ), taggedOnly, taggedCatalog.counts),
+    [artifacts, selectedDatasourceId, taggedOnly, taggedCatalog.counts],
   );
   const artifactTree = useMemo(
-    () => buildArtifactTree(visibleArtifacts, showEmptyArtifacts),
-    [visibleArtifacts, showEmptyArtifacts],
+    () => buildArtifactTree(visibleArtifacts, showEmptyArtifacts).filter((node) => !taggedOnly || node.entryCount > 0),
+    [visibleArtifacts, showEmptyArtifacts, taggedOnly],
   );
   const artifactEntryCount = artifactTree.reduce(
     (total, node) => total + node.entryCount,
@@ -951,7 +956,7 @@ export function ArtifactsPage() {
           </span>
           <Separator orientation="vertical" className="h-4" />
           <span>
-            {ARTIFACT_NAVIGATION_CATEGORIES.length.toLocaleString()} categories
+            {(taggedOnly ? artifactTree.length : ARTIFACT_NAVIGATION_CATEGORIES.length).toLocaleString()} categories
           </span>
         </div>
       </section>
@@ -974,10 +979,19 @@ export function ArtifactsPage() {
             occurrenceCount={artifactOccurrenceCount}
             showEmptyArtifacts={showEmptyArtifacts}
             treeData={artifactTree}
+            taggedOnly={taggedOnly}
+            onTaggedOnlyChange={(checked) => {
+              setTaggedOnly(checked); setSelectedArtifactNodeId(null);
+              if (checked) setSelectedArtifactId(artifacts.find((item) => (selectedDatasourceId === "all" || item.datasourceId === selectedDatasourceId) && (taggedCatalog.counts.get(item.id) ?? 0) > 0)?.id ?? null);
+            }}
+            tagFilterLoading={taggedCatalog.loading}
+            tagFilterError={taggedCatalog.error}
+            onRetryTagFilter={taggedCatalog.refresh}
             selectedTreeNodeId={selectedArtifactNodeId}
             emptyText={
               activeCase
-                ? visibleArtifacts.length > 0
+                ? taggedOnly ? !taggedCatalog.ready && taggedCatalog.loading ? "Loading tagged artifacts…" : taggedCatalog.error ? "Tagged artifacts could not be loaded." : "No tagged artifacts in the selected datasources."
+                : visibleArtifacts.length > 0
                   ? "No artifacts with entries are visible."
                   : "No artifacts have been created by plugins yet."
                 : "Create or select a case before viewing artifacts."
@@ -1018,6 +1032,7 @@ export function ArtifactsPage() {
           {active && <ArtifactPropertiesPanel
             databasePath={activeCase?.databasePath ?? ""}
             revision={revision}
+            taggedOnly={taggedOnly}
             artifact={selectedArtifact}
             artifactOptions={selectedArtifactOptions}
             onSelectArtifact={(artifact) => setSelectedArtifactId(artifact.id)}
@@ -1124,11 +1139,11 @@ export function ArtifactsPage() {
   );
 }
 
-function ArtifactPropertiesPanel({ databasePath, revision, ...props }: ComponentProps<typeof LoadedArtifactPropertiesPanel> & {
-  databasePath: string; revision: string;
+function ArtifactPropertiesPanel({ databasePath, revision, taggedOnly, ...props }: ComponentProps<typeof LoadedArtifactPropertiesPanel> & {
+  databasePath: string; revision: string; taggedOnly: boolean;
 }) {
   if (props.artifact?.summaryOnly) return <PagedArtifactPanel
-    key={`${props.artifactOptions[0]?.id}:${revision}`} databasePath={databasePath} revision={revision}
+    key={`${props.artifactOptions[0]?.id}:${revision}`} databasePath={databasePath} revision={revision} taggedOnly={taggedOnly}
     pluginName={props.pluginName} datasourceName={props.datasourceName}
     artifact={props.artifact} artifacts={props.artifactOptions} onSelect={props.onSelectArtifact} />;
   return <LoadedArtifactPropertiesPanel {...props} />;

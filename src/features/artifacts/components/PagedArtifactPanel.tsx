@@ -10,6 +10,10 @@ import type { ArtifactModelDefinition, CustomTableColumn, StoredArtifactRecord }
 import { formatArtifactTableCell } from "../utils/artifactTableFormatting";
 import { detectCoordinatePairs } from "../utils/artifactLocations";
 import { ArtifactLocationPreview } from "./ArtifactLocationPreview";
+import { ArtifactRowContextMenu, ArtifactRowTagButton } from "./ArtifactRowTagMenu";
+import { ArtifactRowTagDialog } from "./ArtifactRowTagDialog";
+import { useArtifactRowTags } from "../hooks/useArtifactRowTags";
+import { subscribeArtifactTagChanges } from "../services/artifactTagRepository";
 
 type ViewRow = { key: string; values: Record<string, unknown>; occurrenceCount: number; primarySourceIndex: number };
 type Page = { viewKey: string; name: string; columns: CustomTableColumn[]; rows: ViewRow[]; total: number; totalOccurrences: number;
@@ -75,10 +79,11 @@ function RowSources({ databasePath, viewKey, row, sources, onSelect }: {
   </div>;
 }
 
-export function PagedArtifactPanel({ databasePath, revision, artifact, artifacts, onSelect, pluginName, datasourceName }: {
+export function PagedArtifactPanel({ databasePath, revision, artifact, artifacts, onSelect, pluginName, datasourceName, taggedOnly = false }: {
   databasePath: string; revision: string; artifact: StoredArtifactRecord; artifacts: StoredArtifactRecord[];
   onSelect: (artifact: StoredArtifactRecord) => void;
   pluginName?: string; datasourceName?: string;
+  taggedOnly?: boolean;
 }) {
   const timeZone = useTimeZone();
   const [mode, setMode] = useState<"all" | "selected">("all");
@@ -94,17 +99,23 @@ export function PagedArtifactPanel({ databasePath, revision, artifact, artifacts
   const [sourceRow, setSourceRow] = useState<ViewRow | null>(null);
   const [selectedRowKey, setSelectedRowKey] = useState("");
   const [retry, setRetry] = useState(0);
+  const [tagTarget, setTagTarget] = useState<{ row: ViewRow; viewKey: string } | null>(null);
+  const rowTags = useArtifactRowTags(databasePath, page?.viewKey ?? "", page?.rows.map((row) => row.key) ?? [], !loading && tab === "table" && !!page);
   const isMap = artifact.resultKind === "map_layer";
   const selected = useMemo(() => mode === "all" ? artifacts : [artifact], [artifacts, artifact, mode]);
   const ids = useMemo(() => selected.map((item) => item.id), [selected]);
   const idsKey = JSON.stringify(ids);
+  useEffect(() => { setTagTarget(null); }, [databasePath, idsKey, revision]);
+  useEffect(() => subscribeArtifactTagChanges(databasePath, () => {
+    if (taggedOnly) { setOffset(0); setPreviousOffsets([]); setRetry((value) => value + 1); }
+  }), [databasePath, taggedOnly]);
   const requestVersion = useRef(0);
   const modelColumns = useMemo(() => (models.get(artifact.resultKind)?.fields ?? []).map((field) => ({
     key: field.key, label: field.label, format: field.type === "datetime" ? "datetime" : undefined,
   })), [artifact.resultKind]);
   useEffect(() => {
     setOffset(0); setPreviousOffsets([]); setSourceRow(null);
-  }, [idsKey, revision]);
+  }, [idsKey, revision, taggedOnly]);
   useEffect(() => {
     if (isMap || tab === "properties") return;
     const version = ++requestVersion.current;
@@ -119,14 +130,14 @@ export function PagedArtifactPanel({ databasePath, revision, artifact, artifacts
       void ready.then(() => {
         if (disposed) return;
         return invoke<Page>("artifact_view_page", { caseDatabasePath: databasePath,
-          request: { requestId, artifactIds: ids, revision, offset, limit: 100, sortKey: sort.key || null, descending: sort.descending, modelColumns } });
+          request: { requestId, artifactIds: ids, revision, offset, limit: 100, sortKey: sort.key || null, descending: sort.descending, modelColumns, taggedOnly } });
       })
         .then((value) => { if (value && !disposed && requestVersion.current === version) setPage(value); })
         .catch((error: unknown) => { if (!disposed && requestVersion.current === version) setError(errorText(error)); })
         .finally(() => { if (!disposed && requestVersion.current === version) setLoading(false); });
     }, 120);
     return () => { disposed = true; clearTimeout(timer); unlisten?.(); void invoke("cancel_artifact_view").catch(() => undefined); };
-  }, [databasePath, idsKey, revision, offset, sort.key, sort.descending, modelColumns, isMap, tab, retry]);
+  }, [databasePath, idsKey, revision, offset, sort.key, sort.descending, modelColumns, isMap, tab, retry, taggedOnly]);
   const matchingSources = useMemo(() => artifacts.filter((item) => !sourceQuery || `${item.filePath} ${item.label}`.toLocaleLowerCase().includes(sourceQuery.toLocaleLowerCase())), [artifacts, sourceQuery]);
   const mapTable = useMemo(() => page ? { name: page.name, columns: page.columns, totalOccurrences: page.rows.reduce((sum, row) => sum + row.occurrenceCount, 0),
     deduplication: { mode: "group" as const }, sources: selected.map((item) => ({ artifactId: item.id, filePath: item.filePath })),
@@ -152,8 +163,10 @@ export function PagedArtifactPanel({ databasePath, revision, artifact, artifacts
       : !page ? <div role="status" className="grid min-h-0 flex-1 place-items-center text-xs text-muted-foreground">Loading artifact rows…</div>
       : <>
         <div className="shrink-0 border-b px-2 py-1 text-[11px] text-muted-foreground">{loading ? <span role="status">Showing the first entries while the remaining entries load…</span> : <>{page.total.toLocaleString()} entries · {page.totalOccurrences.toLocaleString()} occurrences</>}
+          {taggedOnly && <span> · Tagged rows only</span>}
           {page.shortened && <span> · Long values are shortened; open Properties to inspect the original JSON.</span>}
         </div>
+        {rowTags.error && <div role="alert" className="shrink-0 border-b p-2 text-xs text-destructive">{rowTags.error}<Button className="ml-2 h-6 text-xs" variant="outline" size="sm" disabled={rowTags.busy} onClick={rowTags.refresh}>Reload tags</Button></div>}
         {tab === "preview" ? mapTable && detectCoordinatePairs(page.columns).length ? <div className="min-h-0 flex-1"><div className="px-2 py-1 text-[11px]">Locations on this page</div><ArtifactLocationPreview table={mapTable} /></div>
     : <div className="min-h-0 flex-1 overflow-auto p-3 text-xs"><p className="mb-3 text-muted-foreground">Selected entry on this page</p>
       <dl className="space-y-2">{page.columns.map((column) => { const row=page.rows.find((row) => row.key === selectedRowKey) ?? page.rows[0];
@@ -162,11 +175,18 @@ export function PagedArtifactPanel({ databasePath, revision, artifact, artifacts
         : <div className="min-h-0 flex-1 overflow-auto"><table className="min-w-full border-collapse text-left text-xs" aria-label="Artifact entries">
           <thead className="sticky top-0 bg-background"><tr>{page.columns.map((column) => <th key={column.key} className="max-w-72 border-b p-2" aria-sort={!loading && sort.key === column.key ? sort.descending ? "descending" : "ascending" : "none"}>
             <button type="button" disabled={loading} onClick={() => { setSort({ key: column.key, descending: sort.key === column.key && !sort.descending }); setOffset(0); setPreviousOffsets([]); }}>{column.label}{!loading && sort.key === column.key ? sort.descending ? " ↓" : " ↑" : ""}</button>
-          </th>)}<th className="border-b p-2">Sources</th></tr></thead>
-          <tbody>{page.rows.map((row) => <tr key={row.key} aria-selected={selectedRowKey === row.key} onClick={() => setSelectedRowKey(row.key)} className={`border-b hover:bg-muted/30 ${selectedRowKey === row.key ? "bg-primary/10" : ""}`}>{page.columns.map((column) => <td key={column.key} className="max-w-72 truncate p-2 align-top select-text">
+          </th>)}<th className="border-b p-2" title="Right-click a row or use its tag button">Row tags</th><th className="border-b p-2">Sources</th></tr></thead>
+          <tbody>{page.rows.map((row) => {
+            const tags = rowTags.tags[row.key] ?? [];
+            const actions = { tags, availableTags: rowTags.availableTags, occurrences: row.occurrenceCount, disabled: loading || rowTags.busy || !rowTags.ready,
+              onSelect: () => setSelectedRowKey(row.key), onCustom: () => setTagTarget({ row, viewKey: page.viewKey }),
+              onToggle: (name: string, assigned: boolean) => { void rowTags.assign(row.key, name, assigned).catch(() => undefined); } };
+            return <ArtifactRowContextMenu key={row.key} {...actions}><tr aria-selected={selectedRowKey === row.key} onClick={() => setSelectedRowKey(row.key)} onContextMenu={() => setSelectedRowKey(row.key)} className={`border-b hover:bg-muted/30 ${selectedRowKey === row.key ? "bg-primary/10" : ""}`}>{page.columns.map((column) => <td key={column.key} className="max-w-72 truncate p-2 align-top select-text">
             {formatArtifactTableCell(row.values[column.key], column, timeZone) || "–"}</td>)}
+            <td className="p-2 align-top"><div className="flex items-start gap-1"><div className="flex max-w-48 flex-wrap gap-1">{tags.map((tag) => <span key={tag.name} className="max-w-40 truncate rounded-sm border bg-primary/10 px-1.5 py-0.5 text-[10px]" title={`${tag.name} · ${tag.occurrences} of ${row.occurrenceCount} occurrences`}>{tag.name}{tag.occurrences < row.occurrenceCount ? ` (${tag.occurrences}/${row.occurrenceCount})` : ""}</span>)}</div><ArtifactRowTagButton {...actions} /></div></td>
             <td className="p-2 align-top"><button className="whitespace-nowrap underline" disabled={loading} onClick={() => setSourceRow((current) => current?.key === row.key ? null : row)}>{loading ? "Loading sources…" : `${row.occurrenceCount.toLocaleString()} occurrences`}</button></td>
-          </tr>)}</tbody></table>{!page.rows.length && <p className="p-3 text-xs text-muted-foreground">No entries in this artifact.</p>}</div>}
+          </tr></ArtifactRowContextMenu>;
+          })}</tbody></table>{!page.rows.length && <p className="p-3 text-xs text-muted-foreground">{taggedOnly ? "No tagged entries in this artifact." : "No entries in this artifact."}</p>}</div>}
         {sourceRow && <RowSources key={sourceRow.key} databasePath={databasePath} viewKey={page.viewKey} row={sourceRow} sources={selected} onSelect={(item) => { onSelect(item); setTab("properties"); }} />}
         <div className="flex shrink-0 items-center justify-between gap-2 border-t p-2 text-xs">
           <span>{loading ? `${page.rows.length} entries shown · loading remaining entries` : page.total ? `${(page.offset + 1).toLocaleString()}–${page.nextOffset.toLocaleString()} of ${page.total.toLocaleString()}` : "0 entries"}</span>
@@ -174,5 +194,9 @@ export function PagedArtifactPanel({ databasePath, revision, artifact, artifacts
             <Button variant="outline" size="sm" disabled={loading || page.nextOffset >= page.total} onClick={() => { setPreviousOffsets([...previousOffsets, offset]); setOffset(page.nextOffset); }}>Next entries</Button></div>
         </div>
       </>}
+    {tagTarget && <ArtifactRowTagDialog occurrences={tagTarget.row.occurrenceCount} availableTags={rowTags.availableTags} busy={rowTags.busy} onClose={() => setTagTarget(null)} onSave={async (name) => {
+      if (tagTarget.viewKey !== page?.viewKey) throw new Error("The artifact view changed. Select its row again.");
+      await rowTags.assign(tagTarget.row.key, name, true); setTagTarget(null);
+    }} />}
   </section>;
 }

@@ -5,6 +5,7 @@ import { AppWindow, ChevronsDownUp, ChevronsUpDown, Folder, Globe, KeyRound, Lis
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -108,6 +109,11 @@ export function ArtifactTreeViewer({
   onRequestRemoveCategory,
   selectedTreeNodeId,
   treeData,
+  taggedOnly,
+  onTaggedOnlyChange,
+  tagFilterLoading,
+  tagFilterError,
+  onRetryTagFilter,
 }: {
   artifacts: StoredArtifactRecord[];
   emptyText: string;
@@ -121,6 +127,11 @@ export function ArtifactTreeViewer({
   onRequestRemoveCategory: (categoryNode: ArtifactTreeNode) => void;
   selectedTreeNodeId: string | null;
   treeData: ArtifactTreeNode[];
+  taggedOnly: boolean;
+  onTaggedOnlyChange: (checked: boolean) => void;
+  tagFilterLoading: boolean;
+  tagFilterError: string;
+  onRetryTagFilter: () => void;
 }) {
   const treePanel = useElementSize<HTMLDivElement>();
   const treeRef = useRef<TreeApi<ArtifactTreeNode> | undefined>(undefined);
@@ -166,6 +177,12 @@ export function ArtifactTreeViewer({
         </div>
       </div>
       <div className="shrink-0 px-2 pb-2">
+      <label className="mb-1.5 flex cursor-pointer items-center gap-2 px-1 text-xs">
+        <Checkbox aria-label="Show tagged artifacts only" checked={taggedOnly} onCheckedChange={(checked) => onTaggedOnlyChange(checked === true)} />
+        <span>Tagged only</span>
+        {tagFilterLoading && <span role="status" className="ml-auto text-[10px] text-muted-foreground">Updating tags…</span>}
+      </label>
+      {tagFilterError && <div role="alert" className="mb-2 text-[11px] text-destructive">{tagFilterError}<Button type="button" size="xs" variant="outline" className="ml-1 h-6 text-[11px]" onClick={onRetryTagFilter}>Retry tags</Button></div>}
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <Button
@@ -185,7 +202,7 @@ export function ArtifactTreeViewer({
             onClick={onSelectAllEvidence}
           >
             <Database className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
-            <span className="min-w-0 flex-1 truncate text-left">All evidence</span>
+            <span className="min-w-0 flex-1 truncate text-left">{taggedOnly ? "Tagged evidence" : "All evidence"}</span>
             <Badge variant="secondary" className="h-5 min-w-6 justify-center rounded-sm px-1.5 text-[10px] font-medium tabular-nums">
               {entryCount.toLocaleString()}
             </Badge>
@@ -256,7 +273,7 @@ export function ArtifactTreeViewer({
         )}
       </div>
       <div className="flex h-7 shrink-0 items-center border-t px-3 text-[10px] text-muted-foreground">
-        {search.trim() ? "Filtered by name · Esc to clear" : `${treeData.length.toLocaleString()} categories · ${artifacts.length.toLocaleString()} artifacts`}
+        {search.trim() ? `Filtered by name${taggedOnly ? " and tags" : ""} · Esc to clear name` : `${treeData.length.toLocaleString()} categories · ${artifacts.length.toLocaleString()} ${taggedOnly ? "tagged " : ""}artifacts`}
       </div>
     </section>
   );

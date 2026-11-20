@@ -11,6 +11,8 @@ use std::{
 };
 use tauri::Emitter;
 
+pub mod tags;
+
 static VIEW_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 const VISIBLE: &str = "FROM plugin_results r WHERE r.result_kind NOT IN ('file_metadata','text_sample') AND r.job_id IN (SELECT id FROM (SELECT id,ROW_NUMBER() OVER(PARTITION BY datasource_id,plugin_id ORDER BY started_at DESC,id DESC) n FROM plugin_jobs WHERE status='complete') WHERE n=1)";
@@ -218,6 +220,8 @@ pub struct Column {
 #[serde(rename_all = "camelCase")]
 pub struct ViewRequest {
     #[serde(default)]
+    pub tagged_only: bool,
+    #[serde(default)]
     pub request_id: Option<String>,
     pub artifact_ids: Vec<String>,
     pub revision: String,
@@ -285,7 +289,8 @@ async fn cache(database: &str) -> Result<SqlitePool, String> {
       CREATE TABLE IF NOT EXISTS view_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS view_rows(row_key TEXT PRIMARY KEY,ordinal INTEGER NOT NULL,values_json TEXT NOT NULL,source_index INTEGER NOT NULL,occurrences INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS view_rows_ordinal ON view_rows(ordinal);
-      CREATE TABLE IF NOT EXISTS view_sources(row_key TEXT NOT NULL,source_index INTEGER NOT NULL,occurrences INTEGER NOT NULL,PRIMARY KEY(row_key,source_index));").execute(&pool).await.map_err(|e|e.to_string())?;
+      CREATE TABLE IF NOT EXISTS view_sources(row_key TEXT NOT NULL,source_index INTEGER NOT NULL,occurrences INTEGER NOT NULL,PRIMARY KEY(row_key,source_index));
+      CREATE TABLE IF NOT EXISTS view_occurrences(row_key TEXT NOT NULL,artifact_id TEXT NOT NULL,entry_index INTEGER NOT NULL,fingerprint TEXT NOT NULL,PRIMARY KEY(row_key,artifact_id,entry_index));").execute(&pool).await.map_err(|e|e.to_string())?;
     Ok(pool)
 }
 
@@ -566,7 +571,7 @@ async fn build_view(
     let mut previewed = false;
     let total;
     loop {
-        sqlx::raw_sql("DELETE FROM view_state;DELETE FROM view_sources;DELETE FROM view_rows;")
+        sqlx::raw_sql("DELETE FROM view_state;DELETE FROM view_sources;DELETE FROM view_occurrences;DELETE FROM view_rows;")
             .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
@@ -596,10 +601,27 @@ async fn build_view(
                 vec![payload]
             };
             let mut batch = Vec::new();
-            for value in rows {
+            let tagged = if request.tagged_only {
+                Some(tags::occurrences(&mut read, id).await?)
+            } else {
+                None
+            };
+            for (entry_index, value) in rows.into_iter().enumerate() {
                 let Some(row) = value.as_object() else {
                     continue;
                 };
+                let expected = if let Some(tagged) = &tagged {
+                    let Some(hashes) = tagged.get(&(entry_index as i64)) else {
+                        continue;
+                    };
+                    Some(hashes)
+                } else {
+                    None
+                };
+                let fingerprint = tags::fingerprint(&value);
+                if expected.is_some_and(|hashes| !hashes.contains(&fingerprint)) {
+                    continue;
+                }
                 if !preserve
                     && configured.is_some()
                     && fields != fallback
@@ -613,12 +635,15 @@ async fn build_view(
                 } else {
                     identity(row, &fields)
                 };
-                batch.push((
-                    row_key,
+                batch.push(IndexedRow {
+                    key: row_key,
                     ordinal,
-                    serde_json::to_string(row).map_err(|e| e.to_string())?,
-                    source_index as i64,
-                ));
+                    value: serde_json::to_string(row).map_err(|e| e.to_string())?,
+                    source: source_index as i64,
+                    artifact: id.clone(),
+                    index: entry_index as i64,
+                    fingerprint,
+                });
                 ordinal += 1;
                 if batch.len() >= 128 {
                     current(generation)?;
@@ -677,9 +702,19 @@ async fn build_view(
     Ok(())
 }
 
+struct IndexedRow {
+    key: String,
+    ordinal: i64,
+    value: String,
+    source: i64,
+    artifact: String,
+    index: i64,
+    fingerprint: String,
+}
+
 async fn insert_batch(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    batch: &[(String, i64, String, i64)],
+    batch: &[IndexedRow],
 ) -> Result<(), String> {
     if batch.is_empty() {
         return Ok(());
@@ -687,11 +722,11 @@ async fn insert_batch(
     let mut query = sqlx::QueryBuilder::new(
         "INSERT INTO view_rows(row_key,ordinal,values_json,source_index,occurrences) ",
     );
-    query.push_values(batch, |mut row, (key, ordinal, value, source)| {
-        row.push_bind(key)
-            .push_bind(ordinal)
-            .push_bind(value)
-            .push_bind(source)
+    query.push_values(batch, |mut row, entry| {
+        row.push_bind(&entry.key)
+            .push_bind(entry.ordinal)
+            .push_bind(&entry.value)
+            .push_bind(entry.source)
             .push_bind(1i64);
     });
     query
@@ -702,11 +737,27 @@ async fn insert_batch(
         .map_err(|e| e.to_string())?;
     let mut sources =
         sqlx::QueryBuilder::new("INSERT INTO view_sources(row_key,source_index,occurrences) ");
-    sources.push_values(batch, |mut row, (key, _, _, source)| {
-        row.push_bind(key).push_bind(source).push_bind(1i64);
+    sources.push_values(batch, |mut row, entry| {
+        row.push_bind(&entry.key)
+            .push_bind(entry.source)
+            .push_bind(1i64);
     });
     sources
         .push(" ON CONFLICT(row_key,source_index) DO UPDATE SET occurrences=occurrences+1")
+        .build()
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut occurrences = sqlx::QueryBuilder::new(
+        "INSERT INTO view_occurrences(row_key,artifact_id,entry_index,fingerprint) ",
+    );
+    occurrences.push_values(batch, |mut row, entry| {
+        row.push_bind(&entry.key)
+            .push_bind(&entry.artifact)
+            .push_bind(entry.index)
+            .push_bind(&entry.fingerprint);
+    });
+    occurrences
         .build()
         .execute(&mut **tx)
         .await
@@ -905,10 +956,21 @@ async fn view_page_inner(
     current(generation)?;
     let source = crate::plugins::open_case_database(&case_database_path).await?;
     let cache = cache(&case_database_path).await?;
+    let tag_revision: Option<i64> = if request.tagged_only {
+        tags::ensure_schema(&source).await?;
+        Some(
+            sqlx::query_scalar("SELECT revision FROM artifact_row_tag_revision WHERE id=1")
+                .fetch_one(&source)
+                .await
+                .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
+    };
     let signature = format!(
-        "v2:{}:{}",
+        "v4:{}:{}",
         case_database_path,
-        serde_json::to_string(&(&request.artifact_ids, &request.revision))
+        serde_json::to_string(&(&request.artifact_ids, &request.revision, tag_revision))
             .map_err(|e| e.to_string())?
     );
     let key = format!("{:x}", Sha256::digest(signature.as_bytes()));
@@ -925,7 +987,11 @@ async fn view_page_inner(
                 &request,
                 &key,
                 generation,
-                notify.as_deref(),
+                if request.tagged_only {
+                    None
+                } else {
+                    notify.as_deref()
+                },
             )
             .await?;
         }
