@@ -6,7 +6,7 @@ Available sections:
 
 - Case information: case identity, reference, description and examiner.
 - Evidence sources: selected datasources, imported paths and original image references where recorded.
-- Artifact records: latest completed run for each datasource/parser, including every saved table row rather than the current UI page.
+- Artifact records: latest completed run for each datasource/parser, including every saved table row rather than the current UI page. Artifacts appear in named tables with entry counts, datasource/parser/source details, and individual labelled columns, inspired by iLEAPP's reports. Related records from the same source share a table. Parser column labels and timestamp types are retained; undeclared fields are included too. Nested objects and lists are shown as readable text instead of JSON blocks.
 - Media inventory and stored hashes: file metadata, hashes already recorded in metadata, manual classifications and saved analysis results. Media binaries and thumbnails are not embedded.
 - Timeline events: events derived from saved artifact timestamps. The timeline index is synchronized when this section is requested.
 - Processing history and logs: saved plugin runs and log messages for selected datasources.
@@ -17,4 +17,6 @@ The companion `report.json` records the selection, generation time, exported row
 
 Generation streams a consistent SQLite snapshot into a private temporary directory and publishes it only after the HTML and manifest are complete. Failed generation removes the incomplete output. Stored source hashes are reported as recorded; report generation does not calculate or verify evidence hashes.
 
-Validation: `cargo test --offline --manifest-path src-tauri/Cargo.toml --lib reports::tests` covers datasource scope, latest-run selection, exports beyond UI pagination, HTML escaping, section selection, empty cases, persisted history, output digest and failed-generation cleanup.
+Generate a new report to use the current presentation; existing saved HTML snapshots keep their original contents.
+
+Validation: `cargo test --offline --manifest-path src-tauri/Cargo.toml --lib reports::` covers datasource scope, latest-run selection, exports beyond UI pagination, labelled artifact tables, nested values, timestamps, HTML escaping, section selection, empty cases, persisted history, output digest and failed-generation cleanup.

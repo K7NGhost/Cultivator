@@ -35,7 +35,7 @@ pub async fn write_section<W: Write>(
             Ok(fields.len() as u64)
         }
         ReportSection::EvidenceSources => evidence(conn, output, context, request).await,
-        ReportSection::Artifacts => artifacts(conn, output, context, request).await,
+        ReportSection::Artifacts => super::artifacts::write(conn, output, context, request).await,
         ReportSection::Media => media(conn, output, context, request).await,
         ReportSection::Timeline => timeline(conn, output, context, request).await,
         ReportSection::ProcessingLog => processing(conn, output, context, request).await,
@@ -95,57 +95,6 @@ async fn evidence<W: Write>(
         count += 1;
     }
     output.end_section(count, 4)?;
-    Ok(count)
-}
-
-async fn artifacts<W: Write>(
-    conn: &mut SqliteConnection,
-    output: &mut HtmlReport<W>,
-    context: &Context,
-    request: &ReportRequest,
-) -> Result<u64, String> {
-    let section = ReportSection::Artifacts;
-    output.section(
-        section,
-        &[
-            "Datasource",
-            "Artifact / parser",
-            "Source",
-            "Row",
-            "Recorded data",
-        ],
-    )?;
-    let mut count = 0;
-    if context.tables.contains("plugin_results") && context.tables.contains("plugin_jobs") {
-        let base=format!("{} SELECT r.datasource_id,r.label,r.plugin_id,r.file_path,j.key AS row_index,CAST(CASE WHEN j.key IS NULL THEN r.payload ELSE j.value END AS TEXT) AS record {}",data::LATEST,"FROM plugin_results r JOIN latest_jobs latest ON latest.id=r.job_id LEFT JOIN json_each(r.payload,'$.table.rows') j ON 1=1 WHERE r.result_kind NOT IN ('file_metadata','text_sample') AND ");
-        let mut query = data::scoped(base, "r.datasource_id", &request.datasource_ids);
-        query.push(" ORDER BY r.id,CAST(j.key AS INTEGER)");
-        let mut rows = query.build().fetch(&mut *conn);
-        while let Some(row) = rows.try_next().await.map_err(|e| e.to_string())? {
-            let index = row
-                .try_get::<Option<i64>, _>("row_index")
-                .ok()
-                .flatten()
-                .map(|n| (n + 1).to_string())
-                .unwrap_or_default();
-            let record = row
-                .try_get::<String, _>("record")
-                .unwrap_or_else(|_| "null".into());
-            output.row(&[
-                source_name(context, row.get("datasource_id")),
-                format!(
-                    "{}\n{}",
-                    row.get::<String, _>("label"),
-                    row.get::<String, _>("plugin_id")
-                ),
-                row.get("file_path"),
-                index,
-                html::record_text(&record),
-            ])?;
-            count += 1;
-        }
-    }
-    output.end_section(count, 5)?;
     Ok(count)
 }
 

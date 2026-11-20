@@ -1,4 +1,8 @@
-# Cultivator
+<p align="center">
+  <img src="src-tauri/icons/icon.png" alt="Cultivator icon" width="128" height="128">
+</p>
+
+<h1 align="center">Cultivator</h1>
 
 Cultivator is a modern digital forensics application designed to expand upon the capabilities and workflows commonly found in tools such as Autopsy.
 

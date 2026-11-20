@@ -388,7 +388,7 @@ fn identity(row: &Map<String, Value>, fields: &[String]) -> String {
     format!("{:x}", hash.finalize())
 }
 
-fn table_columns(metadata: &Value) -> Vec<Column> {
+pub(crate) fn table_columns(metadata: &Value) -> Vec<Column> {
     let typed = metadata
         .pointer("/parser/artifact/object_columns")
         .and_then(Value::as_array);

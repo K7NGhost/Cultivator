@@ -1,1 +1,39 @@
 :root{color-scheme:light;font:13px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;color:#23272d;background:#f2f3f5}*{box-sizing:border-box}body{margin:0}header{background:#171b20;color:#fff;padding:30px 40px;border-bottom:4px solid #64748b}.brand{font-size:14px;font-weight:750;letter-spacing:.12em}.brand span{font-weight:400;color:#b7c0cb;margin-left:12px}h1{font-size:27px;margin:18px 0 4px;font-weight:650}header>p{color:#cbd2dc;margin:0 0 18px}dl{display:grid;grid-template-columns:100px 1fr;gap:4px 12px;margin:0;font-size:12px}dt{color:#bac3cf}dd{margin:0;overflow-wrap:anywhere}.layout{display:grid;grid-template-columns:215px minmax(0,1fr);gap:24px;max-width:1600px;margin:auto;padding:24px}nav{align-self:start;position:sticky;top:20px;border:1px solid #d5d9df;background:white;padding:16px}nav h2{font-size:13px;margin:0 0 10px}nav a{display:block;padding:7px 0;border-bottom:1px solid #edf0f3;color:#334155;text-decoration:none}nav a:hover{text-decoration:underline}main{min-width:0}.scope{border:1px solid #d5d9df;border-left:3px solid #64748b;padding:12px 16px;background:#fff}.scope p{margin:5px 0 0;color:#525c69;font-size:12px}section{margin:22px 0;background:white;border:1px solid #d5d9df;break-inside:auto}section h2{margin:0;padding:12px 16px;font-size:15px;background:#f8f9fb;border-bottom:1px solid #d5d9df;scroll-margin-top:15px}section>p{padding:0 16px}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:12px;table-layout:auto}th,td{padding:9px 12px;vertical-align:top;text-align:left;border-bottom:1px solid #e5e8ec;overflow-wrap:anywhere}th{background:#f0f2f5;color:#374151;font-weight:650;white-space:nowrap}tr:nth-child(even)td{background:#fafbfc}.value{white-space:pre-wrap;overflow-wrap:anywhere;max-width:700px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}.count{font-size:11px;color:#667080}.count a{color:inherit}.empty{color:#667080;font-style:italic}.notes{white-space:pre-wrap}footer{padding:20px 40px;border-top:1px solid #d5d9df;color:#667080;font-size:11px;background:white}@media(max-width:850px){.layout{display:block;padding:14px}nav{position:static;margin-bottom:20px}header{padding:24px}}@media print{:root{background:white;font-size:10pt}header{background:white;color:#171b20;padding:0 0 15px;border-bottom:2px solid #171b20}header>p,dt,.brand span{color:#444}.layout{display:block;padding:16px 0}nav{display:none}section{border:0;margin:18px 0}section h2{break-after:avoid;background:#eee}th{display:table-cell}thead{display:table-header-group}tr{break-inside:avoid}table{font-size:9pt}.table-wrap{overflow:visible}.value{max-width:none;font-size:8pt}.scope{font-size:9pt}footer{padding:15px 0}a{color:inherit;text-decoration:none}@page{size:landscape;margin:14mm}}
+
+/* Parser-defined artifact tables with source context and readable values. */
+.artifact-index {
+  margin: 0;
+  padding: 8px 16px;
+  list-style: none;
+  border-bottom: 1px solid #d5d9df;
+}
+.artifact-index li { display: flex; justify-content: space-between; gap: 16px; padding: 5px 0; }
+.artifact-index a { color: #334155; text-decoration: none; }
+.artifact-index a:hover { text-decoration: underline; }
+.artifact-index span, .artifact-heading span { color: #667080; white-space: nowrap; font-size: 12px; }
+.artifact-group { margin: 18px 16px; border: 1px solid #d5d9df; scroll-margin-top: 16px; }
+.artifact-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  background: #f0f2f5;
+  border-bottom: 1px solid #d5d9df;
+  break-after: avoid;
+}
+.artifact-heading h3 { margin: 0; font-size: 14px; }
+.artifact-meta { padding: 10px 12px; border-bottom: 1px solid #d5d9df; }
+.artifact-meta dt { color: #667080; }
+.artifact-meta dd { white-space: pre-wrap; }
+.artifact-group .value { font: inherit; white-space: pre-wrap; max-width: 600px; }
+.artifact-group td:first-child { width: 1%; color: #667080; }
+.artifact-group th { white-space: normal; min-width: 100px; }
+.artifact-group th:first-child { min-width: 44px; white-space: nowrap; }
+@media print {
+  .artifact-index { display: none; }
+  .artifact-group { margin: 16px 0; }
+  .artifact-heading, .artifact-meta { break-after: avoid; }
+  .artifact-group .value { font-size: 8pt; max-width: none; }
+  .artifact-group th { min-width: 0; }
+}

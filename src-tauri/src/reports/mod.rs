@@ -1,4 +1,6 @@
 //! Portable HTML case reports, streamed from a consistent SQLite snapshot into case-owned files.
+mod artifact_values;
+mod artifacts;
 mod data;
 mod html;
 mod sections;

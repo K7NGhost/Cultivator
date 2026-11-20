@@ -66,6 +66,11 @@ async fn generates_complete_scoped_offline_html_and_persists_report_history() {
         .unwrap();
     let html = fs::read_to_string(&report.path).unwrap();
     assert!(html.starts_with("<!doctype html>"));
+    assert!(html.contains("<h3>Messages</h3>"));
+    assert!(html.contains("<th scope=\"col\">Message</th>"));
+    assert!(html.contains("<th scope=\"col\">Timestamp</th>"));
+    assert!(html.contains("520 entries"));
+    assert!(!html.contains("&quot;message&quot;:"));
     assert!(
         html.contains("Included row 519"),
         "reports must include rows beyond UI pagination"
@@ -187,4 +192,93 @@ async fn validation_and_generation_failures_never_publish_partial_reports() {
             .count(),
         0
     );
+}
+
+#[tokio::test]
+async fn presents_artifact_groups_with_labelled_columns_and_readable_nested_values() {
+    let (_directory, database, pool) = fixture().await;
+    sqlx::query("DELETE FROM plugin_results")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let records = [
+        (
+            "contacts-a",
+            "contact",
+            json!({"kind":"contact","label":"Alice", "name":"Alice <script>unsafe()</script>","phones":["123","456"],"details":{"verified":false,"count":0}}),
+        ),
+        (
+            "contacts-b",
+            "contact",
+            json!({"kind":"contact","label":"Bob", "name":"Bob","email":"bob@example.test"}),
+        ),
+        (
+            "table-a",
+            "custom_table",
+            json!({"kind":"custom_table","table":{"name":"Application activity","columns":[{"key":"app","label":"Application name"},{"key":"recordedAt","label":"Recorded at"}],"rows":[{"app":"Mail","recordedAt":0,"extraField":"saved extra value","items":["one","two"]}]},"parser":{"artifact":{"object_columns":[{"name":"recordedAt","type":"datetime"}]}}}),
+        ),
+        (
+            "table-b",
+            "custom_table",
+            json!({"kind":"custom_table","table":{"name":"Application activity","columns":[{"key":"app","label":"Application name"}],"rows":[{"app":"Maps","laterColumn":"later value"}]}}),
+        ),
+        (
+            "empty",
+            "custom_table",
+            json!({"kind":"custom_table","table":{"name":"Empty artifact","columns":[{"key":"name","label":"Name"}],"rows":[]}}),
+        ),
+        (
+            "inferred",
+            "custom_table",
+            json!({"kind":"custom_table","table":{"name":"Inferred columns","rows":[{"eventName":"Opened","success":true},{"eventName":"Closed","exitCode":0}]}}),
+        ),
+        (
+            "scalars",
+            "custom_table",
+            json!({"kind":"custom_table","table":{"name":"Scalar values","rows":[true,false,0,null,"text <b>literal</b>"]}}),
+        ),
+    ];
+    for (id, kind, payload) in records {
+        sqlx::query("INSERT INTO plugin_results(id,job_id,plugin_id,datasource_id,file_path,result_kind,label,payload,created_at) VALUES(?,'latest','parser','phone','/evidence/apps.db',?,'Saved artifact',?,'2026-01-01')")
+            .bind(id).bind(kind).bind(payload.to_string()).execute(&pool).await.unwrap();
+    }
+    let mut options = request();
+    options.sections = vec![ReportSection::Artifacts];
+    let record = generate_case_report(database, options).await.unwrap();
+    let html = fs::read_to_string(&record.path).unwrap();
+    assert_eq!(record.counts[0].rows, 11);
+    assert_eq!(html.matches("<h3>Application activity</h3>").count(), 1);
+    assert_eq!(html.matches("<h3>Contact</h3>").count(), 1);
+    for label in [
+        "Application name",
+        "Recorded at",
+        "Extra field",
+        "Later column",
+        "Event name",
+        "Exit code",
+        "Phones",
+    ] {
+        assert!(
+            html.contains(&format!("<th scope=\"col\">{label}</th>")),
+            "Missing column: {label}"
+        );
+    }
+    assert!(html.contains("1970-01-01 00:00:00.000 UTC\nRecorded: 0"));
+    assert!(html.contains("Verified: No"));
+    assert!(html.contains("Count: 0"));
+    assert!(html.contains("one\ntwo"));
+    assert!(html.contains("123\n456"));
+    assert!(html.contains("later value"));
+    assert!(html.contains("bob@example.test"));
+    assert!(html.contains("<h3>Empty artifact</h3>"));
+    assert!(html.contains("0 entries"));
+    assert!(html.contains("No saved records in the selected scope."));
+    assert!(html.contains("text &lt;b&gt;literal&lt;/b&gt;"));
+    assert!(html.contains("Alice &lt;script&gt;unsafe()&lt;/script&gt;"));
+    assert!(!html.contains("<script>unsafe()"));
+    assert!(!html.contains("&quot;app&quot;:"));
+    assert!(!html.contains("object_columns"));
+    assert!(html.contains("/evidence/apps.db"));
+    assert!(html.contains("aria-label=\"Artifact tables\""));
+    assert!(html.contains("href=\"#artifact-1\""));
 }

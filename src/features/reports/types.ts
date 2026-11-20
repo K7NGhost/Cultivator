@@ -12,7 +12,7 @@ export type ReportLibrary = { reports: ReportRecord[]; warnings: string[] };
 export const REPORT_SECTIONS: ReadonlyArray<{ id: ReportSection; label: string; description: string; unit: string }> = [
   { id: "caseInformation", label: "Case information", description: "Case name, reference number, examiner and description.", unit: "case" },
   { id: "evidenceSources", label: "Evidence sources", description: "Selected datasources, imported paths and original evidence references.", unit: "sources" },
-  { id: "artifacts", label: "Artifact records", description: "Saved results from the latest completed plugin runs, including every table row.", unit: "artifact groups" },
+  { id: "artifacts", label: "Artifact records", description: "Readable artifact tables from the latest completed plugin runs, including every saved row.", unit: "artifact groups" },
   { id: "media", label: "Media inventory and stored hashes", description: "Image/video metadata, stored hashes, manual review and analysis results. Media files are not embedded.", unit: "files" },
   { id: "timeline", label: "Timeline events", description: "Chronological events derived from saved artifact timestamps. Built when generated if needed.", unit: "indexed events" },
   { id: "processingLog", label: "Processing history and logs", description: "Plugin runs, completion states, errors and recorded log messages.", unit: "runs" },
