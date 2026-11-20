@@ -2504,6 +2504,7 @@ pub fn run() {
             list_plugin_artifacts,
             plugins::timeline::sync_artifact_timeline,
             plugins::timeline::artifact_timeline_page,
+            plugins::timeline::artifact_timeline_overview,
             plugins::timeline::artifact_timeline_detail,
             drone::list_drone_flights,
             drone::open_drone_flight,

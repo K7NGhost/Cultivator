@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowDownUp, ChevronLeft, ChevronRight, Clock3, ExternalLink, LoaderCircle, RefreshCw } from "lucide-react";
@@ -9,7 +9,8 @@ import { listDataSources, type DataSourceRecord } from "@/features/datasources";
 import { cn } from "@/lib/utils";
 import { useTimeZone } from "@/features/settings/timeZoneSettings";
 import { formatTimestamp } from "@/lib/timeZone";
-import { syncTimeline, timelinePage, timelineDetail, type TimelineSummary, type TimelineFilter,
+import { TimelineGraph } from "../components/TimelineGraph";
+import { syncTimeline, timelinePage, timelineDetail, timelineOverview, type TimelineOverview, type TimelineRange, type TimelineSummary, type TimelineFilter,
   type TimelinePageData, type TimelineDetail } from "../services/timelineRepository";
 
 const PAGE_SIZE = 200;
@@ -39,6 +40,17 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
   const [offset, setOffset] = useState(0);
   const [version, setVersion] = useState(0);
   const [page, setPage] = useState<TimelinePageData | null>(null);
+  const [labels, setLabels] = useState<string[]>([]);
+  const [overview, setOverview] = useState<TimelineOverview | null>(null);
+  const [focusedOverview, setFocusedOverview] = useState<{ range: TimelineRange; data: TimelineOverview } | null>(null);
+  const [focusing, setFocusing] = useState(false);
+  const [focusError, setFocusError] = useState("");
+  const [range, setRange] = useState<TimelineRange | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState("");
+  const graphFilter = useMemo<TimelineFilter>(() => ({ search: filter.search, datasourceId: filter.datasourceId,
+    label: filter.label, basis: filter.basis, from: filter.from, to: filter.to, descending: false }),
+    [filter.search, filter.datasourceId, filter.label, filter.basis, filter.from, filter.to]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<TimelineDetail | null>(null);
   const [building, setBuilding] = useState(false);
@@ -50,7 +62,7 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
 
   const refresh = useCallback(async () => {
     const request = ++generation.current;
-    setBuilding(true); setError(""); setSelectedId(null); setDetail(null);
+    setBuilding(true); setError(""); setSelectedId(null); setDetail(null); setRange(null);
     try {
       const [result, datasources] = await Promise.all([syncTimeline(caseRecord.databasePath), listDataSources(caseRecord.databasePath, caseRecord.id)]);
       if (request !== generation.current) return;
@@ -67,21 +79,48 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
   }, [active, refresh]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { setFilter((current) => current.search === search ? current : { ...current, search }); setOffset(0); }, 300);
+    if (filter.search === search) return;
+    const timer = window.setTimeout(() => { setFilter((current) => ({ ...current, search })); setOffset(0); setRange(null); }, 300);
     return () => window.clearTimeout(timer);
-  }, [search]);
+  }, [search, filter.search]);
 
   useEffect(() => {
     if (!summary || !active || building) return;
     let disposed = false;
-    setPaging(true); setError(""); setSelectedId(null); setDetail(null);
-    void timelinePage(caseRecord.databasePath, filter, offset, PAGE_SIZE).then((result) => {
-      if (disposed) return;
-      setPage(result); setSelectedId(result.items[0]?.id ?? null);
-    }).catch((error: unknown) => { if (!disposed) { setPage(null); setError(errorMessage(error)); } })
-      .finally(() => { if (!disposed) setPaging(false); });
+    setGraphLoading(true); setGraphError(""); setOverview(null);
+    void timelineOverview(caseRecord.databasePath, graphFilter).then((result) => {
+      if (!disposed) setOverview(result);
+    }).catch((error: unknown) => { if (!disposed) setGraphError(errorMessage(error)); })
+      .finally(() => { if (!disposed) setGraphLoading(false); });
     return () => { disposed = true; };
-  }, [caseRecord.databasePath, filter, offset, version, summary, active, building]);
+  }, [caseRecord.databasePath, graphFilter, version, summary, active, building]);
+
+  useEffect(() => {
+    setFocusError("");
+    if (!range || !summary || !active || building) { setFocusedOverview(null); setFocusing(false); return; }
+    let disposed = false;
+    setFocusing(true);
+    const timer = window.setTimeout(() => {
+      void timelineOverview(caseRecord.databasePath, { ...graphFilter, rangeFrom: range.from, rangeTo: range.to })
+        .then((result) => { if (!disposed) setFocusedOverview({ range, data: result }); })
+        .catch((error: unknown) => { if (!disposed) { setFocusedOverview(null); setFocusError(errorMessage(error)); } })
+        .finally(() => { if (!disposed) setFocusing(false); });
+    }, 150);
+    return () => { disposed = true; window.clearTimeout(timer); };
+  }, [caseRecord.databasePath, graphFilter, range, version, summary, active, building]);
+
+  useEffect(() => {
+    if (!summary || !active || building) return;
+    let disposed = false;
+    setPaging(true); setError(""); setSelectedId(null); setDetail(null); setPage(null);
+    const timer = window.setTimeout(() => { void timelinePage(caseRecord.databasePath,
+      { ...filter, rangeFrom: range?.from, rangeTo: range?.to }, offset, PAGE_SIZE).then((result) => {
+      if (disposed) return;
+      setPage(result); setLabels(result.labels); setSelectedId(result.items[0]?.id ?? null);
+    }).catch((error: unknown) => { if (!disposed) { setPage(null); setError(errorMessage(error)); } })
+      .finally(() => { if (!disposed) setPaging(false); }); }, 180);
+    return () => { disposed = true; window.clearTimeout(timer); };
+  }, [caseRecord.databasePath, filter, range, offset, version, summary, active, building]);
 
   useEffect(() => {
     setDetail(null); setDetailError("");
@@ -96,6 +135,7 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
 
   function updateFilter(key: keyof TimelineFilter, value: string | boolean) {
     setFilter((current) => ({ ...current, [key]: value })); setOffset(0);
+    if (key !== "descending") setRange(null);
   }
   const sourceName = (id: string) => sources.find((source) => source.id === id)?.name ?? id;
 
@@ -114,7 +154,7 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
         <option value="">All datasources</option>{sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
       </select>
       <select className={cn(control, "max-w-64")} aria-label="Timeline artifact" value={filter.label} onChange={(event) => updateFilter("label", event.target.value)}>
-        <option value="">All artifacts</option>{page?.labels.map((label) => <option key={label} value={label}>{label}</option>)}
+        <option value="">All artifacts</option>{labels.map((label) => <option key={label} value={label}>{label}</option>)}
       </select>
       <select className={control} aria-label="Timestamp timezone" value={filter.basis} onChange={(event) => updateFilter("basis", event.target.value)}>
         <option value="">All timestamp types</option><option value="utc">Known timezone (UTC)</option>
@@ -123,7 +163,7 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
       <label className="flex items-center gap-1 text-xs">From (UTC) <input className={control} type="date" aria-label="Timeline start date" value={filter.from} onChange={(event) => updateFilter("from", event.target.value)} /></label>
       <label className="flex items-center gap-1 text-xs">To (UTC) <input className={control} type="date" aria-label="Timeline end date" value={filter.to} min={filter.from || undefined} onChange={(event) => updateFilter("to", event.target.value)} /></label>
       <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => updateFilter("descending", !filter.descending)}><ArrowDownUp className="size-3.5" />{filter.descending ? "Newest first" : "Oldest first"}</Button>
-      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setSearch(""); setFilter(EMPTY_FILTER); setOffset(0); }}>Clear filters</Button>
+      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setSearch(""); setFilter(EMPTY_FILTER); setRange(null); setOffset(0); }}>Clear filters</Button>
     </div>
     <div className="flex shrink-0 flex-wrap gap-x-4 gap-y-1 border-b px-3 py-1 text-[11px] text-muted-foreground">
       <span>Display timezone: {timeZone}. Timeline date filters use UTC. Unspecified times sort by their recorded clock; date-only events have no time of day.</span>
@@ -131,6 +171,9 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
     </div>
     {error && <div role="alert" className="shrink-0 border-b px-3 py-2 text-xs text-destructive">{error}</div>}
     {building && <div role="status" className="flex shrink-0 items-center gap-2 border-b px-3 py-2 text-xs"><LoaderCircle className="size-3.5 animate-spin" />Updating timeline from saved artifacts…</div>}
+    <TimelineGraph overview={overview} focusedOverview={range && focusedOverview?.range.from === range.from && focusedOverview.range.to === range.to ? focusedOverview.data : null} range={range} focusing={focusing}
+      busy={graphLoading || building} error={graphError || focusError}
+      onRangeChange={(selection) => { setRange(selection); setOffset(0); }} />
     <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
       <ResizablePanel defaultSize="66%" minSize="35%">
         <div className="flex h-full min-h-0 flex-col">
@@ -139,7 +182,7 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
               <thead className="sticky top-0 z-10 bg-background text-[11px] text-muted-foreground"><tr>
                 {['Time', 'Event', 'Artifact', 'Summary', 'Source'].map((label) => <th key={label} className="border-b px-2 py-2 font-medium">{label}</th>)}
               </tr></thead>
-              <tbody>{page.items.map((event) => <tr key={event.id} onClick={() => setSelectedId(event.id)} className={cn("cursor-pointer border-b hover:bg-muted/40", selectedId === event.id && "bg-primary/10")}>
+              <tbody>{page.items.map((event) => <tr key={event.id} id={`timeline-event-${event.id}`} onClick={() => setSelectedId(event.id)} className={cn("cursor-pointer border-b hover:bg-muted/40", selectedId === event.id && "bg-primary/10")}>
                 <td className="whitespace-nowrap px-2 py-2 align-top font-mono text-[11px]"><button type="button" className="text-left hover:underline" onClick={() => setSelectedId(event.id)} aria-pressed={selectedId === event.id}>
                   {displayTime(event)}<span className="block font-sans text-[10px] text-muted-foreground">{event.timeBasis === "unspecified" ? "Timezone unspecified" : event.timeBasis === "date" ? "Date only" : timeZone}</span>
                 </button></td>
@@ -153,7 +196,7 @@ export function TimelineWorkspace({ caseRecord }: { caseRecord: CaseRecord }) {
             </div>}
           </div>
           <footer className="flex shrink-0 items-center justify-between gap-2 border-t px-2 py-1 text-xs">
-            <span>{page?.total ? `${(offset + 1).toLocaleString()}–${Math.min(offset + PAGE_SIZE, page.total).toLocaleString()} of ${page.total.toLocaleString()} events` : "0 events"}</span>
+            <span>{paging || building ? "Loading events…" : page?.total ? `${(offset + 1).toLocaleString()}–${Math.min(offset + PAGE_SIZE, page.total).toLocaleString()} of ${page.total.toLocaleString()} events${range ? " in selected range" : ""}` : "0 events"}</span>
             <div className="flex gap-1">
               <Button variant="outline" size="icon-xs" aria-label="Previous timeline page" disabled={offset === 0 || paging || building} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}><ChevronLeft className="size-3.5" /></Button>
               <Button variant="outline" size="icon-xs" aria-label="Next timeline page" disabled={!page || offset + PAGE_SIZE >= page.total || paging || building} onClick={() => setOffset(offset + PAGE_SIZE)}><ChevronRight className="size-3.5" /></Button>

@@ -1,0 +1,21 @@
+.timeline-line-chart .apexcharts-tooltip,
+.timeline-line-chart .apexcharts-xaxistooltip,
+.timeline-line-chart .apexcharts-menu {
+  background: var(--popover) !important;
+  color: var(--popover-foreground) !important;
+  border-color: var(--border) !important;
+  border-radius: var(--radius-sm) !important;
+}
+
+.timeline-line-chart .apexcharts-tooltip-title {
+  background: var(--muted) !important;
+  border-color: var(--border) !important;
+}
+
+.timeline-line-chart .apexcharts-toolbar svg {
+  fill: var(--muted-foreground);
+}
+
+.timeline-line-chart .apexcharts-toolbar .apexcharts-selected svg {
+  fill: var(--foreground);
+}

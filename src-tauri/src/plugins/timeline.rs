@@ -14,6 +14,7 @@ static BUILD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const VISIBLE: &str = "SELECT r.* FROM plugin_results r JOIN (SELECT id, ROW_NUMBER() OVER (PARTITION BY datasource_id,plugin_id ORDER BY started_at DESC,id DESC) AS rank FROM plugin_jobs WHERE status='complete') j ON j.id=r.job_id AND j.rank=1 WHERE r.result_kind NOT IN ('file_metadata','text_sample')";
 const MODEL_SCHEMAS: &str = include_str!("../scripting/worker/artifact_model_schemas.json");
 
+mod overview;
 #[cfg(test)]
 mod schema_tests;
 
@@ -427,6 +428,8 @@ pub struct TimelineFilter {
     pub from: Option<String>,
     pub to: Option<String>,
     pub descending: Option<bool>,
+    pub range_from: Option<i64>,
+    pub range_to: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -487,9 +490,9 @@ fn bound(value: Option<&str>, end: bool) -> Result<i64, String> {
 fn query(filter: &TimelineFilter) -> Result<QueryBuilder<'static, Sqlite>, String> {
     let mut query = QueryBuilder::new(" FROM artifact_timeline_events e JOIN artifact_timeline_visible_results r ON r.id=e.artifact_id WHERE e.sort_time BETWEEN ");
     query
-        .push_bind(bound(filter.from.as_deref(), false)?)
+        .push_bind(bound(filter.from.as_deref(), false)?.max(filter.range_from.unwrap_or(i64::MIN)))
         .push(" AND ")
-        .push_bind(bound(filter.to.as_deref(), true)?);
+        .push_bind(bound(filter.to.as_deref(), true)?.min(filter.range_to.unwrap_or(i64::MAX)));
     for (column, value) in [
         ("r.datasource_id", &filter.datasource_id),
         ("e.label", &filter.label),
@@ -526,6 +529,16 @@ fn query(filter: &TimelineFilter) -> Result<QueryBuilder<'static, Sqlite>, Strin
             .push(" ESCAPE '\\')");
     }
     Ok(query)
+}
+
+#[tauri::command]
+pub async fn artifact_timeline_overview(
+    case_database_path: String,
+    filter: TimelineFilter,
+) -> Result<overview::TimelineOverview, String> {
+    let pool = open_case_database(&case_database_path).await?;
+    ensure(&pool).await?;
+    overview::load(&pool, filter).await
 }
 
 #[tauri::command]
