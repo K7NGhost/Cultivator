@@ -9,6 +9,20 @@ use std::{
 };
 
 static WORKER: Mutex<Option<Worker>> = Mutex::new(None);
+
+fn runtime_spec(cuda: bool) -> (&'static str, Vec<String>) {
+    if cuda {
+        ("qwen3-chat-cuda-v1", vec![
+            "llama-cpp-python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.40-cu128-win-20260608/llama_cpp_python-0.3.40%2Bcu128-cp312-cp312-win_amd64.whl#sha256=abf8fd1bac54c6910a3051e846392a8f77c7e7abfe4732eabbd33b858c75d081".into(),
+            "nvidia-cublas-cu12==12.8.4.1".into(),
+            "nvidia-cuda-runtime-cu12==12.8.90".into(),
+        ])
+    } else if cfg!(all(windows, target_arch = "x86_64")) {
+        ("qwen3-chat-cpu-v1", vec!["llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.19/llama_cpp_python-0.3.19-cp312-cp312-win_amd64.whl".into()])
+    } else {
+        ("qwen3-chat-cpu-v1", vec!["llama-cpp-python==0.3.19".into()])
+    }
+}
 pub(super) fn release() {
     if let Ok(mut worker) = WORKER.try_lock() {
         *worker = None;
@@ -17,6 +31,7 @@ pub(super) fn release() {
 
 struct Worker {
     model: PathBuf,
+    device_label: String,
     _child: ManagedChild,
     input: ChildStdin,
     output: mpsc::Receiver<Result<Value, String>>,
@@ -25,18 +40,16 @@ impl Worker {
     fn start(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<Self, String> {
         let model =
             models::require(&root.join("models"), "qwen3-8b-q4-k-m")?.join("Qwen3-8B-Q4_K_M.gguf");
-        // Official prebuilt CPU wheel supports Qwen3 and avoids requiring a C++
-        // toolchain on investigators' Windows machines. No model auto-download.
-        let requirement = if cfg!(all(windows, target_arch = "x86_64")) {
-            "llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.19/llama_cpp_python-0.3.19-cp312-cp312-win_amd64.whl"
-        } else {
-            "llama-cpp-python==0.3.19"
-        };
+        // Isolate the CUDA runtime from old CPU installations. Weights remain
+        // manually downloaded. This pinned fork's prebuilt wheel selects a
+        // compatible CPU backend on Ryzen as well as enabling CUDA offloading.
+        let cuda = cfg!(all(windows, target_arch = "x86_64")) && runtime::nvidia_available();
+        let (environment, requirements) = runtime_spec(cuda);
         let python = runtime::prepare_with_cancellation(
             root,
-            "qwen3-chat-cpu-v1",
+            environment,
             runtime::DEFAULT_PYTHON,
-            &[requirement.to_owned()],
+            &requirements,
             cancelled,
         )?;
         let mut command = Command::new(python.executable);
@@ -52,6 +65,7 @@ impl Worker {
             .arg(&model)
             .env("PYTHONIOENCODING", "utf-8")
             .env("HF_HUB_OFFLINE", "1")
+            .env("CULTIVATOR_REQUIRE_CUDA", if cuda { "1" } else { "0" })
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -69,8 +83,9 @@ impl Worker {
                 }
             }
         });
-        let worker = Self {
+        let mut worker = Self {
             model,
+            device_label: String::new(),
             _child: child,
             input,
             output: rx,
@@ -79,6 +94,10 @@ impl Worker {
         if ready["ready"] != true {
             return Err("Qwen did not become ready".into());
         }
+        if cuda && (ready["device"] != "cuda" || ready["gpuLayers"].as_u64().unwrap_or(0) == 0) {
+            return Err("Qwen did not confirm CUDA inference; CPU fallback is disabled.".into());
+        }
+        worker.device_label = ready["deviceName"].as_str().unwrap_or("CPU").to_owned();
         Ok(worker)
     }
     fn receive(&self, cancelled: &dyn Fn() -> bool) -> Result<Value, String> {
@@ -118,6 +137,9 @@ pub(super) fn generate(
     }
     let mut run = || -> Result<String, String> {
         let worker = slot.as_mut().ok_or("Qwen worker unavailable")?;
+        event(
+            serde_json::json!({"phase":format!("Generating with Qwen3-8B on {}", worker.device_label)}),
+        );
         writeln!(worker.input, "{request}")
             .and_then(|_| worker.input.flush())
             .map_err(|e| e.to_string())?;
@@ -141,4 +163,25 @@ pub(super) fn generate(
         *slot = None;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cuda_runtime_cannot_reuse_the_cpu_environment() {
+        let (gpu_environment, gpu_requirement) = runtime_spec(true);
+        let (cpu_environment, cpu_requirement) = runtime_spec(false);
+        assert_ne!(gpu_environment, cpu_environment);
+        assert_ne!(gpu_requirement, cpu_requirement);
+        assert!(gpu_requirement[0].contains("v0.3.40-cu128-win-20260608/"));
+        assert!(gpu_requirement[0].contains("#sha256="));
+        assert!(gpu_requirement
+            .iter()
+            .any(|r| r.starts_with("nvidia-cublas-cu12==")));
+        assert!(gpu_requirement
+            .iter()
+            .any(|r| r.starts_with("nvidia-cuda-runtime-cu12==")));
+    }
 }

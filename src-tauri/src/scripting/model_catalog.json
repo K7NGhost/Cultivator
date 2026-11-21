@@ -156,7 +156,7 @@
   {
     "id": "qwen3-8b-q4-k-m",
     "name": "Qwen3-8B (Q4_K_M)",
-    "description": "Local evidence-grounded case chat. Quantized GGUF model; requires a manual download. The portable runtime runs on CPU.",
+    "description": "Local evidence-grounded case chat. Quantized GGUF model; requires a manual download. Uses CUDA acceleration on Windows NVIDIA systems, with CPU support on other systems.",
     "source": "https://huggingface.co/Qwen/Qwen3-8B-GGUF",
     "license": "Apache-2.0",
     "architecture": "Qwen3 / GGUF Q4_K_M",
