@@ -31,6 +31,7 @@ mod drone;
 mod mapping;
 mod reports;
 mod artifact_view;
+mod indexing;
 mod plugins;
 pub mod preview;
 mod scripting;
@@ -2472,6 +2473,11 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .manage(SearchRegistry::default())
         .invoke_handler(tauri::generate_handler![
+            indexing::configure_case_indexer,
+            indexing::case_indexer_status,
+            indexing::request_case_index,
+            indexing::case_indexer_activity,
+            indexing::search::search_case_index,
             evidence::import_evidence,
             evidence::ensure_evidence_file,
             evidence::cancel_evidence_import,

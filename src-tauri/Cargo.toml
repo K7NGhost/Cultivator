@@ -59,6 +59,7 @@ crc32fast = "1.5"
 tokio = { version = "1.52.3", features = ["full"] }
 memmap2 = "0.9.9"
 inodex = "0.1.2"
+tantivy = { version = "0.25", default-features = false, features = ["mmap", "lz4-compression"] }
 
 [target.'cfg(windows)'.dependencies]
 libloading = "0.7.4"

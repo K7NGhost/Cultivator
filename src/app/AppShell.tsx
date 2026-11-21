@@ -22,10 +22,11 @@ import { MapTabsPage } from "@/features/mapping/pages/MapTabsPage";
 import { TimelinePage } from "@/features/timeline/pages/TimelinePage";
 import { PluginsPage } from "@/features/plugins/pages/PluginsPage";
 import { usePluginJobMonitor } from "@/features/plugins/hooks/usePluginJobMonitor";
-import { SearchPage } from "@/features/search/pages/SearchPage";
+import { SearchTabsPage } from "@/features/search/pages/SearchTabsPage";
 import { ReportsPage } from "@/features/reports/pages/ReportsPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { initializePerformanceSettings } from "@/features/settings/performanceSettings";
+import { useCaseIndexer } from "@/features/settings/indexingSettings";
 
 const workspaceRoutes = [
   { path: "/map", element: <MapTabsPage /> },
@@ -40,7 +41,7 @@ const workspaceRoutes = [
   },
   {
     path: "/search",
-    element: <SearchPage />,
+    element: <SearchTabsPage />,
   },
   {
     path: "/media",
@@ -79,6 +80,7 @@ function AppShellContent() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(loadSidebarOpenState);
   const { activeCase } = useCases();
   usePluginJobMonitor(activeCase);
+  useCaseIndexer(activeCase?.databasePath ?? null);
 
   function updateSidebarOpenState(isOpen: boolean) {
     setIsSidebarOpen(isOpen);

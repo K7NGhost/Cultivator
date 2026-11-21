@@ -147,6 +147,31 @@ pub(crate) fn indexed_metadata(path: &Path) -> Result<Option<IndexedFile>, Strin
         path.display()
     ))
 }
+/// Stream clones of individual manifest records instead of duplicating the
+/// complete cached manifest for background consumers.
+pub(crate) fn indexed_entry_iter(
+    path: &Path,
+) -> Result<Option<impl Iterator<Item = IndexedFile>>, String> {
+    let Some(index) = index(path)? else {
+        return Ok(None);
+    };
+    let path_key = key(path);
+    let prefix = format!("{path_key}/");
+    let mut position = 0;
+    Ok(Some(std::iter::from_fn(move || {
+        while let Some(entry) = index.files.get(position) {
+            position += 1;
+            if entry.local_path.as_ref().is_some_and(|p| {
+                let k = key(p);
+                k == path_key || k.starts_with(&prefix)
+            }) {
+                return Some(entry.clone());
+            }
+        }
+        None
+    })))
+}
+
 pub(crate) fn indexed_entries(
     path: &Path,
     recursive: bool,
