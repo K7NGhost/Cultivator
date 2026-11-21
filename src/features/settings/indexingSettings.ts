@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 export type IndexingMode = "adaptive" | "background" | "manual";
-export interface IndexingOptions { mode: IndexingMode; scanSeconds: number; maxFileMib: number }
+export interface IndexingOptions { mode: IndexingMode; scanSeconds: number; maxFileMib: number; semantic?: boolean }
 export interface IndexingStage { name: string; processed: number; total: number; skipped: number; state: string; checked?: number }
 export interface IndexingStatus { database: string | null; options: IndexingOptions; stages: IndexingStage[]; running: boolean; message: string }
 export const defaultIndexingOptions: IndexingOptions = { mode: "adaptive", scanSeconds: 60, maxFileMib: 8 };
@@ -14,7 +14,7 @@ export function loadIndexingOptions(): IndexingOptions {
     const value: unknown = JSON.parse(localStorage.getItem(key) ?? "null");
     if (value && typeof value === "object") {
       const options = value as IndexingOptions;
-      if (["adaptive", "background", "manual"].includes(options.mode) && Number.isInteger(options.scanSeconds) && options.scanSeconds >= 10 && options.scanSeconds <= 3600 && Number.isInteger(options.maxFileMib) && options.maxFileMib >= 1 && options.maxFileMib <= 32) return options;
+      if ((options.semantic === undefined || typeof options.semantic === "boolean") && ["adaptive", "background", "manual"].includes(options.mode) && Number.isInteger(options.scanSeconds) && options.scanSeconds >= 10 && options.scanSeconds <= 3600 && Number.isInteger(options.maxFileMib) && options.maxFileMib >= 1 && options.maxFileMib <= 32) return options;
     }
   } catch { /* Missing or invalid preferences use conservative defaults. */ }
   return { ...defaultIndexingOptions };

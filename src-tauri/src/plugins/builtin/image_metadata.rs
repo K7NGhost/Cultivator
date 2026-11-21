@@ -1,10 +1,10 @@
 use crate::plugins::cancellation::{self, Check};
 use crate::plugins::PythonPluginManifest;
-#[cfg(test)]
-use std::time::UNIX_EPOCH;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::time::UNIX_EPOCH;
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Seek},
@@ -294,7 +294,9 @@ where
         crate::evidence::visit_files(&root, |path| {
             cancellation::checkpoint(cancelled)?;
             chunk.push(path.to_path_buf());
-            if chunk.len() == chunk_size { process_chunk(&mut chunk)?; }
+            if chunk.len() == chunk_size {
+                process_chunk(&mut chunk)?;
+            }
             Ok(())
         })?;
     }
@@ -321,23 +323,64 @@ where
     })
 }
 
-fn attach_evidence_metadata(roots: &[String], photos: &mut [MediaItem], videos: &mut [MediaItem]) -> Result<(), String> {
+fn attach_evidence_metadata(
+    roots: &[String],
+    photos: &mut [MediaItem],
+    videos: &mut [MediaItem],
+) -> Result<(), String> {
     use std::collections::{HashMap, HashSet};
-    fn key(path: &str) -> String { path.replace('\\', "/").trim_start_matches("//?/").to_lowercase() }
-    let manifests: HashSet<_> = roots.iter().filter_map(|root| Path::new(root).ancestors()
-        .find(|p| p.parent().and_then(Path::file_name).is_some_and(|n| n == "evidence"))
-        .map(|p| p.join("manifest.ndjson"))).filter(|p| p.is_file()).collect();
-    if manifests.is_empty() { return Ok(()); }
-    let mut items: HashMap<_, _> = photos.iter_mut().chain(videos.iter_mut()).map(|item| (key(&item.path), item)).collect();
+    fn key(path: &str) -> String {
+        path.replace('\\', "/")
+            .trim_start_matches("//?/")
+            .to_lowercase()
+    }
+    let manifests: HashSet<_> = roots
+        .iter()
+        .filter_map(|root| {
+            Path::new(root)
+                .ancestors()
+                .find(|p| {
+                    p.parent()
+                        .and_then(Path::file_name)
+                        .is_some_and(|n| n == "evidence")
+                })
+                .map(|p| p.join("manifest.ndjson"))
+        })
+        .filter(|p| p.is_file())
+        .collect();
+    if manifests.is_empty() {
+        return Ok(());
+    }
+    let mut items: HashMap<_, _> = photos
+        .iter_mut()
+        .chain(videos.iter_mut())
+        .map(|item| (key(&item.path), item))
+        .collect();
     for manifest in manifests {
         for line in BufReader::new(fs::File::open(manifest).map_err(|e| e.to_string())?).lines() {
-            let record: serde_json::Value = serde_json::from_str(&line.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-            let Some(path) = record["localPath"].as_str() else { continue; };
+            let record: serde_json::Value = serde_json::from_str(&line.map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            let Some(path) = record["localPath"].as_str() else {
+                continue;
+            };
             if let Some(item) = items.get_mut(&key(path)) {
-                for (label, field) in [("Evidence source", "source"), ("Evidence path", "evidencePath")] {
-                    if let Some(value) = record[field].as_str() { item.metadata.push(MediaMetadataField { label: label.into(), value: value.into() }); }
+                for (label, field) in [
+                    ("Evidence source", "source"),
+                    ("Evidence path", "evidencePath"),
+                ] {
+                    if let Some(value) = record[field].as_str() {
+                        item.metadata.push(MediaMetadataField {
+                            label: label.into(),
+                            value: value.into(),
+                        });
+                    }
                 }
-                if let Some(partition) = record["partition"].as_u64() { item.metadata.push(MediaMetadataField { label: "Evidence partition".into(), value: partition.to_string() }); }
+                if let Some(partition) = record["partition"].as_u64() {
+                    item.metadata.push(MediaMetadataField {
+                        label: "Evidence partition".into(),
+                        value: partition.to_string(),
+                    });
+                }
             }
         }
     }
@@ -411,7 +454,9 @@ fn process_media_item(
     let mut header = [0u8; MAX_HEADER_BYTES];
     let count = reader.read(&mut header).map_err(|e| e.to_string())?;
     let header = &header[..count];
-    let Some(format) = detect_media_format(path, header) else { return Ok(None); };
+    let Some(format) = detect_media_format(path, header) else {
+        return Ok(None);
+    };
     let file_metadata = crate::build_directory_entry(path)?;
     let modified_ms = file_metadata.modified_ms;
     let media_path = path.to_string_lossy().to_string();
@@ -1090,12 +1135,19 @@ mod tests {
         fs::write(root.join("manifest.ndjson"), serde_json::to_string(&serde_json::json!({
             "source": "disk.E01", "partition": 3, "evidencePath": "/Pictures/photo.gif", "localPath": photo
         })).unwrap() + "\n").unwrap();
-        let gallery = execute_with_progress(vec![volume.to_string_lossy().into_owned()], |_| {}).unwrap();
+        let gallery =
+            execute_with_progress(vec![volume.to_string_lossy().into_owned()], |_| {}).unwrap();
         assert_eq!(gallery.photos.len(), 1);
         let metadata = &gallery.photos[0].metadata;
-        assert!(metadata.iter().any(|field| field.label == "Evidence source" && field.value == "disk.E01"));
-        assert!(metadata.iter().any(|field| field.label == "Evidence path" && field.value == "/Pictures/photo.gif"));
-        assert!(metadata.iter().any(|field| field.label == "Evidence partition" && field.value == "3"));
+        assert!(metadata
+            .iter()
+            .any(|field| field.label == "Evidence source" && field.value == "disk.E01"));
+        assert!(metadata
+            .iter()
+            .any(|field| field.label == "Evidence path" && field.value == "/Pictures/photo.gif"));
+        assert!(metadata
+            .iter()
+            .any(|field| field.label == "Evidence partition" && field.value == "3"));
     }
 
     fn png_header_bytes(is_cgbi: bool, interlace: u8, width: u32, height: u32) -> Vec<u8> {

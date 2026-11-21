@@ -52,7 +52,7 @@ pub(super) fn clear_reader() {
     }
 }
 
-fn search(request: SearchRequest) -> Result<SearchPage, String> {
+pub(crate) fn search(request: SearchRequest) -> Result<SearchPage, String> {
     if request.query.trim().is_empty() || request.query.len() > 4096 {
         return Err("Enter a search query of 1–4096 bytes.".into());
     }

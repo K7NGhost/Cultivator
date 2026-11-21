@@ -156,7 +156,10 @@ pub(super) fn classify(
             return Err("Plugin run cancelled.".into());
         }
         for item in chunk.iter() {
-            crate::evidence::ensure_local_checked(std::path::Path::new(&item.media_path), context.cancelled)?;
+            crate::evidence::ensure_local_checked(
+                std::path::Path::new(&item.media_path),
+                context.cancelled,
+            )?;
         }
         worker.send(&serde_json::json!({"paths": chunk.iter().map(|item| &item.media_path).collect::<Vec<_>>()}))?;
         let response = worker.receive(context, Duration::from_secs(300))?;

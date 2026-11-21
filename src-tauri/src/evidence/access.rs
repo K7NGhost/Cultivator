@@ -232,14 +232,22 @@ pub(crate) fn visit_files(
 
 /// Original image containers represented by this indexed datasource root.
 pub(crate) fn source_images(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let Some(index) = index(root)? else { return Ok(Vec::new()); };
+    let Some(index) = index(root)? else {
+        return Ok(Vec::new());
+    };
     // Empty filesystems can still contain recoverable logs in raw image space.
     let description: serde_json::Value = serde_json::from_reader(
-        File::open(index.root.join("source.json")).map_err(|e| e.to_string())?
-    ).map_err(|e| e.to_string())?;
-    Ok(description["originalPaths"].as_array().ok_or("Missing original evidence paths")?
-        .iter().filter_map(|path| path.as_str().map(PathBuf::from))
-        .collect::<std::collections::BTreeSet<_>>().into_iter().collect())
+        File::open(index.root.join("source.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(description["originalPaths"]
+        .as_array()
+        .ok_or("Missing original evidence paths")?
+        .iter()
+        .filter_map(|path| path.as_str().map(PathBuf::from))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect())
 }
 
 // One actor owns each borrowing image/filesystem pair; independent sources can

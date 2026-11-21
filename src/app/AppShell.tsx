@@ -23,12 +23,14 @@ import { TimelinePage } from "@/features/timeline/pages/TimelinePage";
 import { PluginsPage } from "@/features/plugins/pages/PluginsPage";
 import { usePluginJobMonitor } from "@/features/plugins/hooks/usePluginJobMonitor";
 import { SearchTabsPage } from "@/features/search/pages/SearchTabsPage";
+import { ChatPage } from "@/features/chat/ChatPage";
 import { ReportsPage } from "@/features/reports/pages/ReportsPage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { initializePerformanceSettings } from "@/features/settings/performanceSettings";
 import { useCaseIndexer } from "@/features/settings/indexingSettings";
 
 const workspaceRoutes = [
+  { path: "/chat", element: <ChatPage /> },
   { path: "/map", element: <MapTabsPage /> },
   { path: "/settings", element: <SettingsPage /> },
   {

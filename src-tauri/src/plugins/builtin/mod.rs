@@ -1,16 +1,16 @@
 mod archive_extractor;
-mod drone_telemetry;
-mod map_files;
-mod drone_carving;
-mod image_metadata;
-mod media_archives;
-mod face_detection;
 mod clip_classification;
-mod python_worker;
-mod mobile_artifacts;
-mod visual_screening;
+mod drone_carving;
+mod drone_telemetry;
+mod face_detection;
+mod image_metadata;
+mod map_files;
+mod media_archives;
 #[cfg(test)]
 mod media_benchmark;
+mod mobile_artifacts;
+mod python_worker;
+mod visual_screening;
 
 use crate::plugins::PythonPluginManifest;
 use serde_json::Value as JsonValue;
@@ -19,10 +19,12 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-pub use archive_extractor::manifest as archive_extractor_manifest;
 pub(crate) use archive_extractor::is_archive_path;
+pub use archive_extractor::manifest as archive_extractor_manifest;
 pub(crate) use image_metadata::load_metadata;
-pub use image_metadata::{manifest as image_metadata_manifest, MediaGallery, MediaItem, MediaType, MediaMetadataField};
+pub use image_metadata::{
+    manifest as image_metadata_manifest, MediaGallery, MediaItem, MediaMetadataField, MediaType,
+};
 
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct BuiltinArtifact {
@@ -137,7 +139,11 @@ impl<'a> BuiltinPluginContext<'a> {
 
 pub(super) fn analysis_limits(context: &BuiltinPluginContext<'_>) -> (usize, usize) {
     let cpus = std::thread::available_parallelism().map_or(4, usize::from);
-    match context.options.get("analysisMode").and_then(JsonValue::as_str) {
+    match context
+        .options
+        .get("analysisMode")
+        .and_then(JsonValue::as_str)
+    {
         Some("performance") => (cpus.saturating_sub(2).clamp(1, 16), 64),
         Some("saver") => (2.min(cpus), 8),
         _ => ((cpus / 2).clamp(1, 8), 32),
@@ -170,25 +176,55 @@ mod evidence_tests {
     fn media_hashing_streams_from_image_and_analysis_extracts_only_photos() {
         let case = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
-        image::RgbImage::new(8, 8).save(source.path().join("photo.png")).unwrap();
+        image::RgbImage::new(8, 8)
+            .save(source.path().join("photo.png"))
+            .unwrap();
         std::fs::write(source.path().join("notes.txt"), b"unrelated notes").unwrap();
         let image = case.path().join("logical.inodex");
-        inodex::acquisition::acquire(source.path(), &image, inodex::filesystem::Limits::default()).unwrap();
+        inodex::acquisition::acquire(source.path(), &image, inodex::filesystem::Limits::default())
+            .unwrap();
         let imported = crate::evidence::import_for_test(crate::evidence::ImportRequest {
-            case_folder_path: case.path().to_string_lossy().into_owned(), datasource_id: "test-media".into(),
-            source_type: "diskImage".into(), paths: vec![image.to_string_lossy().into_owned()], partition: None,
-        }).unwrap();
+            case_folder_path: case.path().to_string_lossy().into_owned(),
+            datasource_id: "test-media".into(),
+            source_type: "diskImage".into(),
+            paths: vec![image.to_string_lossy().into_owned()],
+            partition: None,
+        })
+        .unwrap();
         let root = std::path::Path::new(&imported.paths[0]);
         let mut progress = |_| {};
-        let mut context = BuiltinPluginContext::new(imported.paths.clone(), None, serde_json::json!({"hashMedia":true}), vec![], &mut progress, &|| false);
+        let mut context = BuiltinPluginContext::new(
+            imported.paths.clone(),
+            None,
+            serde_json::json!({"hashMedia":true}),
+            vec![],
+            &mut progress,
+            &|| false,
+        );
         ImageMetadataPlugin.run(&mut context).unwrap();
         assert_eq!(context.into_effects().media.unwrap().photos.len(), 1);
-        assert!(!root.join("photo.png").exists(), "metadata and hashing should stream");
+        assert!(
+            !root.join("photo.png").exists(),
+            "metadata and hashing should stream"
+        );
         assert!(!root.join("notes.txt").exists());
-        let mut context = BuiltinPluginContext::new(imported.paths.clone(), None, serde_json::json!({"hashMedia":true,"screenSkin":true}), vec![], &mut progress, &|| false);
+        let mut context = BuiltinPluginContext::new(
+            imported.paths.clone(),
+            None,
+            serde_json::json!({"hashMedia":true,"screenSkin":true}),
+            vec![],
+            &mut progress,
+            &|| false,
+        );
         ImageMetadataPlugin.run(&mut context).unwrap();
-        assert!(root.join("photo.png").exists(), "native image analysis requested a working copy");
-        assert!(!root.join("notes.txt").exists(), "unrelated documents must not be extracted");
+        assert!(
+            root.join("photo.png").exists(),
+            "native image analysis requested a working copy"
+        );
+        assert!(
+            !root.join("notes.txt").exists(),
+            "unrelated documents must not be extracted"
+        );
     }
 }
 
@@ -199,19 +235,31 @@ mod benchmarks {
     #[ignore = "manual end-to-end media plugin benchmark"]
     fn benchmark_media_plugin() {
         let path = std::env::var("CULTIVATOR_MEDIA_BENCH_PATH").expect("benchmark source path");
-        let python = std::env::var("CULTIVATOR_MEDIA_BENCH_PYTHON_ROOT").expect("existing Python runtime/models root");
+        let python = std::env::var("CULTIVATOR_MEDIA_BENCH_PYTHON_ROOT")
+            .expect("existing Python runtime/models root");
         let mut progress = |_event: BuiltinPluginProgress| {};
-        let mut context = BuiltinPluginContext::new(vec![path], None, serde_json::json!({
-            "hashMedia": true, "screenSkin": true, "groupSimilar": true,
-            "detectFaces": true, "classifyClip": true, "classifyNsfw": true,
-            "clipModel": "openclip-vit-b-32", "clipThreshold": "0.22", "analysisMode": "balanced"
-        }), vec![], &mut progress, &|| false);
+        let mut context = BuiltinPluginContext::new(
+            vec![path],
+            None,
+            serde_json::json!({
+                "hashMedia": true, "screenSkin": true, "groupSimilar": true,
+                "detectFaces": true, "classifyClip": true, "classifyNsfw": true,
+                "clipModel": "openclip-vit-b-32", "clipThreshold": "0.22", "analysisMode": "balanced"
+            }),
+            vec![],
+            &mut progress,
+            &|| false,
+        );
         context.python_root = Some(python.into());
         let start = std::time::Instant::now();
-        ImageMetadataPlugin.run(&mut context).expect("run full media plugin");
+        ImageMetadataPlugin
+            .run(&mut context)
+            .expect("run full media plugin");
         let elapsed = start.elapsed().as_millis();
         let effects = context.into_effects();
-        for (level, message) in effects.logs { eprintln!("MEDIA_PLUGIN_LOG {level}: {message}"); }
+        for (level, message) in effects.logs {
+            eprintln!("MEDIA_PLUGIN_LOG {level}: {message}");
+        }
         let gallery = effects.media.expect("gallery");
         eprintln!("MEDIA_PLUGIN_BENCH elapsed_ms={elapsed} scanned_files={} photos={} videos={} faces_analyzed={} clip_analyzed={} nsfw_analyzed={}",
             gallery.scanned_files, gallery.photos.len(), gallery.videos.len(),
@@ -352,9 +400,18 @@ impl BuiltinPlugin for ImageMetadataPlugin {
             ),
         );
         visual_screening::analyze(&mut gallery, context)?;
-        let faces = context.options.get("detectFaces").is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
-        let clip = context.options.get("classifyClip").is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
-        let nsfw = context.options.get("classifyNsfw").is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
+        let faces = context
+            .options
+            .get("detectFaces")
+            .is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
+        let clip = context
+            .options
+            .get("classifyClip")
+            .is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
+        let nsfw = context
+            .options
+            .get("classifyNsfw")
+            .is_some_and(|v| v.as_bool() == Some(true) || v.as_str() == Some("true"));
         if clip || nsfw {
             // Combined worker decodes once and overlaps CPU faces with GPU inference.
             clip_classification::classify(&mut gallery, context)?;

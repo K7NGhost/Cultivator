@@ -14,11 +14,12 @@ export function IndexingPreferences() {
   const [status, setStatus] = useState<IndexingStatus | null>(null);
   const [message, setMessage] = useState("");
   const [requesting, setRequesting] = useState(false);
+  const [vectors,setVectors]=useState<{database?:string;message:string;processed?:number;total?:number;running?:boolean;device?:string;deviceName?:string}>();
   useEffect(() => {
     if (location.pathname !== "/settings" || !isTauri()) return;
     let disposed = false;
     const poll = async () => {
-      try { const next = await invoke<IndexingStatus>("case_indexer_status"); if (!disposed) setStatus(next); }
+      try { const next = await invoke<IndexingStatus>("case_indexer_status"); if (!disposed) setStatus(next); const vector=await invoke<typeof vectors>("vector_index_status"); if (!disposed) setVectors(vector); }
       catch (error) { if (!disposed) setMessage(String(error)); }
     };
     void poll();
@@ -26,6 +27,7 @@ export function IndexingPreferences() {
     return () => { disposed = true; window.clearInterval(timer); };
   }, [location.pathname, activeCase?.databasePath]);
   const current = status?.database === activeCase?.databasePath ? status : null;
+  const currentVectors=vectors?.database===activeCase?.databasePath ? vectors : undefined;
   return <section className="grid gap-3 text-xs" aria-label="Search indexing">
     <h2 className="border-b pb-1 font-medium">Search indexing</h2>
     <form className="grid gap-3" onSubmit={async event => {
@@ -37,9 +39,9 @@ export function IndexingPreferences() {
     }}>
       <label className="grid grid-cols-[13rem_minmax(0,1fr)] items-center gap-2">Indexing behavior
         <select className="h-8 min-w-0 rounded-sm border bg-background px-2" value={options.mode} onChange={event => setOptions({ ...options, mode: event.target.value as IndexingMode })}>
-          <option value="adaptive">Adaptive — Reduce activity during investigations</option>
-          <option value="background">Background — Continuous indexing</option>
-          <option value="manual">Manual — Index only when requested</option>
+          <option value="adaptive">Adaptive â€” Reduce activity during investigations</option>
+          <option value="background">Background â€” Continuous indexing</option>
+          <option value="manual">Manual â€” Index only when requested</option>
         </select>
       </label>
       <label className="grid grid-cols-[13rem_8rem] items-center gap-2">Check for additions (seconds)
@@ -49,6 +51,8 @@ export function IndexingPreferences() {
         <Input type="number" className="h-8 rounded-sm text-xs" min={1} max={32} required value={options.maxFileMib} onChange={event => setOptions({ ...options, maxFileMib: event.target.valueAsNumber })} />
       </label>
       <p className="text-muted-foreground">A single background worker checks the open case for additions and changes. Adaptive waits while you interact with Cultivator. Index now runs one pass immediately, including in Manual mode. Settings apply to all cases; indexes are stored separately beside each case database.</p>
+      <label className="flex items-center gap-2"><input type="checkbox" checked={options.semantic ?? false} onChange={event=>setOptions({...options,semantic:event.target.checked})} />Semantic indexing (BGE Large + LanceDB)</label>
+      <p className="text-muted-foreground">Download BGE Large under Models first. First use installs a dedicated Python environment with the required dependencies. Uses GPU when available, otherwise CPU. Follows the indexing behavior above and reuses existing embeddings.</p>
       <div className="flex gap-2">
         <Button size="sm" type="submit">Apply indexing settings</Button>
         <Button size="sm" variant="outline" type="button" disabled={!activeCase || !isTauri() || requesting || current?.running} onClick={async () => {
@@ -59,6 +63,14 @@ export function IndexingPreferences() {
         }}>Index now</Button>
       </div>
     </form>
+    {options.semantic && <div className="grid gap-1 text-muted-foreground" aria-busy={currentVectors?.running}>
+      <span>{currentVectors ? currentVectors.message : "Semantic vectors are stored separately for each case."}</span>
+      <div className="flex justify-between gap-2">
+        <span>{currentVectors?.deviceName ? `${currentVectors.device === "cuda" ? "GPU: " : ""}${currentVectors.deviceName}` : "Preparing embedding runtime"}</span>
+        <span>{(currentVectors?.processed ?? 0).toLocaleString()} / {(currentVectors?.total ?? 0).toLocaleString()} records checked</span>
+      </div>
+      <progress aria-label="Semantic indexing progress" className="h-1.5 w-full accent-primary" max={Math.max(1,currentVectors?.total??0)} value={currentVectors?.running && !currentVectors.total ? undefined : currentVectors?.processed??0} />
+    </div>}
     <div className="grid gap-2" aria-label="Indexing progress">
       {(current?.stages ?? ["Filesystem metadata", "Artifacts", "File contents"].map(name => ({ name, processed: 0, total: 0, skipped: 0, state: "Waiting" }))).map(stage => {
         const progress = indexingProgress(stage);

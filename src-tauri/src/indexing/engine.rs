@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-pub(super) fn index_root(database: &Path) -> PathBuf {
+pub(crate) fn index_root(database: &Path) -> PathBuf {
     let mut name = database.file_name().unwrap_or_default().to_os_string();
     name.push(".tantivy-v1");
     database.with_file_name(name)

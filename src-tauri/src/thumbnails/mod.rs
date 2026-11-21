@@ -111,7 +111,8 @@ pub fn millis(start: Instant) -> f64 {
 /// deliberately invalidate the derived JPEG without changing evidence.
 pub fn cache_fingerprint(path: &Path) -> Result<String, String> {
     let path = crate::evidence::ensure_local(path, &AtomicBool::new(false))?;
-    let path = fs::canonicalize(path.as_path()).map_err(|e| format!("Media file unavailable: {e}"))?;
+    let path =
+        fs::canonicalize(path.as_path()).map_err(|e| format!("Media file unavailable: {e}"))?;
     let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
     if !metadata.is_file() {
         return Err("Media source is not a file.".into());
@@ -137,7 +138,8 @@ pub(super) struct Source {
 impl Source {
     fn new(cache: &Path, media_id: &str, path: &Path) -> Result<(String, Self), String> {
         let path = crate::evidence::ensure_local(path, &AtomicBool::new(false))?;
-        let path = fs::canonicalize(path.as_path()).map_err(|e| format!("Media file unavailable: {e}"))?;
+        let path =
+            fs::canonicalize(path.as_path()).map_err(|e| format!("Media file unavailable: {e}"))?;
         let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
         if !metadata.is_file() {
             return Err("Media source is not a file.".into());

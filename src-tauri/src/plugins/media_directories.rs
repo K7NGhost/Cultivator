@@ -81,7 +81,11 @@ fn scan_directories(roots: Vec<String>) -> Result<Vec<MediaDirectory>, String> {
             .any(|other| other != *root && root.starts_with(other))
     }) {
         crate::evidence::visit_files(root, |path| {
-            let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase();
+            let extension = path
+                .extension()
+                .and_then(|v| v.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
             let image = crate::IMAGE_EXTENSIONS.contains(&extension.as_str());
             if image || crate::VIDEO_EXTENSIONS.contains(&extension.as_str()) {
                 add_file(&mut directories, &path.to_string_lossy(), image);

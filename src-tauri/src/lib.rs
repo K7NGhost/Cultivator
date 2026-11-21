@@ -24,16 +24,17 @@ use std::{
 };
 use tauri::Emitter;
 
-mod jobs;
+mod artifact_view;
+mod chat;
+mod drone;
 mod evidence;
 mod file_view_scan;
-mod drone;
-mod mapping;
-mod reports;
-mod artifact_view;
 mod indexing;
+mod jobs;
+mod mapping;
 mod plugins;
 pub mod preview;
+mod reports;
 mod scripting;
 #[path = "tauri/commands.rs"]
 mod tauri_commands;
@@ -557,11 +558,16 @@ async fn list_file_view_entries_page(
 }
 
 #[tauri::command]
-async fn build_file_view_index(roots: Vec<String>, request_id: Option<String>) -> Result<FileViewIndex, String> {
+async fn build_file_view_index(
+    roots: Vec<String>,
+    request_id: Option<String>,
+) -> Result<FileViewIndex, String> {
     let scan = file_view_scan::Scan::start(request_id)?;
-    tokio::task::spawn_blocking(move || build_file_view_index_with_cancellation(roots, &|| scan.cancelled()))
-        .await
-        .map_err(|error| format!("Failed to join file view index task: {error}"))?
+    tokio::task::spawn_blocking(move || {
+        build_file_view_index_with_cancellation(roots, &|| scan.cancelled())
+    })
+    .await
+    .map_err(|error| format!("Failed to join file view index task: {error}"))?
 }
 
 #[tauri::command]
@@ -579,9 +585,13 @@ async fn prepare_python_runtime(
 }
 
 #[tauri::command]
-async fn plugin_model_settings(app_handle: tauri::AppHandle) -> Result<scripting::models::ModelSettings, String> {
+async fn plugin_model_settings(
+    app_handle: tauri::AppHandle,
+) -> Result<scripting::models::ModelSettings, String> {
     let root = plugins::python_runtime_directory(&app_handle)?.join("models");
-    tauri::async_runtime::spawn_blocking(move || scripting::models::status(&root)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || scripting::models::status(&root))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1352,7 +1362,9 @@ fn run_grep_search(
 
     if indexed {
         evidence::visit_files(&root, |path| {
-            if cancelled.load(Ordering::Relaxed) { return Err("Search cancelled".into()); }
+            if cancelled.load(Ordering::Relaxed) {
+                return Err("Search cancelled".into());
+            }
             evidence::ensure_local(path, &cancelled)?;
             Ok(())
         })?;
@@ -1781,8 +1793,11 @@ async fn read_sqlite_table_rows(
 
 async fn open_readonly_sqlite_database(path: &str) -> Result<SqlitePool, String> {
     let owned = path.to_string();
-    tokio::task::spawn_blocking(move || evidence::ensure_family(Path::new(&owned), &AtomicBool::new(false)))
-        .await.map_err(|e| e.to_string())??;
+    tokio::task::spawn_blocking(move || {
+        evidence::ensure_family(Path::new(&owned), &AtomicBool::new(false))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let path = PathBuf::from(path);
 
     if !path.is_file() {
@@ -1891,12 +1906,31 @@ fn sqlite_cell_to_json_value(
 fn build_tree_node(path: &Path, depth: usize) -> Result<DirectoryTreeNode, String> {
     if let Some(metadata) = evidence::indexed_metadata(path)? {
         let entries = evidence::indexed_entries(path, false)?.unwrap_or_default();
-        let children = if depth < MAX_TREE_DEPTH && metadata.metadata.kind == inodex::filesystem::FileKind::Directory {
-            Some(entries.iter().take(MAX_DIRECTORY_CHILDREN).filter_map(|entry| build_tree_node(entry.local_path.as_ref()?, depth + 1).ok()).collect())
-        } else { None };
-        return Ok(DirectoryTreeNode { id: path.to_string_lossy().into_owned(), name: display_name(path),
-            path: path.to_string_lossy().into_owned(), kind: if metadata.metadata.kind == inodex::filesystem::FileKind::Directory { EntryKind::Directory } else { EntryKind::File },
-            files: entries.len(), children });
+        let children = if depth < MAX_TREE_DEPTH
+            && metadata.metadata.kind == inodex::filesystem::FileKind::Directory
+        {
+            Some(
+                entries
+                    .iter()
+                    .take(MAX_DIRECTORY_CHILDREN)
+                    .filter_map(|entry| build_tree_node(entry.local_path.as_ref()?, depth + 1).ok())
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        return Ok(DirectoryTreeNode {
+            id: path.to_string_lossy().into_owned(),
+            name: display_name(path),
+            path: path.to_string_lossy().into_owned(),
+            kind: if metadata.metadata.kind == inodex::filesystem::FileKind::Directory {
+                EntryKind::Directory
+            } else {
+                EntryKind::File
+            },
+            files: entries.len(),
+            children,
+        });
     }
     let metadata = fs::metadata(path)
         .map_err(|error| format!("Failed to read path metadata '{}': {error}", path.display()))?;
@@ -1941,7 +1975,11 @@ fn build_tree_node(path: &Path, depth: usize) -> Result<DirectoryTreeNode, Strin
 
 fn list_immediate_entries(path: &Path) -> Result<Vec<DirectoryEntry>, String> {
     if let Some(entries) = evidence::indexed_entries(path, false)? {
-        let mut entries = entries.into_iter().take(MAX_LIST_ENTRIES).filter_map(|entry| build_directory_entry(entry.local_path.as_ref()?).ok()).collect::<Vec<_>>();
+        let mut entries = entries
+            .into_iter()
+            .take(MAX_LIST_ENTRIES)
+            .filter_map(|entry| build_directory_entry(entry.local_path.as_ref()?).ok())
+            .collect::<Vec<_>>();
         sort_directory_entries(&mut entries);
         return Ok(entries);
     }
@@ -1972,11 +2010,20 @@ fn list_file_view_entries_page_impl(
 
         if let Some(files) = evidence::indexed_entries(&root, true)? {
             for file in files {
-                if file.metadata.kind != inodex::filesystem::FileKind::File { continue; }
+                if file.metadata.kind != inodex::filesystem::FileKind::File {
+                    continue;
+                }
                 let path = file.local_path.as_ref().unwrap();
-                if !seen_paths.insert(path.clone()) || !file_matches_view(path, file.metadata.size, view_id) { continue; }
-                let index = total_count; total_count += 1;
-                if index >= offset && entries.len() < limit { entries.push(build_directory_entry(path)?); }
+                if !seen_paths.insert(path.clone())
+                    || !file_matches_view(path, file.metadata.size, view_id)
+                {
+                    continue;
+                }
+                let index = total_count;
+                total_count += 1;
+                if index >= offset && entries.len() < limit {
+                    entries.push(build_directory_entry(path)?);
+                }
             }
             continue;
         }
@@ -2041,8 +2088,17 @@ fn build_file_view_index_impl(roots: Vec<String>) -> Result<FileViewIndex, Strin
     build_file_view_index_with_cancellation(roots, &|| false)
 }
 
-fn build_file_view_index_with_cancellation(roots: Vec<String>, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<FileViewIndex, String> {
-    let checkpoint = || if cancelled() { Err("File View indexing cancelled.".to_string()) } else { Ok(()) };
+fn build_file_view_index_with_cancellation(
+    roots: Vec<String>,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<FileViewIndex, String> {
+    let checkpoint = || {
+        if cancelled() {
+            Err("File View indexing cancelled.".to_string())
+        } else {
+            Ok(())
+        }
+    };
     checkpoint()?;
     let mut view_entries = file_view_index_template();
     let mut view_counts = file_view_count_template();
@@ -2055,13 +2111,21 @@ fn build_file_view_index_with_cancellation(roots: Vec<String>, cancelled: &(dyn 
         if let Some(files) = evidence::indexed_entries(&root, true)? {
             for file in files {
                 checkpoint()?;
-                if file.metadata.kind != inodex::filesystem::FileKind::File { continue; }
+                if file.metadata.kind != inodex::filesystem::FileKind::File {
+                    continue;
+                }
                 let path = file.local_path.as_ref().unwrap();
-                if !seen_paths.insert(path.clone()) { continue; }
+                if !seen_paths.insert(path.clone()) {
+                    continue;
+                }
                 for view_id in matching_file_view_ids(path, file.metadata.size) {
-                    if let Some(count) = view_counts.get_mut(view_id) { *count += 1; }
+                    if let Some(count) = view_counts.get_mut(view_id) {
+                        *count += 1;
+                    }
                     if let Some(entries) = view_entries.get_mut(view_id) {
-                        if entries.len() < MAX_FILE_VIEW_ENTRIES { entries.push(build_directory_entry(path)?); }
+                        if entries.len() < MAX_FILE_VIEW_ENTRIES {
+                            entries.push(build_directory_entry(path)?);
+                        }
                     }
                 }
             }
@@ -2280,11 +2344,32 @@ fn looks_like_deleted_file(path: &Path) -> bool {
 fn build_directory_entry(path: &Path) -> Result<DirectoryEntry, String> {
     if let Some(file) = evidence::indexed_metadata(path)? {
         let directory = file.metadata.kind == inodex::filesystem::FileKind::Directory;
-        return Ok(DirectoryEntry { id: path.to_string_lossy().into_owned(), name: display_name(path),
-            path: path.to_string_lossy().into_owned(), kind: if directory { EntryKind::Directory } else { EntryKind::File },
+        return Ok(DirectoryEntry {
+            id: path.to_string_lossy().into_owned(),
+            name: display_name(path),
+            path: path.to_string_lossy().into_owned(),
+            kind: if directory {
+                EntryKind::Directory
+            } else {
+                EntryKind::File
+            },
             size: (!directory).then_some(file.metadata.size),
-            modified_ms: file.metadata.times.modified.filter(|t| t.seconds >= 0).map(|t| t.seconds as u128 * 1000 + t.nanos as u128 / 1_000_000),
-            child_count: if directory { Some(evidence::indexed_entries(path, false)?.unwrap_or_default().len()) } else { None } });
+            modified_ms: file
+                .metadata
+                .times
+                .modified
+                .filter(|t| t.seconds >= 0)
+                .map(|t| t.seconds as u128 * 1000 + t.nanos as u128 / 1_000_000),
+            child_count: if directory {
+                Some(
+                    evidence::indexed_entries(path, false)?
+                        .unwrap_or_default()
+                        .len(),
+                )
+            } else {
+                None
+            },
+        });
     }
     let metadata = fs::metadata(path)
         .map_err(|error| format!("Failed to read path metadata '{}': {error}", path.display()))?;
@@ -2461,6 +2546,7 @@ pub fn run() {
         .manage(jobs::JobManager::new())
         .setup(|app| {
             let handle = app.handle().clone();
+            indexing::vectors::initialize(plugins::python_runtime_directory(&handle)?);
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = plugins::initialize_job_manager(&handle).await {
                     eprintln!("Plugin scheduler recovery failed: {error}");
@@ -2478,6 +2564,12 @@ pub fn run() {
             indexing::request_case_index,
             indexing::case_indexer_activity,
             indexing::search::search_case_index,
+            indexing::vectors::search_case_vectors,
+            indexing::vectors::vector_index_status,
+            chat::ask_case_chat,
+            chat::cancel_case_chat,
+            chat::store::case_chat_history,
+            chat::store::delete_case_chat,
             evidence::import_evidence,
             evidence::ensure_evidence_file,
             evidence::cancel_evidence_import,

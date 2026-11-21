@@ -4,12 +4,14 @@ use std::{
     time::{Duration, Instant},
 };
 mod engine;
+pub(crate) use engine::index_root as engine_root;
 mod persistence;
 pub(crate) mod search;
 mod store;
 #[cfg(test)]
 mod tests;
 mod text;
+pub(crate) mod vectors;
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +26,8 @@ pub struct Options {
     pub mode: Mode,
     pub scan_seconds: u64,
     pub max_file_mib: u64,
+    #[serde(default)]
+    pub semantic: bool,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -31,6 +35,7 @@ impl Default for Options {
             mode: Mode::Adaptive,
             scan_seconds: 60,
             max_file_mib: 8,
+            semantic: false,
         }
     }
 }
@@ -146,6 +151,9 @@ fn run(control: Arc<Mutex<Control>>) {
         };
         if let Some((epoch, database, options, force)) = work {
             let result = engine::scan(&runtime, &control, epoch, &database, &options, force);
+            if result.is_ok() && options.semantic {
+                let _ = vectors::sync(&control, epoch, &database, force);
+            }
             let mut c = control.lock().unwrap();
             if c.epoch == epoch {
                 c.status.running = false;
@@ -239,6 +247,7 @@ fn configure(
         || c.status.options.mode != options.mode
         || c.status.options.scan_seconds != options.scan_seconds
         || c.status.options.max_file_mib != options.max_file_mib
+        || c.status.options.semantic != options.semantic
     {
         c.epoch += 1;
         c.requested = false;
@@ -255,6 +264,8 @@ fn configure(
             }
         }
         if c.status.database != database {
+            crate::chat::case_changed();
+            vectors::restore(database.as_deref());
             search::clear_reader();
             for stage in &mut c.status.stages {
                 stage.processed = 0;
@@ -293,6 +304,9 @@ fn configure(
         }
     }
     c.status.database = database;
+    if !options.semantic {
+        vectors::release();
+    }
     c.status.options = options;
     Ok(c.status.clone())
 }

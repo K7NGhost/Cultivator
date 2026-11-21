@@ -51,7 +51,7 @@ export function PluginModels() {
   const busy = starting || active?.running;
   return (
     <section className="grid gap-3 text-xs" aria-label="Plugin models">
-      <h2 className="border-b pb-1 font-medium">Plugin models</h2>
+      <h2 className="border-b pb-1 font-medium">Models</h2>
       <p className="text-muted-foreground">Download models before running plugins. Downloads are shared across cases and reused locally. OpenCLIP models include weights and configuration; plugins install their own Python dependencies.</p>
       {!settings && !error && <p role="status">Loading model status...</p>}
       {settings?.models.map(model => (

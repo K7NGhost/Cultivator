@@ -12,6 +12,7 @@ import {
   PanelLeftOpen,
   Plug,
   Search,
+  MessageSquare,
   ShieldCheck,
   Settings,
 } from "lucide-react";
@@ -41,6 +42,7 @@ const navGroups = [
       { label: "Case overview", path: "/case", icon: ShieldCheck },
       { label: "Files", path: "/files", icon: FolderTree },
       { label: "Search", path: "/search", icon: Search },
+      { label: "Chat", path: "/chat", icon: MessageSquare },
       { label: "Media", path: "/media", icon: Images },
       { label: "Map", path: "/map", icon: Map },
     ],

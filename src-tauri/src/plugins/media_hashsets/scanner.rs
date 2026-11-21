@@ -234,11 +234,16 @@ pub(super) async fn scan(
             }
             let mut files = Vec::new();
             crate::evidence::visit_files(root, |path| {
-                if cancelled.load(Ordering::Relaxed) { return Err("Scan cancelled".into()); }
-                files.push(path.to_path_buf()); Ok(())
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err("Scan cancelled".into());
+                }
+                files.push(path.to_path_buf());
+                Ok(())
             })?;
             for path in files {
-                if cancelled.load(Ordering::Acquire) { break; }
+                if cancelled.load(Ordering::Acquire) {
+                    break;
+                }
                 let extension = path
                     .as_path()
                     .extension()

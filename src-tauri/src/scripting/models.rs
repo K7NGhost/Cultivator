@@ -163,7 +163,7 @@ pub fn available(root: &Path) -> Value {
 pub fn require(root: &Path, id: &str) -> Result<PathBuf, String> {
     let model = model(id)?;
     if !ready(root, model) {
-        return Err(format!("{} is not downloaded or needs repair. Open Settings > Plugin models and download it before running the plugin.", model.name));
+        return Err(format!("{} is not downloaded or needs repair. Open Settings > Models and download it before use.", model.name));
     }
     Ok(root.join(id))
 }
@@ -323,7 +323,15 @@ mod tests {
     #[test]
     fn catalog_has_compatible_nsfw_backbone_and_missing_models_are_unavailable() {
         let root = tempfile::tempdir().unwrap();
-        assert_eq!(catalog().len(), 4);
+        assert_eq!(catalog().len(), 6);
+        let qwen = model("qwen3-8b-q4-k-m").unwrap();
+        assert_eq!(qwen.files[0].path, "Qwen3-8B-Q4_K_M.gguf");
+        assert_eq!(qwen.files[0].size, 5_027_783_488);
+        assert_eq!(
+            qwen.files[0].sha256,
+            "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
+        );
+        assert_eq!(model("bge-large-en-v1.5").unwrap().files.len(), 6);
         assert_eq!(
             model("nsfw-clip").unwrap().dependencies,
             ["openclip-vit-l-14"]
@@ -340,7 +348,7 @@ mod tests {
         assert_eq!(available(root.path()), json!({}));
         assert!(require(root.path(), "yunet")
             .unwrap_err()
-            .contains("Settings > Plugin models"));
+            .contains("Settings > Models"));
         assert!(model("../outside").is_err());
         for model in catalog() {
             for dependency in &model.dependencies {

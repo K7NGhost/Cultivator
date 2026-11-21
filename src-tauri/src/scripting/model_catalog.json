@@ -105,5 +105,69 @@
         "sha256": "086f886fa1e16abaa2eef844a20efb522c3ffc144f9fbc031422acc4f70411e3"
       }
     ]
+  },
+  {
+    "id": "bge-large-en-v1.5",
+    "name": "BGE Large English v1.5",
+    "description": "Local semantic retrieval for metadata, artifacts and file text. 1024-dimensional embeddings stored per case in LanceDB.",
+    "source": "https://huggingface.co/BAAI/bge-large-en-v1.5",
+    "license": "MIT",
+    "architecture": "BertModel/CLS",
+    "dependencies": [],
+    "files": [
+      {
+        "path": "config.json",
+        "url": "https://huggingface.co/BAAI/bge-large-en-v1.5/resolve/d4aa6901d3a41ba39fb536a557fa166f842b0e09/config.json",
+        "size": 779,
+        "sha256": "446712fac367857b4b1302762fe1cd7bfa8b3c4b77b4dc5d77c4025407660896"
+      },
+      {
+        "path": "tokenizer.json",
+        "url": "https://huggingface.co/BAAI/bge-large-en-v1.5/resolve/d4aa6901d3a41ba39fb536a557fa166f842b0e09/tokenizer.json",
+        "size": 711396,
+        "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "url": "https://huggingface.co/BAAI/bge-large-en-v1.5/resolve/d4aa6901d3a41ba39fb536a557fa166f842b0e09/tokenizer_config.json",
+        "size": 366,
+        "sha256": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+      },
+      {
+        "path": "special_tokens_map.json",
+        "url": "https://huggingface.co/BAAI/bge-large-en-v1.5/resolve/d4aa6901d3a41ba39fb536a557fa166f842b0e09/special_tokens_map.json",
+        "size": 125,
+        "sha256": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3"
+      },
+      {
+        "path": "vocab.txt",
+        "url": "https://huggingface.co/BAAI/bge-large-en-v1.5/resolve/d4aa6901d3a41ba39fb536a557fa166f842b0e09/vocab.txt",
+        "size": 231508,
+        "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+      },
+      {
+        "path": "model.safetensors",
+        "url": "https://huggingface.co/BAAI/bge-large-en-v1.5/resolve/d4aa6901d3a41ba39fb536a557fa166f842b0e09/model.safetensors",
+        "size": 1340616616,
+        "sha256": "45e1954914e29bd74080e6c1510165274ff5279421c89f76c418878732f64ae7"
+      }
+    ]
+  },
+  {
+    "id": "qwen3-8b-q4-k-m",
+    "name": "Qwen3-8B (Q4_K_M)",
+    "description": "Local evidence-grounded case chat. Quantized GGUF model; requires a manual download. The portable runtime runs on CPU.",
+    "source": "https://huggingface.co/Qwen/Qwen3-8B-GGUF",
+    "license": "Apache-2.0",
+    "architecture": "Qwen3 / GGUF Q4_K_M",
+    "dependencies": [],
+    "files": [
+      {
+        "path": "Qwen3-8B-Q4_K_M.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/7c41481f57cb95916b40956ab2f0b139b296d974/Qwen3-8B-Q4_K_M.gguf",
+        "size": 5027783488,
+        "sha256": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
+      }
+    ]
   }
 ]

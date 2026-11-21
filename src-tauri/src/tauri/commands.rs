@@ -1,6 +1,13 @@
 async fn local_evidence(path: String) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || crate::evidence::ensure_family(std::path::Path::new(&path), &std::sync::atomic::AtomicBool::new(false))
-        .map(|path| path.to_string_lossy().into_owned())).await.map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || {
+        crate::evidence::ensure_family(
+            std::path::Path::new(&path),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

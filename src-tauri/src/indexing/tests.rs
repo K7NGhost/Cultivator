@@ -65,6 +65,7 @@ fn reconciles_all_stages_incrementally_and_removes_stale_documents() {
     let options = Options {
         mode: Mode::Background,
         max_file_mib: 1,
+        semantic: false,
         ..Options::default()
     };
     engine::scan(&runtime, &c, 0, &database, &options, true).unwrap();
@@ -168,6 +169,7 @@ fn manual_waits_for_request_and_background_discovers_new_files() {
         mode: Mode::Manual,
         scan_seconds: 10,
         max_file_mib: 1,
+        semantic: false,
     };
     configure_case_indexer(Some(database.clone()), options.clone()).unwrap();
     std::thread::sleep(Duration::from_millis(350));
@@ -221,6 +223,7 @@ fn reopening_loads_each_cases_saved_index_without_scheduling_a_startup_scan() {
     let options = Options {
         mode: Mode::Background,
         max_file_mib: 1,
+        semantic: false,
         ..Options::default()
     };
     let c = control(Mode::Background);

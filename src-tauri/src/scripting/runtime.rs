@@ -143,14 +143,16 @@ pub fn prepare_with_cancellation(
         fs::write(&requirements, dependencies.join("\n"))
             .map_err(|error| format!("Failed to write plugin requirements: {error}"))?;
         let mut install_arguments: Vec<&std::ffi::OsStr> = vec![
-            "pip".as_ref(), "install".as_ref(), "--python".as_ref(),
-            executable.as_os_str(), "--requirements".as_ref(), requirements.as_os_str(),
+            "pip".as_ref(),
+            "install".as_ref(),
+            "--python".as_ref(),
+            executable.as_os_str(),
+            "--requirements".as_ref(),
+            requirements.as_os_str(),
         ];
-        if name == "openclip-accelerated-v2" {
+        if name == "openclip-accelerated-v2" || name == "bge-vector-v1" {
             // Explicit backend selection fixes Windows PyPI's CPU-only torch default.
-            let mut probe = Command::new("nvidia-smi");
-            hide_window(&mut probe);
-            if probe.arg("-L").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success()) {
+            if nvidia_available() {
                 install_arguments.push("--torch-backend".as_ref());
                 install_arguments.push("cu128".as_ref());
             }
@@ -311,6 +313,17 @@ fn run_uv(
 pub fn configure_worker(command: &mut Command) {
     hide_window(command);
     command.env_remove("PYTHONHOME").env_remove("PYTHONPATH");
+}
+
+pub(crate) fn nvidia_available() -> bool {
+    let mut probe = Command::new("nvidia-smi");
+    hide_window(&mut probe);
+    probe
+        .arg("-L")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn hide_window(command: &mut Command) {

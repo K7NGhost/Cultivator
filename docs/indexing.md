@@ -18,7 +18,7 @@ The worker reconciles three stages in order:
 2. Artifacts: individual table rows and ordinary result payloads from the latest completed job for each data source/plugin pair. Incomplete jobs and internal file metadata/text samples are excluded.
 3. File contents: UTF-8 text and UTF-16 text with a byte-order mark. Binary files and files over the configured limit are excluded. The default limit is 8 MiB, configurable from 1 to 32 MiB. Artifact records over 256 KiB are excluded before transferring their bodies from SQLite.
 
-PDF/Office extraction, OCR, embeddings and an AI response interface are outside this first indexing step.
+PDF/Office extraction and OCR are outside this indexing step. Optional BGE Large embeddings and LanceDB retrieval are described in [Semantic retrieval](vector-search.md); evidence-grounded Qwen answers are available through [Case chat](case-chat.md).
 
 ## Search views
 

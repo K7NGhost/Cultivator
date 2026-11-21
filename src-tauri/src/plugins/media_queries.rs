@@ -15,8 +15,13 @@ pub(super) async fn ensure_nsfw_index(pool: &SqlitePool) -> Result<(), String> {
         return Ok(());
     }
     let mut transaction = pool.begin().await.map_err(|e| e.to_string())?;
-    let added = sqlx::query("INSERT OR IGNORE INTO media_classification_migrations(name) VALUES ('nsfw-score-v1')")
-        .execute(&mut *transaction).await.map_err(|e| e.to_string())?.rows_affected();
+    let added = sqlx::query(
+        "INSERT OR IGNORE INTO media_classification_migrations(name) VALUES ('nsfw-score-v1')",
+    )
+    .execute(&mut *transaction)
+    .await
+    .map_err(|e| e.to_string())?
+    .rows_affected();
     if added > 0 {
         // Reuse scores saved by the original metadata-only implementation.
         sqlx::query(r#"UPDATE media_gallery_items SET payload = json_set(payload, '$.nsfwScore', (
@@ -33,7 +38,6 @@ pub(super) async fn ensure_nsfw_index(pool: &SqlitePool) -> Result<(), String> {
         .execute(&mut *transaction).await.map_err(|e| e.to_string())?;
     transaction.commit().await.map_err(|e| e.to_string())
 }
-
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -105,7 +109,17 @@ async fn read_filtered_page(
     categories: &[i64],
     directory: Option<&str>,
 ) -> Result<MediaGalleryPage, String> {
-    read_visual_page(pool, datasource_id, media_type, offset, limit, categories, directory, &MediaVisualOptions::default()).await
+    read_visual_page(
+        pool,
+        datasource_id,
+        media_type,
+        offset,
+        limit,
+        categories,
+        directory,
+        &MediaVisualOptions::default(),
+    )
+    .await
 }
 
 async fn read_visual_page(
@@ -118,12 +132,21 @@ async fn read_visual_page(
     directory: Option<&str>,
     visual: &MediaVisualOptions,
 ) -> Result<MediaGalleryPage, String> {
-    if visual.skin_min.is_some_and(|r| !r.is_finite() || !(0.0..=1.0).contains(&r)) {
+    if visual
+        .skin_min
+        .is_some_and(|r| !r.is_finite() || !(0.0..=1.0).contains(&r))
+    {
         return Err("Invalid skin-tone threshold".into());
     }
     let (skin_min, stack_id, requested_collapse) = if media_type == "image" {
-        (visual.skin_min, visual.stack_id.as_deref(), visual.collapse_similar && visual.stack_id.is_none())
-    } else { (None, None, false) };
+        (
+            visual.skin_min,
+            visual.stack_id.as_deref(),
+            visual.collapse_similar && visual.stack_id.is_none(),
+        )
+    } else {
+        (None, None, false)
+    };
     let limit = limit.clamp(1, 500);
     // A read transaction keeps the count and page consistent across rescans.
     let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
@@ -142,12 +165,14 @@ async fn read_visual_page(
         let nsfw_counts = sqlx::query(&format!("SELECT {NSFW_STATUS_SQL} AS status, COUNT(*) AS count FROM media_gallery_items g WHERE g.datasource_id = $1 AND g.media_type = 'image' AND ($2 IS NULL OR (replace(g.path, char(92), '/') LIKE $2 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $3 ESCAPE '\\')) GROUP BY status"))
             .bind(datasource_id).bind(&direct).bind(&nested).fetch_all(&mut *transaction).await.map_err(|e| e.to_string())?;
         for row in nsfw_counts {
-            classification_counts[(row.get::<i64, _>("status") + 1) as usize] = row.get::<i64, _>("count") as u64;
+            classification_counts[(row.get::<i64, _>("status") + 1) as usize] =
+                row.get::<i64, _>("count") as u64;
         }
         let clip_counts = sqlx::query("SELECT t.category, COUNT(*) AS count FROM media_gallery_items g JOIN media_clip_classifications t ON t.item_id = g.id WHERE g.datasource_id = $1 AND g.media_type = 'image' AND ($2 IS NULL OR (replace(g.path, char(92), '/') LIKE $2 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $3 ESCAPE '\\')) GROUP BY t.category")
             .bind(datasource_id).bind(&direct).bind(&nested).fetch_all(&mut *transaction).await.map_err(|error| error.to_string())?;
         for row in clip_counts {
-            classification_counts[(row.get::<i64, _>("category") + 257) as usize] = row.get::<i64, _>("count") as u64;
+            classification_counts[(row.get::<i64, _>("category") + 257) as usize] =
+                row.get::<i64, _>("count") as u64;
         }
         classification_counts[257] = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM media_gallery_items g WHERE g.datasource_id = $1 AND g.media_type = $2 AND json_extract(g.payload, '$.faceCount') > 0 AND ($3 IS NULL OR (replace(g.path, char(92), '/') LIKE $3 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $4 ESCAPE '\\'))"
@@ -167,10 +192,25 @@ async fn read_visual_page(
         FROM media_gallery_items g LEFT JOIN media_classifications c ON c.path = g.path WHERE g.datasource_id = $1 AND g.media_type = $2 AND ($3 IS NULL OR COALESCE(c.category, -1) IN (SELECT value FROM json_each($3)) OR (256 IN (SELECT value FROM json_each($3)) AND json_extract(g.payload, '$.faceCount') > 0) OR EXISTS (SELECT 1 FROM media_clip_classifications t WHERE t.item_id = g.id AND t.category + 256 IN (SELECT value FROM json_each($3))) OR ({NSFW_STATUS_SQL}) IN (SELECT value FROM json_each($3))) AND ($4 IS NULL OR (replace(g.path, char(92), '/') LIKE $4 ESCAPE '\\' AND replace(g.path, char(92), '/') NOT LIKE $5 ESCAPE '\\'))
         AND ($6 IS NULL OR (json_type(g.payload, '$.skinRatio') IN ('integer', 'real') AND json_extract(g.payload, '$.skinRatio') BETWEEN $6 AND 1))
         AND ($7 IS NULL OR json_extract(g.payload, '$.visualStackId') = $7)");
-    let count_sql = format!("WITH matching AS ({matching}) SELECT {} FROM matching", if collapse { "COUNT(DISTINCT stack_key)" } else { "COUNT(*)" });
+    let count_sql = format!(
+        "WITH matching AS ({matching}) SELECT {} FROM matching",
+        if collapse {
+            "COUNT(DISTINCT stack_key)"
+        } else {
+            "COUNT(*)"
+        }
+    );
     let total_count: i64 = sqlx::query_scalar(&count_sql)
-        .bind(datasource_id).bind(media_type).bind(&filter).bind(&direct).bind(&nested).bind(skin_min).bind(stack_id)
-        .fetch_one(&mut *transaction).await.map_err(|e| e.to_string())?;
+        .bind(datasource_id)
+        .bind(media_type)
+        .bind(&filter)
+        .bind(&direct)
+        .bind(&nested)
+        .bind(skin_min)
+        .bind(stack_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|e| e.to_string())?;
     // Seek a preceding matching member using the stack index, rather than
     // sorting every payload into window partitions on each scroll request.
     let page_sql = format!("WITH matching AS NOT MATERIALIZED ({matching})
@@ -184,8 +224,19 @@ async fn read_visual_page(
             ORDER BY m.name, m.path LIMIT $9 OFFSET $10
         ) page JOIN media_gallery_items g ON g.id = page.id ORDER BY page.name, page.path");
     let rows = sqlx::query(&page_sql)
-        .bind(datasource_id).bind(media_type).bind(&filter).bind(&direct).bind(&nested).bind(skin_min).bind(stack_id)
-        .bind(collapse).bind(limit).bind(offset).fetch_all(&mut *transaction).await.map_err(|e| e.to_string())?;
+        .bind(datasource_id)
+        .bind(media_type)
+        .bind(&filter)
+        .bind(&direct)
+        .bind(&nested)
+        .bind(skin_min)
+        .bind(stack_id)
+        .bind(collapse)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|e| e.to_string())?;
     let items = rows
         .into_iter()
         .map(|row| {
@@ -220,7 +271,11 @@ mod tests {
 
     #[tokio::test]
     async fn skin_filter_and_stacking_choose_matching_members_before_pagination() {
-        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
         ensure_plugin_tables(&pool).await.unwrap();
         sqlx::query("INSERT INTO plugin_jobs (id, case_id, datasource_id, plugin_id, status, started_at) VALUES ('visual', 'case', 'source', 'image-metadata', 'complete', 'now')").execute(&pool).await.unwrap();
         let photos = [Some(0.05), Some(0.5), None, Some(0.3)].into_iter().enumerate().map(|(index, skin)| {
@@ -231,36 +286,82 @@ mod tests {
                 "skinRatio": skin, "visualStackId": if index < 2 { Some("/images/0.jpg") } else { None }
             })).unwrap()
         }).collect();
-        replace_media_gallery_items(&pool, "visual", "source", &builtin::MediaGallery { photos, videos: vec![], scanned_files: 4 }).await.unwrap();
-        sqlx::query("INSERT INTO media_classifications VALUES ('/images/1.jpg', 0, 'now')").execute(&pool).await.unwrap();
-        let mut options = MediaVisualOptions { collapse_similar: true, ..Default::default() };
-        let page = read_visual_page(&pool, "source", "image", 0, 1, &[], None, &options).await.unwrap();
+        replace_media_gallery_items(
+            &pool,
+            "visual",
+            "source",
+            &builtin::MediaGallery {
+                photos,
+                videos: vec![],
+                scanned_files: 4,
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO media_classifications VALUES ('/images/1.jpg', 0, 'now')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut options = MediaVisualOptions {
+            collapse_similar: true,
+            ..Default::default()
+        };
+        let page = read_visual_page(&pool, "source", "image", 0, 1, &[], None, &options)
+            .await
+            .unwrap();
         assert_eq!(page.total_count, 3);
         assert_eq!(page.items[0].stack_size, 2);
         assert!(page.has_next_page);
-        let next = read_visual_page(&pool, "source", "image", 1, 1, &[], None, &options).await.unwrap();
+        let next = read_visual_page(&pool, "source", "image", 1, 1, &[], None, &options)
+            .await
+            .unwrap();
         assert_eq!(next.items[0].path, "/images/2.jpg");
         options.skin_min = Some(0.3);
-        let skin = read_visual_page(&pool, "source", "image", 0, 500, &[], None, &options).await.unwrap();
+        let skin = read_visual_page(&pool, "source", "image", 0, 500, &[], None, &options)
+            .await
+            .unwrap();
         assert_eq!(skin.total_count, 2);
         assert_eq!(skin.items[0].path, "/images/1.jpg"); // matching non-head survives
-        let manual = read_visual_page(&pool, "source", "image", 0, 500, &[0], None, &options).await.unwrap();
+        let manual = read_visual_page(&pool, "source", "image", 0, 500, &[0], None, &options)
+            .await
+            .unwrap();
         assert_eq!(manual.total_count, 1);
         assert_eq!(manual.items[0].vic_category, Some(0));
         options.skin_min = None;
         options.stack_id = Some("/images/0.jpg".into());
-        let expanded = read_visual_page(&pool, "source", "image", 0, 500, &[], None, &options).await.unwrap();
+        let expanded = read_visual_page(&pool, "source", "image", 0, 500, &[], None, &options)
+            .await
+            .unwrap();
         assert_eq!(expanded.total_count, 2);
         assert_eq!(expanded.items[1].path, "/images/1.jpg");
-        let elsewhere = read_visual_page(&pool, "source", "image", 0, 500, &[], Some("/other"), &options).await.unwrap();
+        let elsewhere = read_visual_page(
+            &pool,
+            "source",
+            "image",
+            0,
+            500,
+            &[],
+            Some("/other"),
+            &options,
+        )
+        .await
+        .unwrap();
         assert_eq!(elsewhere.total_count, 0);
         options.skin_min = Some(f64::NAN);
-        assert!(read_visual_page(&pool, "source", "image", 0, 500, &[], None, &options).await.is_err());
+        assert!(
+            read_visual_page(&pool, "source", "image", 0, 500, &[], None, &options)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn nsfw_filters_migrate_saved_scores_and_preserve_counts_pagination_and_unions() {
-        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
         ensure_plugin_tables(&pool).await.unwrap();
         sqlx::query("INSERT INTO plugin_jobs (id, case_id, datasource_id, plugin_id, status, started_at) VALUES ('nsfw', 'case', 'source', 'image-metadata', 'complete', 'now')").execute(&pool).await.unwrap();
         let photos = [Some(0.9), Some(0.5), Some(0.499999), Some(0.0), None, None].into_iter().enumerate().map(|(index, score)| {
@@ -270,41 +371,75 @@ mod tests {
                 "mediaPath": "unused", "thumbnailPath": "unused", "metadata": [], "nsfwScore": score
             })).unwrap()
         }).collect();
-        replace_media_gallery_items(&pool, "nsfw", "source", &builtin::MediaGallery { photos, videos: vec![], scanned_files: 6 }).await.unwrap();
+        replace_media_gallery_items(
+            &pool,
+            "nsfw",
+            "source",
+            &builtin::MediaGallery {
+                photos,
+                videos: vec![],
+                scanned_files: 6,
+            },
+        )
+        .await
+        .unwrap();
         // Simulate scores stored before the filter existed, including malformed metadata.
         for (name, value) in [("0.jpg", "0.9"), ("5.jpg", "unavailable")] {
             sqlx::query("UPDATE media_gallery_items SET payload = json_set(json_remove(payload, '$.nsfwScore'), '$.metadata', json(?)) WHERE name = ?")
                 .bind(serde_json::json!([{"label": "NSFW score", "value": value}]).to_string()).bind(name).execute(&pool).await.unwrap();
         }
-        sqlx::query("DELETE FROM media_classification_migrations WHERE name = 'nsfw-score-v1'").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM media_classification_migrations WHERE name = 'nsfw-score-v1'")
+            .execute(&pool)
+            .await
+            .unwrap();
         ensure_nsfw_index(&pool).await.unwrap();
         ensure_nsfw_index(&pool).await.unwrap(); // migration is idempotent
-        sqlx::query("INSERT INTO media_classifications VALUES ('/images/0.jpg', 0, 'now')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO media_classifications VALUES ('/images/0.jpg', 0, 'now')")
+            .execute(&pool)
+            .await
+            .unwrap();
         for category in [272, 273, 274] {
-            let page = read_filtered_page(&pool, "source", "image", 0, 1, &[category], Some("/images")).await.unwrap();
+            let page =
+                read_filtered_page(&pool, "source", "image", 0, 1, &[category], Some("/images"))
+                    .await
+                    .unwrap();
             assert_eq!(page.total_count, 2);
             assert!(page.has_next_page);
             assert_eq!(&page.classification_counts[273..276], &[2, 2, 2]);
             assert_eq!(page.classification_counts[..257].iter().sum::<u64>(), 6);
-            let next = read_filtered_page(&pool, "source", "image", 1, 1, &[category], None).await.unwrap();
+            let next = read_filtered_page(&pool, "source", "image", 1, 1, &[category], None)
+                .await
+                .unwrap();
             assert!(!next.has_next_page);
             assert_ne!(page.items[0].path, next.items[0].path);
         }
-        let flagged = read_filtered_page(&pool, "source", "image", 0, 500, &[272], None).await.unwrap();
+        let flagged = read_filtered_page(&pool, "source", "image", 0, 500, &[272], None)
+            .await
+            .unwrap();
         assert_eq!(flagged.items[0].nsfw_score, Some(0.9));
         assert_eq!(flagged.items[0].vic_category, Some(0));
-        let union = read_filtered_page(&pool, "source", "image", 0, 500, &[272, 0], None).await.unwrap();
+        let union = read_filtered_page(&pool, "source", "image", 0, 500, &[272, 0], None)
+            .await
+            .unwrap();
         assert_eq!(union.total_count, 2);
-        let missing = read_filtered_page(&pool, "source", "image", 0, 500, &[274], Some("/other")).await.unwrap();
+        let missing = read_filtered_page(&pool, "source", "image", 0, 500, &[274], Some("/other"))
+            .await
+            .unwrap();
         assert_eq!(missing.total_count, 0);
         assert_eq!(&missing.classification_counts[273..276], &[0, 0, 0]);
-        let other = read_filtered_page(&pool, "other-source", "image", 0, 500, &[272], None).await.unwrap();
+        let other = read_filtered_page(&pool, "other-source", "image", 0, 500, &[272], None)
+            .await
+            .unwrap();
         assert_eq!(other.total_count, 0);
     }
 
     #[tokio::test]
     async fn faces_filter_uses_saved_results_and_preserves_manual_categories() {
-        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
         ensure_plugin_tables(&pool).await.unwrap();
         sqlx::query("INSERT INTO plugin_jobs (id, case_id, datasource_id, plugin_id, status, started_at) VALUES ('faces', 'case', 'source', 'image-metadata', 'complete', 'now')").execute(&pool).await.unwrap();
         let photos = [Some(2), Some(0), None, Some(1)].into_iter().enumerate().map(|(index, count)| {
@@ -321,9 +456,25 @@ mod tests {
                 ]) } else { serde_json::json!([]) }
             })).unwrap()
         }).collect();
-        replace_media_gallery_items(&pool, "faces", "source", &builtin::MediaGallery { photos, videos: vec![], scanned_files: 4 }).await.unwrap();
-        sqlx::query("INSERT INTO media_classifications VALUES ('/images/0.jpg', 0, 'now')").execute(&pool).await.unwrap();
-        let page = read_filtered_page(&pool, "source", "image", 0, 1, &[256], None).await.unwrap();
+        replace_media_gallery_items(
+            &pool,
+            "faces",
+            "source",
+            &builtin::MediaGallery {
+                photos,
+                videos: vec![],
+                scanned_files: 4,
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO media_classifications VALUES ('/images/0.jpg', 0, 'now')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let page = read_filtered_page(&pool, "source", "image", 0, 1, &[256], None)
+            .await
+            .unwrap();
         assert_eq!(page.total_count, 2);
         assert!(page.has_next_page);
         assert_eq!(page.items[0].face_count, Some(2));
@@ -332,28 +483,66 @@ mod tests {
         assert_eq!(page.items[0].vic_category, Some(0));
         assert_eq!(page.classification_counts[257], 2);
         assert_eq!(page.classification_counts[..257].iter().sum::<u64>(), 4);
-        let union = read_filtered_page(&pool, "source", "image", 0, 500, &[256, 0], Some("/images")).await.unwrap();
+        let union =
+            read_filtered_page(&pool, "source", "image", 0, 500, &[256, 0], Some("/images"))
+                .await
+                .unwrap();
         assert_eq!(union.total_count, 2); // no duplicate for an image matching both
-        let next = read_filtered_page(&pool, "source", "image", 1, 1, &[256], None).await.unwrap();
+        let next = read_filtered_page(&pool, "source", "image", 1, 1, &[256], None)
+            .await
+            .unwrap();
         assert_eq!(next.items[0].face_count, Some(1));
         assert_eq!(next.items[0].vic_category, None);
-        let absent = read_filtered_page(&pool, "source", "image", 0, 500, &[256], Some("/other")).await.unwrap();
+        let absent = read_filtered_page(&pool, "source", "image", 0, 500, &[256], Some("/other"))
+            .await
+            .unwrap();
         assert_eq!(absent.total_count, 0);
         assert_eq!(absent.classification_counts[257], 0);
-        let weapons = read_filtered_page(&pool, "source", "image", 0, 500, &[257], None).await.unwrap();
+        let weapons = read_filtered_page(&pool, "source", "image", 0, 500, &[257], None)
+            .await
+            .unwrap();
         assert_eq!(weapons.total_count, 1);
         assert_eq!(weapons.items[0].vic_category, Some(0));
         assert_eq!(weapons.items[0].clip_classifications.len(), 2);
         assert_eq!(weapons.classification_counts[258], 1);
         assert_eq!(weapons.classification_counts[264], 2);
-        let people = read_filtered_page(&pool, "source", "image", 1, 1, &[263, 257, 0], Some("/images")).await.unwrap();
+        let people = read_filtered_page(
+            &pool,
+            "source",
+            "image",
+            1,
+            1,
+            &[263, 257, 0],
+            Some("/images"),
+        )
+        .await
+        .unwrap();
         assert_eq!(people.total_count, 2);
         assert_eq!(people.items[0].path, "/images/3.jpg");
         // A rescan replaces automatic results and cascades old filter rows.
-        replace_media_gallery_items(&pool, "faces", "source", &builtin::MediaGallery { photos: vec![], videos: vec![], scanned_files: 0 }).await.unwrap();
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_clip_classifications").fetch_one(&pool).await.unwrap();
+        replace_media_gallery_items(
+            &pool,
+            "faces",
+            "source",
+            &builtin::MediaGallery {
+                photos: vec![],
+                videos: vec![],
+                scanned_files: 0,
+            },
+        )
+        .await
+        .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_clip_classifications")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(count, 0);
-        assert_eq!(media_classifications::category_for(&pool, "/images/0.jpg").await.unwrap(), Some(0));
+        assert_eq!(
+            media_classifications::category_for(&pool, "/images/0.jpg")
+                .await
+                .unwrap(),
+            Some(0)
+        );
     }
 
     #[tokio::test]

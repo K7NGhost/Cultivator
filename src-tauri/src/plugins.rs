@@ -24,30 +24,32 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
-mod builtin;
 mod artifact_spool;
+mod builtin;
 mod bundle;
 mod cancellation;
 mod execution;
 mod job_persistence;
 mod job_progress;
 mod media_classifications;
-mod media_queries;
 mod media_directories;
-pub mod timeline;
 pub mod media_hashsets;
-pub use media_directories::{list_media_directories, MediaDirectory};
+mod media_queries;
+pub mod timeline;
 pub use execution::{
     cancel_plugin_job, get_plugin_run, pause_plugin_job, pause_plugin_run, submit_plugin_run,
     PluginRunSnapshot, SubmitPluginRunRequest, SubmittedPluginRun,
 };
 pub(crate) use job_persistence::initialize as initialize_job_manager;
+pub use media_directories::{list_media_directories, MediaDirectory};
 pub(crate) mod thumbnail_cache;
 pub use media_classifications::{
     delete_custom_classification, list_custom_classifications, list_file_view_media_page,
     save_custom_classification, set_media_classification, CustomClassification,
 };
-pub use media_queries::{list_media_gallery_page, load_media_details, MediaGalleryPage, MediaVisualOptions};
+pub use media_queries::{
+    list_media_gallery_page, load_media_details, MediaGalleryPage, MediaVisualOptions,
+};
 
 pub use builtin::{MediaGallery, MediaItem};
 pub use bundle::{
@@ -904,7 +906,11 @@ fn thumbnail_service(
                     let python = runtime::prepare_media(&runtime_root)?;
                     #[cfg(windows)]
                     if let Some(result) = crate::thumbnails::render_heif_with_runtime(
-                        &python.executable, source, target, budget, cancelled,
+                        &python.executable,
+                        source,
+                        target,
+                        budget,
+                        cancelled,
                     ) {
                         return result;
                     }
@@ -1160,7 +1166,10 @@ pub async fn remove_datasource(
     .map_err(|error| format!("Failed to remove datasource paths: {error}"))?;
 
     sqlx::query("DELETE FROM evidence_sources WHERE data_source_id = $1")
-        .bind(&datasource_id).execute(&mut *transaction).await.map_err(|e| e.to_string())?;
+        .bind(&datasource_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|e| e.to_string())?;
 
     sqlx::query(
         r#"
@@ -1514,8 +1523,12 @@ fn execute_python_plugin_process(
     }
 
     for task in &plan.tasks {
-        if is_plugin_job_cancelled(Some(cancel_id))? { return Err("Plugin run cancelled".into()); }
-        crate::evidence::ensure_family_checked(Path::new(&task.file_path), &|| is_plugin_job_cancelled(Some(cancel_id)).unwrap_or(true))?;
+        if is_plugin_job_cancelled(Some(cancel_id))? {
+            return Err("Plugin run cancelled".into());
+        }
+        crate::evidence::ensure_family_checked(Path::new(&task.file_path), &|| {
+            is_plugin_job_cancelled(Some(cancel_id)).unwrap_or(true)
+        })?;
     }
 
     let input = PythonPluginProcessInput {
@@ -1554,7 +1567,11 @@ fn execute_python_plugin_process(
         .stdin
         .take()
         .ok_or("Failed to open Python worker stdin")?;
-    stdin.write_all(&input_json).and_then(|_| stdin.write_all(b"\n")).and_then(|_| stdin.flush()).map_err(|e| e.to_string())?;
+    stdin
+        .write_all(&input_json)
+        .and_then(|_| stdin.write_all(b"\n"))
+        .and_then(|_| stdin.flush())
+        .map_err(|e| e.to_string())?;
     let input_replies = Arc::new(Mutex::new(stdin));
 
     let stderr = child
@@ -1569,11 +1586,20 @@ fn execute_python_plugin_process(
         let mut diagnostics = Vec::new();
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             if let Some(payload) = line.strip_prefix("__CULTIVATOR_EVIDENCE__") {
-                let result = serde_json::from_str::<JsonValue>(payload).map_err(|e| e.to_string()).and_then(|value| {
-                    let path = value["path"].as_str().ok_or("Missing evidence request path")?;
-                    crate::evidence::ensure_family_checked(Path::new(path), &|| is_plugin_job_cancelled(Some(&evidence_cancel_id)).unwrap_or(true))
-                });
-                let reply = match result { Ok(path) => serde_json::json!({"path": path}), Err(error) => serde_json::json!({"error": error}) };
+                let result = serde_json::from_str::<JsonValue>(payload)
+                    .map_err(|e| e.to_string())
+                    .and_then(|value| {
+                        let path = value["path"]
+                            .as_str()
+                            .ok_or("Missing evidence request path")?;
+                        crate::evidence::ensure_family_checked(Path::new(path), &|| {
+                            is_plugin_job_cancelled(Some(&evidence_cancel_id)).unwrap_or(true)
+                        })
+                    });
+                let reply = match result {
+                    Ok(path) => serde_json::json!({"path": path}),
+                    Err(error) => serde_json::json!({"error": error}),
+                };
                 if let Ok(mut input) = input_replies.lock() {
                     let _ = writeln!(input, "{reply}").and_then(|_| input.flush());
                 }
@@ -1745,7 +1771,9 @@ fn enumerate_datasource_files(
         crate::evidence::visit_files(Path::new(source_path), |path| {
             cancellation::checkpoint(cancelled)?;
             let target_file = target_file_from_path(path)?;
-            if seen_paths.insert(normalize_case_database_path(&target_file.path)) { files.push(target_file); }
+            if seen_paths.insert(normalize_case_database_path(&target_file.path)) {
+                files.push(target_file);
+            }
             Ok(())
         })?;
     }
@@ -1757,7 +1785,9 @@ fn enumerate_datasource_files(
 
 #[cfg(feature = "python-plugins")]
 fn target_file_from_path(path: &Path) -> Result<TargetFile, String> {
-    let size = if let Some(file) = crate::evidence::indexed_metadata(path)? { file.metadata.size } else {
+    let size = if let Some(file) = crate::evidence::indexed_metadata(path)? {
+        file.metadata.size
+    } else {
         fs::metadata(path).map_err(|e| e.to_string())?.len()
     };
     let name = path
@@ -3450,30 +3480,43 @@ async fn replace_media_gallery_items(
         }
         let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
             "INSERT INTO media_gallery_items (id, job_id, datasource_id, media_type, path, name, payload, updated_at) ");
-        query.push_values(&batch, |mut row, (id, media_type, path, name, payload, _)| {
-            row.push_bind(id)
-                .push_bind(job_id)
-                .push_bind(datasource_id)
-                .push_bind(media_type)
-                .push_bind(path)
-                .push_bind(name)
-                .push_bind(payload)
-                .push_bind(&updated_at);
-        });
+        query.push_values(
+            &batch,
+            |mut row, (id, media_type, path, name, payload, _)| {
+                row.push_bind(id)
+                    .push_bind(job_id)
+                    .push_bind(datasource_id)
+                    .push_bind(media_type)
+                    .push_bind(path)
+                    .push_bind(name)
+                    .push_bind(payload)
+                    .push_bind(&updated_at);
+            },
+        );
         query
             .build()
             .execute(&mut *transaction)
             .await
             .map_err(|error| format!("Failed to insert media gallery batch: {error}"))?;
-        let classifications: Vec<_> = batch.iter().flat_map(|(id, _, _, _, _, labels)| {
-            labels.iter().map(move |label| (id, label))
-        }).collect();
+        let classifications: Vec<_> = batch
+            .iter()
+            .flat_map(|(id, _, _, _, _, labels)| labels.iter().map(move |label| (id, label)))
+            .collect();
         for labels in classifications.chunks(200) {
-            let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new("INSERT INTO media_clip_classifications(item_id, category, score, matched_label) ");
+            let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "INSERT INTO media_clip_classifications(item_id, category, score, matched_label) ",
+            );
             query.push_values(labels, |mut row, (id, label)| {
-                row.push_bind(id).push_bind(label.category).push_bind(label.score).push_bind(&label.matched_label);
+                row.push_bind(id)
+                    .push_bind(label.category)
+                    .push_bind(label.score)
+                    .push_bind(&label.matched_label);
             });
-            query.build().execute(&mut *transaction).await.map_err(|error| format!("Failed to save CLIP classifications: {error}"))?;
+            query
+                .build()
+                .execute(&mut *transaction)
+                .await
+                .map_err(|error| format!("Failed to save CLIP classifications: {error}"))?;
         }
     }
 
@@ -3949,7 +3992,9 @@ mod tests {
         // A directory whose name ends in .zip remains a valid scan root.
         let zip_directory = case.path().join("folder.zip");
         fs::create_dir(&zip_directory).unwrap();
-        image::RgbImage::new(4, 4).save(zip_directory.join("third.png")).unwrap();
+        image::RgbImage::new(4, 4)
+            .save(zip_directory.join("third.png"))
+            .unwrap();
         let paths = vec![
             case.path()
                 .join("offline.ZIP")
